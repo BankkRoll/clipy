@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> This tool was never finished the current state is not done. Tool doesnt currently work, feel free to fork and check it out. But current state is not 100% working. Maybe will get around to finishing now that its been shared and has alot of stars coming in lol
+
 <div align="center">
   <h1>Clipy</h1>
   <p><strong>Professional YouTube video downloader and editor. 100% free, open-source, and privacy-focused.</strong></p>
