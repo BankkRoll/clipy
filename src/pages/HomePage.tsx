@@ -1,10 +1,10 @@
-import { HeroSection } from "@/components/home/hero-section";
-import React from "react";
+import { HeroSection } from '@/components/home/hero-section'
+import React from 'react'
 
 export default function HomePage() {
   return (
-    <div className="w-full h-full justify-center items-center m-auto space-y-12">
+    <div className="m-auto h-full w-full items-center justify-center space-y-12">
       <HeroSection />
     </div>
-  );
+  )
 }

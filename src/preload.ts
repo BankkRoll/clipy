@@ -1,3 +1,4 @@
-import exposeContexts from "./helpers/ipc/context-exposer";
+import { setupContextBridge } from './ipc/context-bridge'
 
-exposeContexts();
+// Setup secure context bridge for renderer process
+setupContextBridge()

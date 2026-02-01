@@ -1,56 +1,77 @@
-import {
-  closeWindow,
-  maximizeWindow,
-  minimizeWindow,
-} from "@/helpers/window_helpers";
-import { Minus, Square, X } from "lucide-react";
-import React from "react";
-import { useTranslation } from "react-i18next";
+import { Minus, Square, X } from 'lucide-react'
+
+import React from 'react'
+import { useTranslation } from 'react-i18next'
+
+// Window control functions
+const minimizeWindow = async () => {
+  try {
+    await window.electronAPI.window.minimize()
+  } catch (error) {
+    console.error('Failed to minimize window:', error)
+  }
+}
+
+const maximizeWindow = async () => {
+  try {
+    await window.electronAPI.window.maximize()
+  } catch (error) {
+    console.error('Failed to maximize window:', error)
+  }
+}
+
+const closeWindow = async () => {
+  try {
+    await window.electronAPI.window.close()
+  } catch (error) {
+    console.error('Failed to close window:', error)
+  }
+}
 
 interface DragWindowRegionProps {
-  title?: React.ReactNode;
+  title?: React.ReactNode
 }
 
 export default function DragWindowRegion({ title }: DragWindowRegionProps) {
   return (
-    <div className="flex w-full items-center justify-between h-8 bg-background/80 backdrop-blur-sm border-b">
-      <div className="draglayer flex-1 h-full" />
-        <WindowButtons />
+    <div className="bg-background/80 flex h-8 w-full items-center justify-between border-b backdrop-blur-sm">
+      <div className="draglayer h-full flex-1" />
+      <WindowButtons />
     </div>
-  );
+  )
 }
 
 function WindowButtons() {
-  const { t } = useTranslation();
+  const { t } = useTranslation()
 
   return (
     <div className="flex h-full">
       <button
-        title={t("windowMinimize")}
+        title={t('windowMinimize')}
         type="button"
-        className="flex items-center justify-center w-12 h-full hover:bg-accent/50 transition-colors group"
+        className="hover:bg-accent/50 group flex h-full w-12 items-center justify-center transition-colors"
         onClick={minimizeWindow}
       >
-        <Minus className="h-3 w-3 text-muted-foreground group-hover:text-foreground" />
+        <Minus className="text-muted-foreground group-hover:text-foreground h-3 w-3" />
       </button>
-      
+
       <button
-        title={t("windowMaximize")}
+        title={t('windowMaximize')}
         type="button"
-        className="flex items-center justify-center w-12 h-full hover:bg-accent/50 transition-colors group"
+        className="hover:bg-accent/50 group flex h-full w-12 items-center justify-center transition-colors"
         onClick={maximizeWindow}
       >
-        <Square className="h-3 w-3 text-muted-foreground group-hover:text-foreground" />
+        <Square className="text-muted-foreground group-hover:text-foreground h-3 w-3" />
       </button>
-      
+
       <button
         type="button"
-        title={t("windowClose")}
-        className="flex items-center justify-center w-12 h-full hover:bg-destructive/90 hover:text-destructive-foreground transition-colors group"
+        title={t('windowClose')}
+        className="hover:bg-destructive/90 hover:text-destructive-foreground group flex h-full w-12 items-center justify-center transition-colors"
         onClick={closeWindow}
       >
-        <X className="h-3 w-3 text-muted-foreground group-hover:text-destructive-foreground" />
+        <X className="text-muted-foreground group-hover:text-destructive-foreground h-3 w-3" />
       </button>
     </div>
-  );
+  )
 }

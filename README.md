@@ -3,7 +3,7 @@
 
 <div align="center">
   <h1>Clipy</h1>
-  <p><strong>Professional YouTube video downloader and editor. 100% free, open-source, and privacy-focused.</strong></p>
+  <p><strong>Professional YouTube video downloader. 100% free, open-source, and privacy-focused.</strong></p>
 
   <img src="https://github.com/user-attachments/assets/1741878b-b407-4e6e-a901-5eac6f38d277" alt="Clipy Demo" width="800"/>
 </div>
@@ -12,12 +12,11 @@
 
 **Clipy** is a fully open-source, bloat-free Electron desktop application for downloading and editing YouTube videos in their **original quality** without compression or re-encoding. It provides a clean, advanced, and completely free alternative to proprietary tools, with a strong emphasis on user privacy and a high-quality user experience.
 
-All processing is done locally on your machine. We use the modern InnerTube API for fetching video information first, with a fallback to `ytdl-core`, ensuring reliability and speed without compromising your privacy.
+All processing is done locally on your machine. We use the modern YouTube.js library with the InnerTube API for fetching video information and downloads, ensuring reliability and speed without compromising your privacy.
 
 ## Features
 
 -   **Original Quality Downloads**: Download videos in the highest quality available with no re-encoding.
--   **Built-in Video Editor**: A timeline-based editor powered by FFmpeg for lossless trimming, splitting, and merging.
 -   **100% Privacy Focused**: All processing is done locally. No servers, no tracking, no telemetry.
 -   **Completely Free & Open Source**: No ads, no paywalls, no premium features. Licensed under the MIT license.
 -   **Cross-Platform**: A single, consistent experience on Windows, macOS, and Linux.
@@ -32,7 +31,7 @@ All processing is done locally on your machine. We use the modern InnerTube API 
 | **Editor**       | Built-in Timeline     | None             | None           | Limited                 |
 | **Quality**      | Original/Lossless     | Original         | Original       | Re-encoded              |
 | **Platforms**    | Win/Mac/Linux         | Win/Mac          | All            | Win/Mac                 |
-| **Open Source**  | ✅ Yes (MIT)          | ❌ No            | ✅ Yes         | ❌ No                   |
+| **Open Source**  | ✅ Yes (MIT)          | ✅ Yes (GNU)     | ✅ Yes        | ❌ No                   |
 
 ## Getting Started
 
@@ -50,7 +49,7 @@ This project would not be possible without the incredible work of the open-sourc
 
 -   **[LuanRoger/electron-shadcn](https://github.com/LuanRoger/electron-shadcn)** for the robust and modern Electron template.
 -   **[youtubei.js](https://github.com/LuanRT/YouTube.js)** for providing access to YouTube's InnerTube API.
--   **[yt-dlp](https://github.com/yt-dlp/yt-dlp)** and **[ytdl-core](https://github.com/fent/node-ytdl-core)** for the powerful download capabilities.
+-   **[YouTube.js](https://github.com/LuanRT/YouTube.js)** for powerful YouTube API access and download capabilities.
 -   **[FFmpeg](https://ffmpeg.org/)** for the unparalleled video processing power.
 -   **[React](https://react.dev/)**, **[Vite](https://vitejs.dev/)**, **[TypeScript](https://www.typescriptlang.org/)**, and **[Tailwind CSS](https://tailwindcss.com/)** for the incredible development experience.
 -   **[Shadcn UI](https://ui.shadcn.com/)** for the fantastic unstyled component library.

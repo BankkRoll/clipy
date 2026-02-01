@@ -1,163 +1,303 @@
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import type { DownloadProgress } from "@/types/download";
 import {
-    AlertCircle,
-    CheckCircle,
-    Clock,
-    Download,
-    FileVideo,
-    FolderOpen,
-    MoreHorizontal,
-    Play,
-    X
-} from "lucide-react";
-import React from "react";
-import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
+  AlertCircle,
+  CheckCircle,
+  Clock,
+  Download,
+  Eye,
+  FileVideo,
+  FolderOpen,
+  MoreHorizontal,
+  Play,
+  Trash2,
+  X,
+} from 'lucide-react'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
+import { Card, CardContent } from '@/components/ui/card'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import type { DownloadProgress } from '@/types/download'
+import { Progress } from '@/components/ui/progress'
+import React from 'react'
+import { toast } from 'sonner'
+import { useTranslation } from 'react-i18next'
 
 interface DownloadItemProps {
-  download: DownloadProgress;
-  onCancel: (downloadId: string) => void;
+  download: DownloadProgress
+  onCancel: (downloadId: string) => void
+  onDelete: (downloadId: string) => void
+  onRetry: (downloadId: string) => void
+  onPreview?: (download: DownloadProgress) => void
+  onOpenFolder?: (download: DownloadProgress) => void
+  statusBadge?: React.ReactNode
 }
 
 function formatFileSize(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
 }
 
 function getStatusIcon(status: string) {
   switch (status) {
     case 'completed':
-      return <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />;
+      return <CheckCircle className="h-4 w-4 text-green-600" />
     case 'failed':
-      return <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400" />;
+      return <AlertCircle className="text-destructive h-4 w-4" />
     case 'downloading':
-      return <Download className="h-4 w-4 text-blue-600 dark:text-blue-400 animate-pulse" />;
+      return <Download className="text-primary h-4 w-4 animate-pulse" />
     case 'cancelled':
-      return <X className="h-4 w-4 text-muted-foreground" />;
+      return <X className="text-muted-foreground h-4 w-4" />
     default:
-      return <Clock className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />;
+      return <Clock className="h-4 w-4 text-yellow-600" />
   }
 }
 
 function getStatusBadge(status: string) {
   switch (status) {
     case 'completed':
-      return <Badge variant="default" className="bg-green-600 hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600">{status}</Badge>;
+      return <Badge variant="default">{status}</Badge>
     case 'failed':
-      return <Badge variant="destructive">{status}</Badge>;
+      return <Badge variant="destructive">{status}</Badge>
     case 'downloading':
-      return <Badge variant="secondary" className="bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600">{status}</Badge>;
+      return <Badge variant="default">{status}</Badge>
     case 'cancelled':
-      return <Badge variant="outline">{status}</Badge>;
+      return <Badge variant="outline">{status}</Badge>
     default:
-      return <Badge variant="secondary">{status}</Badge>;
+      return <Badge variant="secondary">{status}</Badge>
   }
 }
 
-export function DownloadItem({ download, onCancel }: DownloadItemProps) {
-  const { t } = useTranslation();
+export function DownloadItem({
+  download,
+  onCancel,
+  onDelete,
+  onRetry,
+  onPreview,
+  onOpenFolder,
+  statusBadge,
+}: DownloadItemProps) {
+  const { t } = useTranslation()
 
   const handleOpenFile = async (filePath: string) => {
     try {
-      toast.info(`Opening file: ${filePath}`);
+      // Use Electron shell to open the file
+      if (window.electronAPI?.shell?.openPath) {
+        await window.electronAPI.shell.openPath(filePath)
+        toast.success(t('msgFileOpened'))
+      } else {
+        toast.info(`Opening file: ${filePath}`)
+      }
     } catch (error) {
-      toast.error(t('msgFileOpenFailed'));
+      toast.error(t('msgFileOpenFailed'))
     }
-  };
+  }
 
   const handleOpenFolder = async (filePath: string) => {
     try {
-      toast.info(`Opening folder containing: ${filePath}`);
+      // Use Electron shell to open the containing folder
+      if (window.electronAPI?.shell?.showItemInFolder) {
+        await window.electronAPI.shell.showItemInFolder(filePath)
+        toast.success(t('msgFolderOpened'))
+      } else {
+        toast.info(`Opening folder containing: ${filePath}`)
+      }
     } catch (error) {
-      toast.error(t('msgFolderOpenFailed'));
+      toast.error(t('msgFolderOpenFailed'))
     }
-  };
+  }
+
+  const handleDelete = async () => {
+    try {
+      await onDelete(download.downloadId)
+      toast.success(t('msgDownloadDeleted'))
+    } catch (error) {
+      toast.error(t('msgDownloadDeleteFailed'))
+    }
+  }
+
+  const handleRetry = async () => {
+    try {
+      await onRetry(download.downloadId)
+      toast.success(t('msgDownloadRetried'))
+    } catch (error) {
+      toast.error(t('msgDownloadRetryFailed'))
+    }
+  }
 
   return (
-    <Card className="border-0 shadow-sm hover:shadow-md transition-shadow">
+    <Card className="border-0 shadow-sm transition-shadow hover:shadow-md">
       <CardContent className="p-6">
         <div className="flex items-start gap-4">
-          <div className="w-20 h-12 bg-muted rounded-lg flex items-center justify-center shrink-0">
-            <FileVideo className="h-6 w-6 text-muted-foreground" />
+          <div
+            className="bg-muted group relative flex h-12 w-20 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-lg"
+            onClick={() => download.status === 'completed' && onPreview?.(download)}
+          >
+            {download.thumbnailPath ? (
+              <img
+                src={`file://${download.thumbnailPath}`}
+                alt={download.title}
+                className="h-full w-full rounded-lg object-cover"
+                onError={e => {
+                  // Fallback to icon if image fails to load
+                  e.currentTarget.style.display = 'none'
+                  e.currentTarget.nextElementSibling?.classList.remove('hidden')
+                }}
+              />
+            ) : null}
+            <FileVideo className={`text-muted-foreground h-6 w-6 ${download.thumbnailPath ? 'hidden' : ''}`} />
+            {download.status === 'completed' && (
+              <div className="bg-foreground/10 group-hover:bg-foreground/20 absolute inset-0 flex items-center justify-center rounded-lg transition-all duration-200">
+                <Eye className="text-foreground h-4 w-4 opacity-0 group-hover:opacity-100" />
+              </div>
+            )}
+            {download.status === 'downloading' && (
+              <div className="bg-primary absolute right-0 bottom-0 left-0 h-1 animate-pulse rounded-b-lg" />
+            )}
           </div>
-          
-          <div className="flex-1 min-w-0">
+
+          <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                <h3 className="font-medium truncate text-base">{download.title}</h3>
-                <div className="flex items-center gap-2 mt-2 text-sm text-muted-foreground">
+              <div className="min-w-0 flex-1">
+                <h3 className="truncate text-base font-medium">{download.title}</h3>
+                <div className="text-muted-foreground mt-2 flex items-center gap-2 text-sm">
                   {getStatusIcon(download.status)}
-                  {getStatusBadge(download.status)}
+                  {statusBadge || getStatusBadge(download.status)}
                   <span>•</span>
                   <span>{formatFileSize(download.totalBytes)}</span>
                   <span>•</span>
                   <span>{new Date(download.startTime).toLocaleDateString()}</span>
                 </div>
-                
+
                 {download.status === 'downloading' && (
                   <div className="mt-4 space-y-2">
                     <div className="flex justify-between text-sm">
                       <span>{t('progress')}</span>
-                      <span>{download.progress}%</span>
+                      <span className="text-primary font-medium">{download.progress}%</span>
                     </div>
-                    <Progress value={download.progress} className="w-full" />
-                    <div className="flex justify-between text-xs text-muted-foreground">
-                      <span>{download.speed}</span>
+                    <div className="relative">
+                      <Progress value={download.progress} className="h-2 w-full" />
+                      <div
+                        className="bg-primary absolute top-0 left-0 h-2 rounded-full transition-all duration-300 ease-out"
+                        style={{ width: `${download.progress}%` }}
+                      />
+                    </div>
+                    <div className="text-muted-foreground flex justify-between text-xs">
+                      <span className="flex items-center gap-1">
+                        <div className="bg-primary h-1 w-1 animate-pulse rounded-full"></div>
+                        {download.speed}
+                      </span>
                       <span>{download.eta}</span>
                     </div>
                   </div>
                 )}
-                
+
                 {download.status === 'failed' && download.error && (
-                  <p className="text-sm text-destructive mt-2">{download.error.message}</p>
+                  <p className="text-destructive mt-2 text-sm">{download.error.message}</p>
                 )}
               </div>
-              
-              <div className="flex items-center gap-2 shrink-0">
+
+              <div className="flex shrink-0 items-center gap-2">
                 {download.status === 'downloading' && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => onCancel(download.downloadId)}
-                  >
+                  <Button variant="outline" size="sm" onClick={() => onCancel(download.downloadId)}>
                     <X className="h-4 w-4" />
                   </Button>
                 )}
-                
+
                 {download.status === 'completed' && download.filePath && (
                   <>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleOpenFile(download.filePath!)}
-                    >
-                      <Play className="h-4 w-4" />
+                    <Button variant="outline" size="sm" onClick={() => onPreview?.(download)} title="Preview">
+                      <Eye className="h-4 w-4" />
                     </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleOpenFolder(download.filePath!)}
-                    >
+                    <Button variant="outline" size="sm" onClick={() => onOpenFolder?.(download)} title="Open Folder">
                       <FolderOpen className="h-4 w-4" />
                     </Button>
                   </>
                 )}
-                
-                <Button variant="ghost" size="sm">
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
+
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="sm">
+                      <MoreHorizontal className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    {download.status === 'completed' && download.filePath && (
+                      <>
+                        <DropdownMenuItem onClick={() => handleOpenFile(download.filePath!)}>
+                          <Play className="mr-2 h-4 w-4" />
+                          {t('actionOpenFile')}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleOpenFolder(download.filePath!)}>
+                          <FolderOpen className="mr-2 h-4 w-4" />
+                          {t('actionOpenFolder')}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                      </>
+                    )}
+                    {download.status === 'failed' && (
+                      <>
+                        <DropdownMenuItem onClick={handleRetry}>
+                          <Download className="mr-2 h-4 w-4" />
+                          {t('actionRetry')}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                      </>
+                    )}
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <DropdownMenuItem
+                          onSelect={e => e.preventDefault()}
+                          className="text-destructive focus:text-destructive"
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          {t('actionDelete')}
+                        </DropdownMenuItem>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>{t('confirmDeleteTitle')}</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            {t('confirmDeleteDescription', { title: download.title })}
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={handleDelete}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          >
+                            {t('delete')}
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             </div>
           </div>
         </div>
       </CardContent>
     </Card>
-  );
-} 
+  )
+}

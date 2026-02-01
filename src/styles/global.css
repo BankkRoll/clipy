@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 @plugin 'tailwindcss-animate';
 
@@ -52,7 +52,6 @@
   --animate-accordion-down: accordion-down 0.2s ease-out;
   --animate-accordion-up: accordion-up 0.2s ease-out;
 
-
   @keyframes accordion-down {
     from {
       height: 0;
@@ -89,48 +88,48 @@
 
 @layer base {
   @font-face {
-    font-family: "Geist";
+    font-family: 'Geist';
 
-    src: url("../assets/fonts/geist/geist.ttf") format("truetype");
+    src: url('../assets/fonts/geist/geist.ttf') format('truetype');
   }
 
   @font-face {
-    font-family: "Geist Mono";
+    font-family: 'Geist Mono';
     font-display: swap;
 
-    src: url("../assets/fonts/geist-mono/geist-mono.ttf") format("truetype");
+    src: url('../assets/fonts/geist-mono/geist-mono.ttf') format('truetype');
   }
 
   @font-face {
-    font-family: "Tomorrow";
+    font-family: 'Tomorrow';
     font-weight: 400;
     font-style: normal;
 
-    src: url("../assets/fonts/tomorrow/tomorrow-regular.ttf") format("truetype");
+    src: url('../assets/fonts/tomorrow/tomorrow-regular.ttf') format('truetype');
   }
 
   @font-face {
-    font-family: "Tomorrow";
+    font-family: 'Tomorrow';
     font-weight: 400;
     font-style: italic;
 
-    src: url("../assets/fonts/tomorrow/tomorrow-italic.ttf") format("truetype");
+    src: url('../assets/fonts/tomorrow/tomorrow-italic.ttf') format('truetype');
   }
 
   @font-face {
-    font-family: "Tomorrow";
+    font-family: 'Tomorrow';
     font-weight: 700;
     font-style: normal;
 
-    src: url("../assets/fonts/tomorrow/tomorrow-bold.ttf") format("truetype");
+    src: url('../assets/fonts/tomorrow/tomorrow-bold.ttf') format('truetype');
   }
 
   @font-face {
-    font-family: "Tomorrow";
+    font-family: 'Tomorrow';
     font-weight: 700;
     font-style: italic;
 
-    src: url("../assets/fonts/tomorrow/tomorrow-bold-italic.ttf") format("truetype");
+    src: url('../assets/fonts/tomorrow/tomorrow-bold-italic.ttf') format('truetype');
   }
 }
 
@@ -238,7 +237,6 @@
     @apply bg-background text-foreground;
   }
 }
-
 
 @theme inline {
   --color-sidebar: var(--sidebar);

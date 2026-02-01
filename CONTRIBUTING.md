@@ -4,15 +4,16 @@ First off, thank you for considering contributing to Clipy! It's people like you
 
 ## How to Contribute
 
--   **Reporting Bugs**: If you find a bug, please create an issue in our [issue tracker](https://github.com/BankkRoll/clipy/issues). Include as much detail as possible, such as steps to reproduce, your operating system, and the app version.
--   **Suggesting Enhancements**: If you have an idea for a new feature or an improvement to an existing one, please create an issue to start a discussion.
--   **Pull Requests**: We actively welcome your pull requests.
+- **Reporting Bugs**: If you find a bug, please create an issue in our [issue tracker](https://github.com/BankkRoll/clipy/issues). Include as much detail as possible, such as steps to reproduce, your operating system, and the app version.
+- **Suggesting Enhancements**: If you have an idea for a new feature or an improvement to an existing one, please create an issue to start a discussion.
+- **Pull Requests**: We actively welcome your pull requests.
 
 ## Development Setup
 
 To get started with the development environment, please follow these steps:
 
 1.  **Fork and Clone the Repository**
+
     ```bash
     git clone https://github.com/YOUR_USERNAME/clipy.git
     cd clipy
@@ -20,6 +21,7 @@ To get started with the development environment, please follow these steps:
 
 2.  **Install Dependencies**
     We use `pnpm` for package management.
+
     ```bash
     pnpm install
     ```
@@ -46,8 +48,7 @@ src/
 │
 ├── helpers/
 │   ├── ipc/        # All IPC channel definitions, contexts, and listeners
-│   ├── downloader/ # Core download logic (yt-dlp, youtubei.js)
-│   └── editor/     # Core editor logic (FFmpeg)
+│   └── downloader/ # Core download logic (yt-dlp, youtubei.js)
 │
 ├── types/          # All TypeScript type definitions
 ├── localization/   # i18n translation files
@@ -71,4 +72,4 @@ This pattern ensures security and type safety across the application.
 3.  Increase the version numbers in any necessary files.
 4.  Your pull request will be reviewed by a maintainer, who may request changes.
 
-Thank you again for your interest in contributing! 
+Thank you again for your interest in contributing!

@@ -1,63 +1,41 @@
-import DownloaderPage from "@/pages/DownloaderPage";
-import EditorPage from "@/pages/EditorPage";
-import LibraryPage from "@/pages/LibraryPage";
-import SettingsPage from "@/pages/SettingsPage";
-import { createRoute } from "@tanstack/react-router";
-import HomePage from "../pages/HomePage";
-import { RootRoute } from "./__root";
+import DownloaderPage from '@/pages/DownloaderPage'
+import HomePage from '../pages/HomePage'
+import LibraryPage from '@/pages/LibraryPage'
+import { RootRoute } from './__root'
+import SettingsPage from '@/pages/SettingsPage'
+import { createRoute } from '@tanstack/react-router'
 
 export const HomeRoute = createRoute({
   getParentRoute: () => RootRoute,
-  path: "/",
+  path: '/',
   component: HomePage,
-});
+})
 
 export interface DownloaderSearchParams {
-  url?: string;
+  url?: string
 }
 
 export const DownloaderRoute = createRoute({
   getParentRoute: () => RootRoute,
-  path: "/downloader",
+  path: '/downloader',
   component: DownloaderPage,
   validateSearch: (search: Record<string, unknown>): DownloaderSearchParams => {
     return {
-      url: search.url ? String(search.url) : undefined
-    };
+      url: search.url ? String(search.url) : undefined,
+    }
   },
-});
-
-export interface EditorSearchParams {
-  url?: string;
-}
-
-export const EditorRoute = createRoute({
-  getParentRoute: () => RootRoute,
-  path: "/editor",
-  component: EditorPage,
-  validateSearch: (search: Record<string, unknown>): EditorSearchParams => {
-    return {
-      url: search.url ? String(search.url) : undefined
-    };
-  },
-});
+})
 
 export const LibraryRoute = createRoute({
   getParentRoute: () => RootRoute,
-  path: "/library",
+  path: '/library',
   component: LibraryPage,
-});
+})
 
 export const SettingsRoute = createRoute({
   getParentRoute: () => RootRoute,
-  path: "/settings",
+  path: '/settings',
   component: SettingsPage,
-});
+})
 
-export const rootTree = RootRoute.addChildren([
-  HomeRoute,
-  DownloaderRoute,
-  EditorRoute,
-  LibraryRoute,
-  SettingsRoute,
-]);
+export const rootTree = RootRoute.addChildren([HomeRoute, DownloaderRoute, LibraryRoute, SettingsRoute])

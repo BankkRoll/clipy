@@ -1,21 +1,21 @@
-import { Button } from "@/components/ui/button";
-import { Settings } from "lucide-react";
-import { Link } from "@tanstack/react-router";
-import React from "react";
+import { Button } from '@/components/ui/button'
+import { Settings } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
+import React from 'react'
 
 export default function SettingsButton() {
-  const [mounted, setMounted] = React.useState(false);
+  const [mounted, setMounted] = React.useState(false)
 
   React.useEffect(() => {
-    setMounted(true);
-  }, []);
+    setMounted(true)
+  }, [])
 
   if (!mounted) {
     return (
       <Button variant="outline" size="icon" className="h-8 w-8">
         <div className="h-4 w-4" />
       </Button>
-    );
+    )
   }
 
   return (
@@ -24,5 +24,5 @@ export default function SettingsButton() {
         <Settings className="h-4 w-4" />
       </Button>
     </Link>
-  );
+  )
 }

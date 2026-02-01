@@ -1,59 +1,43 @@
-import React from "react";
-import { useTranslation } from "react-i18next";
-
-import { Separator } from "@/components/ui/separator";
-
-import {
-    AboutSettings,
-    DownloadSettings,
-    EditorSettings,
-    LanguageSelector,
-    StorageSettings
-} from "@/components/settings";
+import AboutSettings from '@/components/settings/about-settings'
+import DownloadSettings from '@/components/settings/download-settings'
+import LanguageSelector from '@/components/settings/language-selector'
+import { Separator } from '@/components/ui/separator'
+import StorageSettings from '@/components/settings/storage-settings'
+import { useTranslation } from 'react-i18next'
 
 export default function SettingsPage() {
-  const { t } = useTranslation();
+  const { t } = useTranslation()
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="container mx-auto px-6 py-8 max-w-4xl">
-        
+    <div className="bg-background min-h-screen">
+      <div className="container mx-auto max-w-4xl px-6 py-8">
         <div className="mb-12">
-          <div className="flex items-center gap-4 mb-4">
+          <div className="mb-4 flex items-center gap-4">
             <div>
-              <h1 className="text-4xl font-bold tracking-tight text-foreground">{t("settingsTitle")}</h1>
-              <p className="text-lg text-muted-foreground mt-1">
-                {t("settingsSubtitle")}
-              </p>
+              <h1 className="text-foreground text-4xl font-bold tracking-tight">{t('settingsTitle')}</h1>
+              <p className="text-muted-foreground mt-1 text-lg">{t('settingsSubtitle')}</p>
             </div>
           </div>
         </div>
 
         <div className="space-y-12">
-          
           <section>
             <LanguageSelector />
           </section>
 
-          <Separator className="my-12 bg-border/50" />
+          <Separator className="bg-border/50 my-12" />
 
           <section>
             <DownloadSettings />
           </section>
 
-          <Separator className="my-12 bg-border/50" />
-
-          <section>
-            <EditorSettings />
-          </section>
-
-          <Separator className="my-12 bg-border/50" />
+          <Separator className="bg-border/50 my-12" />
 
           <section>
             <StorageSettings />
           </section>
 
-          <Separator className="my-12 bg-border/50" />
+          <Separator className="bg-border/50 my-12" />
 
           <section>
             <AboutSettings />
@@ -61,5 +45,5 @@ export default function SettingsPage() {
         </div>
       </div>
     </div>
-  );
-} 
+  )
+}

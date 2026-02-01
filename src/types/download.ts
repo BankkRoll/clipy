@@ -17,178 +17,180 @@ export enum DownloadErrorCode {
   RATE_LIMITED = 'RATE_LIMITED',
   STREAM_ERROR = 'STREAM_ERROR',
   NO_STREAMS = 'NO_STREAMS',
-  MUXING_ERROR = 'MUXING_ERROR'
+  MUXING_ERROR = 'MUXING_ERROR',
 }
 
 export interface DownloadError extends Error {
-  readonly name: 'DownloadError';
-  readonly code: DownloadErrorCode;
-  readonly originalError?: Error;
-  readonly retryable: boolean;
+  readonly name: 'DownloadError'
+  readonly code: DownloadErrorCode
+  readonly originalError?: Error
+  readonly retryable: boolean
 }
 
 export function createDownloadError(
   message: string,
   code: DownloadErrorCode,
   originalError?: Error,
-  retryable: boolean = false
+  retryable: boolean = false,
 ): DownloadError {
-  const error = Object.create(Error.prototype) as DownloadError;
-  error.message = message;
-  (error as any).name = 'DownloadError';
-  (error as any).code = code;
-  (error as any).originalError = originalError;
-  (error as any).retryable = retryable;
-  
+  const error = Object.create(Error.prototype) as DownloadError
+  error.message = message
+  ;(error as any).name = 'DownloadError'
+  ;(error as any).code = code
+  ;(error as any).originalError = originalError
+  ;(error as any).retryable = retryable
+
   if (Error.captureStackTrace) {
-    Error.captureStackTrace(error, createDownloadError);
+    Error.captureStackTrace(error, createDownloadError)
   }
-  
-  return error;
+
+  return error
 }
 
 export function isDownloadError(error: unknown): error is DownloadError {
-  return error instanceof Error && error.name === 'DownloadError' && 'code' in error;
+  return error instanceof Error && error.name === 'DownloadError' && 'code' in error
 }
 
-export type DownloadStatus = 
-  | 'idle' 
+export type DownloadStatus =
+  | 'idle'
   | 'initializing'
   | 'fetching-info'
-  | 'downloading' 
-  | 'processing' 
-  | 'completed' 
-  | 'failed' 
+  | 'downloading'
+  | 'processing'
+  | 'completed'
+  | 'failed'
   | 'cancelled'
-  | 'retrying';
+  | 'retrying'
+  | 'queued'
 
 export interface DownloadProgress {
-  downloadId: string;
-  url: string;
-  title: string;
-  progress: number;
-  speed: string;
-  eta: string;
-  size: string;
-  downloadedBytes: number;
-  totalBytes: number;
-  status: DownloadStatus;
-  error?: DownloadError;
-  filePath?: string;
-  startTime: number;
-  retryCount: number;
-  provider?: DownloadProvider;
-  usedProvider?: 'youtubejs' | 'ytdl-core';
+  downloadId: string
+  url: string
+  title: string
+  progress: number
+  speed: string
+  eta: string
+  size: string
+  downloadedBytes: number
+  totalBytes: number
+  status: DownloadStatus
+  error?: DownloadError
+  filePath?: string
+  thumbnailPath?: string
+  startTime: number
+  retryCount: number
+  provider?: DownloadProvider
+  usedProvider?: 'ytdlp'
 }
 
-export type VideoQuality = 'highest' | 'lowest' | 'highestaudio' | 'lowestaudio' | string;
-export type VideoFormat = 'mp4' | 'webm' | 'mkv' | 'mp3' | 'm4a' | 'opus';
+export type VideoQuality = 'highest' | 'lowest' | 'highestaudio' | 'lowestaudio' | string
+export type VideoFormat = 'mp4' | 'webm' | 'mkv' | 'mp3' | 'm4a' | 'opus'
 
-export type DownloadProvider = 'youtubejs' | 'ytdl-core' | 'auto';
+export type DownloadProvider = 'ytdlp' | 'auto'
 
 export interface DownloadOptions {
-  quality?: VideoQuality;
-  format?: VideoFormat;
-  outputPath?: string;
-  filename?: string;
-  downloadSubtitles?: boolean;
-  downloadThumbnail?: boolean;
-  saveMetadata?: boolean;
-  maxRetries?: number;
-  timeoutMs?: number;
-  overwrite?: boolean;
-  createSubdirectories?: boolean;
-  startTime?: number;
-  endTime?: number;
-  provider?: DownloadProvider;
+  quality?: VideoQuality
+  format?: VideoFormat
+  outputPath?: string
+  filename?: string
+  downloadSubtitles?: boolean
+  downloadThumbnail?: boolean
+  saveMetadata?: boolean
+  maxRetries?: number
+  timeoutMs?: number
+  overwrite?: boolean
+  createSubdirectories?: boolean
+  startTime?: number
+  endTime?: number
+  provider?: DownloadProvider
 }
 
 export interface VideoThumbnail {
-  url: string;
-  width: number;
-  height: number;
-  subscriberCount?: number;
+  url: string
+  width: number
+  height: number
+  subscriberCount?: number
 }
 
 export interface VideoChannel {
-  name: string;
-  id: string;
-  thumbnail?: string;
-  verified?: boolean;
-  subscriberCount?: number;
+  name: string
+  id: string
+  thumbnail?: string
+  verified?: boolean
+  subscriberCount?: number
 }
 
 export interface CaptionTrack {
-  lang: string;
-  url: string;
+  lang: string
+  url: string
 }
 
 export interface VideoFormatInfo {
-  itag: number;
-  quality: string;
-  qualityLabel?: string;
-  format: string;
-  container: string;
-  bitrate?: number;
-  audioBitrate?: number;
-  fps?: number;
-  width?: number;
-  height?: number;
-  hasAudio: boolean;
-  hasVideo: boolean;
-  audioCodec?: string;
-  videoCodec?: string;
-  mimeType?: string;
-  url?: string;
-  contentLength?: number;
+  itag: number
+  quality: string
+  qualityLabel?: string
+  format: string
+  container: string
+  bitrate?: number
+  audioBitrate?: number
+  fps?: number
+  width?: number
+  height?: number
+  hasAudio: boolean
+  hasVideo: boolean
+  audioCodec?: string
+  videoCodec?: string
+  mimeType?: string
+  url?: string
+  contentLength?: number
 }
 
 export interface VideoInfo {
-  id: string;
-  title: string;
-  description: string;
-  duration: number;
-  durationFormatted: string;
-  channel: VideoChannel;
-  thumbnails: VideoThumbnail[];
-  views: number;
-  viewsFormatted: string;
-  uploadDate: string;
-  tags: string[];
-  category?: string;
-  language?: string;
-  isLive: boolean;
-  isPrivate: boolean;
-  ageRestricted: boolean;
-  formats: VideoFormatInfo[];
-  captions?: CaptionTrack[];
-  bestVideoFormat?: VideoFormatInfo;
-  bestAudioFormat?: VideoFormatInfo;
-  availableQualities: string[];
+  id: string
+  title: string
+  description: string
+  duration: number
+  durationFormatted: string
+  channel: VideoChannel
+  thumbnails: VideoThumbnail[]
+  views: number
+  viewsFormatted: string
+  uploadDate: string
+  tags: string[]
+  category?: string
+  language?: string
+  isLive: boolean
+  isPrivate: boolean
+  ageRestricted: boolean
+  formats: VideoFormatInfo[]
+  captions?: CaptionTrack[]
+  bestVideoFormat?: VideoFormatInfo
+  bestAudioFormat?: VideoFormatInfo
+  availableQualities: string[]
 }
 
 export interface DownloadConfig {
-  maxConcurrentDownloads: number;
-  defaultOutputPath: string;
-  timeoutMs: number;
-  maxRetries: number;
-  retryDelayMs: number;
-  chunkSizeBytes: number;
+  maxConcurrentDownloads: number
+  defaultOutputPath: string
+  timeoutMs: number
+  maxRetries: number
+  retryDelayMs: number
+  chunkSizeBytes: number
 }
 
 export interface DownloadManagerEvents {
-  progress: (progress: DownloadProgress) => void;
-  completed: (progress: DownloadProgress) => void;
-  failed: (progress: DownloadProgress) => void;
-  initialized: (success: boolean) => void;
+  progress: (progress: DownloadProgress) => void
+  completed: (progress: DownloadProgress) => void
+  failed: (progress: DownloadProgress) => void
+  initialized: (success: boolean) => void
 }
 
-export type DownloadFilter = 'active' | 'completed' | 'failed' | 'all';
+export type DownloadFilter = 'active' | 'completed' | 'failed' | 'all'
 
 export interface DownloadListData {
-  downloads: DownloadProgress[];
-  count: number;
-  filter: string;
+  downloads: DownloadProgress[]
+  count: number
+  filter: string
 }
 
 import type {
@@ -196,13 +198,23 @@ import type {
   DownloadListResponse,
   DownloadProgressResponse,
   DownloadStartResponse,
-  VideoInfoResponse
-} from './api';
+  VideoInfoResponse,
+} from './api'
 
 export interface DownloadManagerContext {
-  start: (url: string, options?: DownloadOptions) => Promise<DownloadStartResponse>;
-  getProgress: (downloadId?: string) => Promise<DownloadProgressResponse>;
-  cancel: (downloadId: string) => Promise<DownloadCancelResponse>;
-  list: (filter?: DownloadFilter) => Promise<DownloadListResponse>;
-  getInfo: (url: string) => Promise<VideoInfoResponse>;
-} 
+  start: (url: string, options?: DownloadOptions) => Promise<DownloadStartResponse>
+  getProgress: (downloadId?: string) => Promise<DownloadProgressResponse>
+  cancel: (downloadId: string) => Promise<DownloadCancelResponse>
+  delete: (downloadId: string) => Promise<DownloadCancelResponse> // Reuse cancel response type
+  retry: (downloadId: string) => Promise<DownloadStartResponse> // Reuse start response type
+  list: (filter?: DownloadFilter) => Promise<DownloadListResponse>
+  getInfo: (url: string) => Promise<VideoInfoResponse>
+
+  // File operations
+  fileExists: (filePath: string) => Promise<boolean>
+  readFile: (filePath: string) => Promise<Buffer | null>
+
+  // Storage operations
+  loadStorage: () => Promise<any>
+  saveStorage: (data: any) => Promise<boolean>
+}
