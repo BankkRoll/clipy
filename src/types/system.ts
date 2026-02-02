@@ -76,9 +76,44 @@ export interface DownloadConfig {
   timeoutMs: number
 }
 
+export interface EditorConfig {
+  defaultCodec: 'copy' | 'h264' | 'h265'
+  defaultQuality: 'low' | 'medium' | 'high'
+  preferFastTrim: boolean
+  defaultAudioFormat: 'mp3' | 'm4a' | 'opus' | 'wav'
+}
+
+export interface NotificationsConfig {
+  downloadComplete: boolean
+  downloadFailed: boolean
+  soundEnabled: boolean
+}
+
+export interface PrivacyConfig {
+  saveDownloadHistory: boolean
+  saveRecentlyViewed: boolean
+}
+
+export interface KeyboardShortcut {
+  action: string
+  key: string
+  modifiers: ('ctrl' | 'shift' | 'alt' | 'meta')[]
+}
+
+export interface AdvancedConfig {
+  debugLogging: boolean
+  ffmpegPath: string
+  ytDlpPath: string
+}
+
 export interface AppConfig {
   theme: ThemeMode
   download: DownloadConfig
+  editor: EditorConfig
+  notifications: NotificationsConfig
+  privacy: PrivacyConfig
+  advanced: AdvancedConfig
+  shortcuts: KeyboardShortcut[]
   cache: {
     maxSize: number
     maxAge: number

@@ -15,6 +15,7 @@ import { PlatformUtils } from '../utils/platform'
 import { StorageManager } from '../services/storage-manager'
 import { ValidationUtils } from '../utils/validation'
 import { getVideoInfoWithStreamingUrl } from '../services/downloader/yt-dlp-manager'
+import { getProxyUrl, isProxyRunning, getProxyPort } from '../services/streaming-proxy'
 
 const logger = Logger.getInstance()
 const downloadManager = DownloadManager.getInstance()
@@ -176,6 +177,10 @@ export function setupDownloadOperationHandlers(): void {
   })
 
   // Get video info with streaming URL for editor preview
+  // NOTE: We return RAW YouTube URLs (not proxied) because Electron's webRequest API
+  // handles CORS bypass at the browser level. This is more reliable than Node.js proxy
+  // which gets "socket hang up" errors from googlevideo.com.
+  // See setupYouTubeCORSBypass() in main.ts
   ipcMain.handle(IPC_CHANNELS.DOWNLOAD_STREAMING_INFO, async (_event, url: string) => {
     try {
       const urlValidation = ValidationUtils.validateUrl(url)
@@ -183,13 +188,23 @@ export function setupDownloadOperationHandlers(): void {
         return createErrorResponse(urlValidation.error || 'Invalid URL', 'INVALID_URL')
       }
 
-      const { videoInfo, streamingUrl } = await getVideoInfoWithStreamingUrl(url)
+      const { videoInfo, streamingUrl, audioUrl, fallbackUrl } = await getVideoInfoWithStreamingUrl(url)
 
-      logger.info('Got streaming info', { url, hasStreamingUrl: !!streamingUrl })
+      // Return RAW YouTube URLs - Electron's webRequest API handles CORS bypass
+      // This is more reliable than the Node.js proxy approach
+      logger.info('Got streaming info for preview', {
+        url,
+        hasStreamingUrl: !!streamingUrl,
+        hasAudioUrl: !!audioUrl,
+        hasFallbackUrl: !!fallbackUrl,
+        streamingUrlHost: streamingUrl ? new URL(streamingUrl).hostname : null,
+      })
 
       return createSuccessResponse({
         videoInfo,
         streamingUrl,
+        audioUrl,
+        fallbackUrl,
       })
     } catch (error) {
       logger.error('Failed to get streaming info', error as Error, { url })
@@ -445,8 +460,6 @@ export function setupProgressBroadcasting(): void {
 /**
  * Streaming Proxy Handlers
  */
-import { getProxyUrl, isProxyRunning, getProxyPort } from '../services/streaming-proxy'
-
 export function setupProxyHandlers(): void {
   // Get a proxied URL for a video stream
   ipcMain.handle(IPC_CHANNELS.PROXY_GET_URL, async (_event, streamUrl: string) => {

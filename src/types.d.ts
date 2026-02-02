@@ -97,7 +97,14 @@ interface ElectronAPI {
     getProgress: (downloadId?: string) => Promise<ApiResponse<DownloadProgress | DownloadProgress[]>>
     list: (filter?: DownloadFilter) => Promise<ApiResponse<DownloadListData>>
     getInfo: (url: string) => Promise<ApiResponse<VideoInfo>>
-    getStreamingInfo: (url: string) => Promise<ApiResponse<{ videoInfo: VideoInfo; streamingUrl: string | null }>>
+    getStreamingInfo: (url: string) => Promise<
+      ApiResponse<{
+        videoInfo: VideoInfo
+        streamingUrl: string | null
+        audioUrl: string | null
+        fallbackUrl: string | null
+      }>
+    >
   }
 
   // File operations

@@ -25,6 +25,7 @@ import {
   initializeYtdlp,
   isYtdlpInitialized,
   getStreamingUrl,
+  getStreamingUrls,
 } from './yt-dlp-provider'
 
 import { app } from 'electron'
@@ -481,15 +482,30 @@ export function cleanup(): void {
 
 /**
  * Get video info with streaming URL for live preview
- * Returns video info plus a direct streaming URL for the editor
+ * Returns video info plus streaming URLs (video, audio, fallback) for the editor
  */
-export async function getVideoInfoWithStreamingUrl(
-  url: string,
-): Promise<{ videoInfo: VideoInfo; streamingUrl: string | null }> {
+export async function getVideoInfoWithStreamingUrl(url: string): Promise<{
+  videoInfo: VideoInfo
+  streamingUrl: string | null
+  audioUrl: string | null
+  fallbackUrl: string | null
+}> {
   const videoInfo = await getVideoInfo(url)
-  const streamingUrl = getStreamingUrl(videoInfo)
+  const streamingUrls = getStreamingUrls(videoInfo)
 
-  logger.debug('Streaming URL status', { available: !!streamingUrl })
+  logger.info('Got streaming info', {
+    url,
+    hasStreamingUrl: !!streamingUrls.videoUrl,
+    hasAudioUrl: !!streamingUrls.audioUrl,
+    hasFallbackUrl: !!streamingUrls.fallbackUrl,
+    quality: streamingUrls.videoQuality,
+    isCombined: streamingUrls.isCombined,
+  })
 
-  return { videoInfo, streamingUrl }
+  return {
+    videoInfo,
+    streamingUrl: streamingUrls.videoUrl,
+    audioUrl: streamingUrls.audioUrl,
+    fallbackUrl: streamingUrls.fallbackUrl,
+  }
 }

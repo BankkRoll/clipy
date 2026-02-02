@@ -1,6 +1,6 @@
 /**
  * Timeline - Professional video timeline with waveform, thumbnails, and trim handles
- * Advanced features: minimap, zoom slider, proper overflow handling, keyboard shortcuts
+ * Fully themable with CSS variables
  */
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
@@ -33,6 +33,7 @@ import { TimelineMarkers } from './timeline-markers'
 import { TimelineRuler } from './timeline-ruler'
 import { TrimHandles } from './trim-handles'
 import { WaveformTrack } from './waveform-track'
+import { useTranslation } from 'react-i18next'
 
 interface TimelineProps {
   className?: string
@@ -42,11 +43,10 @@ interface TimelineProps {
   onSeek?: (time: number) => void
 }
 
-// Constants
 const MIN_ZOOM = 0.5
 const MAX_ZOOM = 20
 const ZOOM_WHEEL_SENSITIVITY = 0.002
-const TRACK_LABEL_WIDTH = 44
+const TRACK_LABEL_WIDTH = 40
 
 export function Timeline({
   className,
@@ -55,21 +55,19 @@ export function Timeline({
   thumbnails = [],
   onSeek,
 }: TimelineProps) {
-  // Refs
+  const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const trackContainerRef = useRef<HTMLDivElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const minimapRef = useRef<HTMLDivElement>(null)
 
-  // Local state
   const [containerWidth, setContainerWidth] = useState(0)
   const [scrollLeft, setScrollLeft] = useState(0)
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false)
   const [isDraggingMinimap, setIsDraggingMinimap] = useState(false)
   const [hoverTime, setHoverTime] = useState<number | null>(null)
 
-  // Store
   const {
     duration,
     currentTime,
@@ -97,25 +95,21 @@ export function Timeline({
     goToNextMarker,
   } = useTimelineStore()
 
-  // Computed values
   const trackAreaWidth = Math.max(0, containerWidth - TRACK_LABEL_WIDTH)
   const timelineWidth = Math.max(trackAreaWidth, trackAreaWidth * zoom)
   const pixelsPerSecond = duration > 0 ? timelineWidth / duration : 0
   const playheadPosition = currentTime * pixelsPerSecond
 
-  // Minimap calculations
   const minimapScale = (containerWidth - 32) / (timelineWidth || 1)
   const viewportWidth = trackAreaWidth * minimapScale
   const viewportLeft = scrollLeft * minimapScale
 
-  // Derived states for button colors
   const hasMarkers = markers.length > 0
   const canZoomOut = zoom > MIN_ZOOM
   const canZoomIn = zoom < MAX_ZOOM
   const isAtStart = currentTime <= 0.01
   const isAtEnd = currentTime >= duration - 0.01
 
-  // Track container width
   useEffect(() => {
     const container = trackContainerRef.current
     if (!container) return
@@ -130,7 +124,6 @@ export function Timeline({
     return () => observer.disconnect()
   }, [])
 
-  // Track scroll position
   useEffect(() => {
     const scrollContainer = scrollContainerRef.current
     if (!scrollContainer) return
@@ -140,7 +133,6 @@ export function Timeline({
     return () => scrollContainer.removeEventListener('scroll', handleScroll)
   }, [])
 
-  // Auto-scroll to follow playhead
   useEffect(() => {
     if (!scrollContainerRef.current || isDraggingPlayhead) return
 
@@ -155,7 +147,6 @@ export function Timeline({
     }
   }, [playheadPosition, isDraggingPlayhead, scrollLeft])
 
-  // Calculate time from mouse position
   const getTimeFromMouseEvent = useCallback(
     (e: MouseEvent | globalThis.MouseEvent): number => {
       const rect = trackRef.current?.getBoundingClientRect()
@@ -168,7 +159,6 @@ export function Timeline({
     [scrollLeft, pixelsPerSecond, duration],
   )
 
-  // Timeline click handler
   const handleTimelineClick = useCallback(
     (e: MouseEvent<HTMLDivElement>) => {
       if (isDraggingPlayhead) return
@@ -180,7 +170,6 @@ export function Timeline({
     [getTimeFromMouseEvent, pixelsPerSecond, seek, onSeek, snapTime, isDraggingPlayhead],
   )
 
-  // Playhead drag handlers
   const handlePlayheadMouseDown = useCallback(
     (e: MouseEvent) => {
       e.preventDefault()
@@ -191,7 +180,6 @@ export function Timeline({
     [setIsDragging],
   )
 
-  // Global mouse move/up for playhead dragging
   useEffect(() => {
     if (!isDraggingPlayhead) return
 
@@ -215,7 +203,6 @@ export function Timeline({
     }
   }, [isDraggingPlayhead, getTimeFromMouseEvent, pixelsPerSecond, seek, onSeek, snapTime, setIsDragging])
 
-  // Hover tracking
   const handleMouseMove = useCallback(
     (e: MouseEvent<HTMLDivElement>) => {
       if (isDraggingPlayhead) return
@@ -231,7 +218,6 @@ export function Timeline({
 
   const handleMouseLeave = useCallback(() => setHoverTime(null), [])
 
-  // Zoom with mouse wheel
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return
@@ -258,7 +244,6 @@ export function Timeline({
     [zoom, scrollLeft, pixelsPerSecond, duration, trackAreaWidth, setZoom],
   )
 
-  // Zoom controls
   const handleZoomIn = useCallback(() => setZoom(Math.min(MAX_ZOOM, zoom * 1.5)), [zoom, setZoom])
   const handleZoomOut = useCallback(() => setZoom(Math.max(MIN_ZOOM, zoom / 1.5)), [zoom, setZoom])
   const handleFitToView = useCallback(() => {
@@ -267,7 +252,6 @@ export function Timeline({
   }, [setZoom])
   const handleZoomSlider = useCallback((value: number[]) => setZoom(value[0]), [setZoom])
 
-  // Minimap handlers
   const handleMinimapClick = useCallback(
     (e: MouseEvent<HTMLDivElement>) => {
       if (!minimapRef.current || !scrollContainerRef.current) return
@@ -304,7 +288,6 @@ export function Timeline({
     }
   }, [isDraggingMinimap, minimapScale, trackAreaWidth])
 
-  // Time formatting
   const formatTimecode = (seconds: number): string => {
     const mins = Math.floor(seconds / 60)
     const secs = Math.floor(seconds % 60)
@@ -318,19 +301,16 @@ export function Timeline({
     return `${mins}:${secs.toString().padStart(2, '0')}`
   }
 
-  // Hover position in pixels relative to visible area
   const hoverPositionPx = useMemo(() => {
     if (hoverTime === null) return 0
     return hoverTime * pixelsPerSecond - scrollLeft
   }, [hoverTime, pixelsPerSecond, scrollLeft])
 
-  // Icon button helper
   const IconButton = ({
     icon: Icon,
     onClick,
     disabled = false,
     active = false,
-    color = 'default',
     tooltip,
     children,
   }: {
@@ -338,75 +318,50 @@ export function Timeline({
     onClick: () => void
     disabled?: boolean
     active?: boolean
-    color?: 'default' | 'amber' | 'cyan' | 'blue' | 'red' | 'green'
     tooltip: string
     children?: React.ReactNode
-  }) => {
-    const colorClasses = {
-      default: disabled ? 'text-zinc-600 cursor-not-allowed' : 'text-zinc-400 hover:text-white hover:bg-zinc-700',
-      amber: disabled
-        ? 'text-zinc-600 cursor-not-allowed'
-        : active
-          ? 'text-amber-400 hover:text-amber-300 hover:bg-zinc-700'
-          : 'text-amber-500/50 hover:text-amber-400 hover:bg-zinc-700',
-      cyan: disabled
-        ? 'text-zinc-600 cursor-not-allowed'
-        : active
-          ? 'text-cyan-400 hover:text-cyan-300 hover:bg-zinc-700 bg-cyan-500/10'
-          : 'text-zinc-500 hover:text-cyan-400 hover:bg-zinc-700',
-      blue: disabled ? 'text-zinc-600 cursor-not-allowed' : 'text-blue-400 hover:text-blue-300 hover:bg-zinc-700',
-      red: disabled ? 'text-zinc-600 cursor-not-allowed' : 'text-red-400 hover:text-red-300 hover:bg-zinc-700',
-      green: disabled
-        ? 'text-zinc-600 cursor-not-allowed'
-        : 'text-emerald-400 hover:text-emerald-300 hover:bg-zinc-700',
-    }
-
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            className={cn('h-7 w-7 transition-colors', colorClasses[color])}
-            onClick={onClick}
-            disabled={disabled}
-          >
-            {Icon && <Icon className="h-4 w-4" />}
-            {children}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs">
-          {tooltip}
-        </TooltipContent>
-      </Tooltip>
-    )
-  }
+  }) => (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(
+            'h-7 w-7 transition-colors',
+            disabled && 'text-muted-foreground/50 cursor-not-allowed',
+            !disabled && !active && 'text-muted-foreground hover:text-foreground hover:bg-muted',
+            active && 'text-foreground bg-muted',
+          )}
+          onClick={onClick}
+          disabled={disabled}
+        >
+          {Icon && <Icon className="h-4 w-4" />}
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="text-xs">
+        {tooltip}
+      </TooltipContent>
+    </Tooltip>
+  )
 
   return (
     <TooltipProvider delayDuration={100}>
       <div
         ref={containerRef}
-        className={cn(
-          'flex flex-col overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900 select-none',
-          className,
-        )}
+        className={cn('bg-background flex flex-col overflow-hidden border select-none', className)}
       >
-        {/* ═══════════════ TOOLBAR ═══════════════ */}
-        <div className="flex h-10 flex-shrink-0 items-center gap-0.5 border-b border-zinc-800 bg-zinc-950/80 px-2">
-          {/* Shortcuts + Timecode */}
+        {/* Toolbar */}
+        <div className="bg-muted/50 flex h-9 flex-shrink-0 items-center gap-0.5 border-b px-2">
           <Dialog>
             <DialogTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 text-zinc-400 transition-colors hover:bg-zinc-700 hover:text-white"
-              >
+              <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground h-7 w-7">
                 <Keyboard className="h-4 w-4" />
               </Button>
             </DialogTrigger>
             <DialogContent className="max-h-[80vh] max-w-2xl overflow-y-auto">
               <DialogHeader>
-                <DialogTitle>Keyboard Shortcuts</DialogTitle>
+                <DialogTitle>{t('timelineKeyboardShortcuts')}</DialogTitle>
               </DialogHeader>
               <div className="mt-4 grid grid-cols-2 gap-6">
                 {KEYBOARD_SHORTCUTS.map(category => (
@@ -416,7 +371,7 @@ export function Timeline({
                       {category.shortcuts.map(shortcut => (
                         <div key={shortcut.key} className="flex items-center justify-between text-sm">
                           <span className="text-muted-foreground">{shortcut.action}</span>
-                          <kbd className="bg-muted rounded px-2 py-0.5 font-mono text-xs">{shortcut.key}</kbd>
+                          <kbd className="bg-muted px-2 py-0.5 font-mono text-xs">{shortcut.key}</kbd>
                         </div>
                       ))}
                     </div>
@@ -426,203 +381,153 @@ export function Timeline({
             </DialogContent>
           </Dialog>
 
-          <div className="ml-1 flex items-center rounded border border-zinc-800/50 bg-black/40 px-2 py-0.5">
-            <span className="font-mono text-sm font-semibold tracking-tight text-emerald-400 tabular-nums">
+          <div className="bg-background/50 ml-1 flex items-center border px-2 py-0.5">
+            <span className="text-foreground font-mono text-sm font-semibold tabular-nums">
               {formatTimecode(currentTime)}
             </span>
-            <span className="mx-1 text-zinc-600">/</span>
-            <span className="font-mono text-xs text-zinc-500 tabular-nums">{formatTimeShort(duration)}</span>
+            <span className="text-muted-foreground mx-1">/</span>
+            <span className="text-muted-foreground font-mono text-xs tabular-nums">{formatTimeShort(duration)}</span>
           </div>
 
-          <div className="mx-1.5 h-4 w-px bg-zinc-700/50" />
+          <div className="bg-border mx-1.5 h-4 w-px" />
 
-          {/* Navigation */}
-          <IconButton
-            icon={ChevronFirst}
-            onClick={jumpToStart}
-            disabled={isAtStart}
-            color="green"
-            tooltip="Go to Start (Home)"
-          />
-          <IconButton icon={ChevronLeft} onClick={prevFrame} color="default" tooltip="Previous Frame (,)" />
-          <IconButton icon={ChevronRight} onClick={nextFrame} color="default" tooltip="Next Frame (.)" />
-          <IconButton
-            icon={ChevronLast}
-            onClick={jumpToEnd}
-            disabled={isAtEnd}
-            color="green"
-            tooltip="Go to End (End)"
-          />
+          <IconButton icon={ChevronFirst} onClick={jumpToStart} disabled={isAtStart} tooltip={t('timelineGoToStart')} />
+          <IconButton icon={ChevronLeft} onClick={prevFrame} tooltip={t('timelinePrevFrame')} />
+          <IconButton icon={ChevronRight} onClick={nextFrame} tooltip={t('timelineNextFrame')} />
+          <IconButton icon={ChevronLast} onClick={jumpToEnd} disabled={isAtEnd} tooltip={t('timelineGoToEnd')} />
 
-          <div className="mx-1.5 h-4 w-px bg-zinc-700/50" />
+          <div className="bg-border mx-1.5 h-4 w-px" />
 
-          {/* Marker Navigation */}
           <IconButton
             icon={SkipBack}
             onClick={goToPrevMarker}
             disabled={!hasMarkers}
-            color="amber"
             active={hasMarkers}
-            tooltip="Prev Marker"
+            tooltip={t('timelinePrevMarker')}
           />
           <IconButton
             icon={SkipForward}
             onClick={goToNextMarker}
             disabled={!hasMarkers}
-            color="amber"
             active={hasMarkers}
-            tooltip="Next Marker"
+            tooltip={t('timelineNextMarker')}
           />
 
           <div className="flex-1" />
 
-          {/* Tools - no background, blend into toolbar */}
           <IconButton
             icon={Bookmark}
             onClick={() => addMarker(currentTime)}
-            color="amber"
             active={true}
-            tooltip="Add Marker (M)"
+            tooltip={t('timelineAddMarker')}
           />
           <IconButton
             icon={Magnet}
             onClick={toggleSnapping}
-            color="cyan"
             active={snapConfig.enabled}
-            tooltip={`Snap ${snapConfig.enabled ? 'ON' : 'OFF'} (S)`}
+            tooltip={snapConfig.enabled ? t('timelineSnapOn') : t('timelineSnapOff')}
           />
 
-          <div className="mx-1.5 h-4 w-px bg-zinc-700/50" />
+          <div className="bg-border mx-1.5 h-4 w-px" />
 
-          {/* Trim controls */}
-          <IconButton
-            icon={Scissors}
-            onClick={goToTrimStart}
-            disabled={!isTrimmed}
-            color="blue"
-            tooltip="In Point (I)"
-          />
-          <IconButton onClick={goToTrimEnd} disabled={!isTrimmed} color="blue" tooltip="Out Point (O)">
+          <IconButton icon={Scissors} onClick={goToTrimStart} disabled={!isTrimmed} tooltip={t('timelineInPoint')} />
+          <IconButton onClick={goToTrimEnd} disabled={!isTrimmed} tooltip={t('timelineOutPoint')}>
             <Scissors className="h-4 w-4 scale-x-[-1]" />
           </IconButton>
-          <IconButton icon={RotateCcw} onClick={resetTrim} disabled={!isTrimmed} color="default" tooltip="Reset Trim" />
+          <IconButton icon={RotateCcw} onClick={resetTrim} disabled={!isTrimmed} tooltip={t('timelineResetTrim')} />
 
           <div className="flex-1" />
 
-          {/* Zoom */}
           <div className="flex items-center gap-1">
-            <IconButton
-              icon={Minus}
-              onClick={handleZoomOut}
-              disabled={!canZoomOut}
-              color="default"
-              tooltip="Zoom Out (-)"
-            />
-
+            <IconButton icon={Minus} onClick={handleZoomOut} disabled={!canZoomOut} tooltip={t('timelineZoomOut')} />
             <Slider
               value={[zoom]}
               min={MIN_ZOOM}
               max={MAX_ZOOM}
               step={0.1}
               onValueChange={handleZoomSlider}
-              className="mx-1 w-24"
+              className="mx-1 w-20"
             />
-
-            <IconButton
-              icon={Plus}
-              onClick={handleZoomIn}
-              disabled={!canZoomIn}
-              color="default"
-              tooltip="Zoom In (+)"
-            />
-
+            <IconButton icon={Plus} onClick={handleZoomIn} disabled={!canZoomIn} tooltip={t('timelineZoomIn')} />
             <button
               onClick={handleFitToView}
-              className="min-w-[52px] rounded px-2 py-0.5 text-center font-mono text-[11px] text-zinc-400 transition-colors hover:bg-zinc-700 hover:text-white"
+              className="text-muted-foreground hover:text-foreground hover:bg-muted min-w-[48px] px-2 py-0.5 text-center font-mono text-[11px] transition-colors"
             >
               {Math.round(zoom * 100)}%
             </button>
-
-            <IconButton icon={Focus} onClick={handleFitToView} color="default" tooltip="Fit to View (0)" />
+            <IconButton icon={Focus} onClick={handleFitToView} tooltip={t('timelineFitToView')} />
           </div>
         </div>
 
-        {/* ═══════════════ STATUS BAR ═══════════════ */}
+        {/* Status Bar */}
         {(isTrimmed || hasMarkers || snapConfig.enabled) && (
-          <div className="flex h-6 flex-shrink-0 items-center gap-4 border-b border-zinc-800/50 bg-zinc-950/50 px-3 text-[11px]">
+          <div className="text-muted-foreground flex h-6 flex-shrink-0 items-center gap-4 border-b px-3 text-[11px]">
             {isTrimmed && (
-              <div className="flex items-center gap-1.5 text-blue-400">
+              <div className="flex items-center gap-1.5">
                 <Scissors className="h-3 w-3" />
                 <span className="font-mono">
                   {formatTimeShort(trimStart)} → {formatTimeShort(trimEnd)}
-                  <span className="ml-1.5 text-zinc-500">({formatTimeShort(trimEnd - trimStart)})</span>
+                  <span className="ml-1.5 opacity-50">({formatTimeShort(trimEnd - trimStart)})</span>
                 </span>
               </div>
             )}
             {hasMarkers && (
-              <div className="flex items-center gap-1.5 text-amber-400">
+              <div className="flex items-center gap-1.5">
                 <Bookmark className="h-3 w-3" />
                 <span>
-                  {markers.length} marker{markers.length !== 1 ? 's' : ''}
+                  {markers.length} {markers.length !== 1 ? t('timelineMarkers') : t('timelineMarker')}
                 </span>
               </div>
             )}
             {snapConfig.enabled && (
-              <div className="flex items-center gap-1.5 text-cyan-400">
+              <div className="flex items-center gap-1.5">
                 <Magnet className="h-3 w-3" />
-                <span>Snap</span>
+                <span>{t('timelineSnapEnabled')}</span>
               </div>
             )}
           </div>
         )}
 
-        {/* ═══════════════ MINIMAP ═══════════════ */}
-        {zoom > 1.1 && (
-          <div className="h-7 flex-shrink-0 border-b border-zinc-800/50 bg-zinc-950/60 px-4 py-1.5">
+        {/* Minimap - always visible */}
+        <div className="h-6 flex-shrink-0 border-b px-4 py-1">
+          <div
+            ref={minimapRef}
+            className="bg-muted/50 relative h-full cursor-pointer overflow-hidden border"
+            onClick={handleMinimapClick}
+            onMouseDown={handleMinimapMouseDown}
+          >
             <div
-              ref={minimapRef}
-              className="relative h-full cursor-pointer overflow-hidden rounded border border-zinc-700/30 bg-zinc-800/40"
-              onClick={handleMinimapClick}
-              onMouseDown={handleMinimapMouseDown}
-            >
-              {/* Playhead on minimap */}
+              className="bg-primary absolute top-0 bottom-0 z-10 w-px"
+              style={{ left: `${(currentTime / duration) * 100}%` }}
+            />
+            {isTrimmed && (
               <div
-                className="absolute top-0 bottom-0 z-10 w-0.5 bg-red-500"
-                style={{ left: `${(currentTime / duration) * 100}%` }}
+                className="bg-primary/20 border-primary/50 absolute top-0 bottom-0 border-x"
+                style={{
+                  left: `${(trimStart / duration) * 100}%`,
+                  width: `${((trimEnd - trimStart) / duration) * 100}%`,
+                }}
               />
-
-              {/* Trim region on minimap */}
-              {isTrimmed && (
-                <div
-                  className="absolute top-0 bottom-0 border-x border-blue-400/50 bg-blue-500/20"
-                  style={{
-                    left: `${(trimStart / duration) * 100}%`,
-                    width: `${((trimEnd - trimStart) / duration) * 100}%`,
-                  }}
-                />
-              )}
-
-              {/* Markers on minimap */}
-              {markers.map(marker => (
-                <div
-                  key={marker.id}
-                  className="absolute top-0 bottom-0 w-0.5 bg-amber-500/70"
-                  style={{ left: `${(marker.time / duration) * 100}%` }}
-                />
-              ))}
-
-              {/* Viewport indicator */}
+            )}
+            {markers.map(marker => (
               <div
-                className="absolute top-0 bottom-0 rounded-sm border border-white/40 bg-white/10"
+                key={marker.id}
+                className="bg-foreground/50 absolute top-0 bottom-0 w-px"
+                style={{ left: `${(marker.time / duration) * 100}%` }}
+              />
+            ))}
+            {zoom > 1 && (
+              <div
+                className="bg-foreground/10 border-foreground/30 absolute top-0 bottom-0 border"
                 style={{ left: viewportLeft, width: Math.max(viewportWidth, 24) }}
               />
-            </div>
+            )}
           </div>
-        )}
+        </div>
 
-        {/* ═══════════════ RULER ═══════════════ */}
-        <div className="flex flex-shrink-0 border-b border-zinc-800">
-          <div className="flex-shrink-0 bg-zinc-900" style={{ width: TRACK_LABEL_WIDTH }} />
+        {/* Ruler */}
+        <div className="flex flex-shrink-0 border-b">
+          <div className="bg-background flex-shrink-0" style={{ width: TRACK_LABEL_WIDTH }} />
           <div className="flex-1 overflow-hidden">
             <TimelineRuler
               duration={duration}
@@ -633,24 +538,19 @@ export function Timeline({
           </div>
         </div>
 
-        {/* ═══════════════ TRACKS ═══════════════ */}
-        <div ref={trackContainerRef} className="relative flex min-h-0 flex-1 overflow-hidden">
-          {/* Track Labels */}
-          <div
-            className="z-10 flex flex-shrink-0 flex-col border-r border-zinc-800 bg-zinc-900/80"
-            style={{ width: TRACK_LABEL_WIDTH }}
-          >
-            <div className="flex min-h-[50px] flex-1 items-center justify-center border-b border-zinc-800/50">
-              <span className="text-[10px] font-semibold tracking-wider text-zinc-500">V1</span>
+        {/* Tracks */}
+        <div ref={trackContainerRef} className="relative flex min-h-[120px] flex-1 overflow-hidden">
+          <div className="bg-muted/30 z-10 flex flex-shrink-0 flex-col border-r" style={{ width: TRACK_LABEL_WIDTH }}>
+            <div className="flex min-h-[60px] flex-1 items-center justify-center border-b">
+              <span className="text-muted-foreground text-[10px] font-medium">V1</span>
             </div>
             {showWaveform && (
-              <div className="flex h-12 items-center justify-center border-b border-zinc-800/50">
-                <span className="text-[10px] font-semibold tracking-wider text-zinc-500">A1</span>
+              <div className="flex h-14 items-center justify-center border-b">
+                <span className="text-muted-foreground text-[10px] font-medium">A1</span>
               </div>
             )}
           </div>
 
-          {/* Scrollable Track Content */}
           <div ref={scrollContainerRef} className="flex-1 overflow-x-auto overflow-y-hidden" onWheel={handleWheel}>
             <div
               ref={trackRef}
@@ -661,10 +561,9 @@ export function Timeline({
               onMouseMove={handleMouseMove}
               onMouseLeave={handleMouseLeave}
             >
-              {/* Video Track */}
               <div
-                className="relative border-b border-zinc-800/50 bg-zinc-800/20"
-                style={{ height: showWaveform ? 'calc(100% - 48px)' : '100%', minHeight: 50 }}
+                className="bg-muted/20 relative border-b"
+                style={{ height: showWaveform ? 'calc(100% - 56px)' : '100%', minHeight: 60 }}
               >
                 {showThumbnails && thumbnails.length > 0 ? (
                   <ThumbnailStrip
@@ -677,14 +576,13 @@ export function Timeline({
                   />
                 ) : (
                   <div className="flex h-full items-center justify-center">
-                    <span className="text-[10px] text-zinc-600">Video Track</span>
+                    <span className="text-muted-foreground text-[10px]">{t('timelineVideoTrack')}</span>
                   </div>
                 )}
               </div>
 
-              {/* Audio Track */}
               {showWaveform && (
-                <div className="relative h-12 border-b border-zinc-800/50 bg-zinc-800/10">
+                <div className="bg-muted/10 relative h-14 border-b">
                   <WaveformTrack
                     duration={duration}
                     pixelsPerSecond={pixelsPerSecond}
@@ -694,25 +592,23 @@ export function Timeline({
                 </div>
               )}
 
-              {/* Trim Overlays */}
               {isTrimmed && (
                 <>
                   <div
-                    className="pointer-events-none absolute top-0 bottom-0 left-0 bg-black/60"
+                    className="pointer-events-none absolute top-0 bottom-0 left-0 bg-black/50"
                     style={{ width: trimStart * pixelsPerSecond }}
                   />
                   <div
-                    className="pointer-events-none absolute top-0 bottom-0 bg-black/60"
+                    className="pointer-events-none absolute top-0 bottom-0 bg-black/50"
                     style={{ left: trimEnd * pixelsPerSecond, right: 0 }}
                   />
                   <div
-                    className="pointer-events-none absolute top-0 bottom-0 border-y-2 border-blue-500/70"
+                    className="border-primary/50 pointer-events-none absolute top-0 bottom-0 border-y"
                     style={{ left: trimStart * pixelsPerSecond, width: (trimEnd - trimStart) * pixelsPerSecond }}
                   />
                 </>
               )}
 
-              {/* Trim Handles */}
               <TrimHandles
                 trimStart={trimStart}
                 trimEnd={trimEnd}
@@ -720,28 +616,22 @@ export function Timeline({
                 pixelsPerSecond={pixelsPerSecond}
                 onSeek={onSeek}
               />
-
-              {/* Timeline Markers */}
               <TimelineMarkers pixelsPerSecond={pixelsPerSecond} />
 
-              {/* Hover Line */}
               {hoverTime !== null && !isDraggingPlayhead && (
                 <div
-                  className="pointer-events-none absolute top-0 bottom-0 z-20 w-px bg-white/30"
+                  className="bg-foreground/30 pointer-events-none absolute top-0 bottom-0 z-20 w-px"
                   style={{ left: hoverPositionPx }}
                 >
-                  <div className="absolute -top-6 left-1/2 -translate-x-1/2 rounded border border-zinc-600 bg-zinc-800 px-2 py-0.5 font-mono text-[10px] whitespace-nowrap text-zinc-200 shadow-lg">
+                  <div className="bg-popover text-popover-foreground absolute -top-6 left-1/2 -translate-x-1/2 border px-2 py-0.5 font-mono text-[10px] whitespace-nowrap shadow">
                     {formatTimecode(hoverTime)}
                   </div>
                 </div>
               )}
 
-              {/* ═══════════════ PLAYHEAD ═══════════════ */}
+              {/* Playhead */}
               <div className="pointer-events-none absolute top-0 bottom-0 z-30" style={{ left: playheadPosition }}>
-                {/* Line */}
-                <div className="absolute top-0 bottom-0 -ml-px w-0.5 bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.7)]" />
-
-                {/* Handle */}
+                <div className="bg-primary absolute top-0 bottom-0 -ml-px w-0.5" />
                 <div
                   className={cn(
                     'pointer-events-auto absolute -top-1 left-1/2 -translate-x-1/2 cursor-ew-resize transition-transform',
@@ -750,14 +640,12 @@ export function Timeline({
                   onMouseDown={handlePlayheadMouseDown}
                 >
                   <div
-                    className="h-5 w-4 border border-red-400 bg-red-500 shadow-lg"
+                    className="bg-primary border-primary h-4 w-3 border"
                     style={{ clipPath: 'polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%)' }}
                   />
                 </div>
-
-                {/* Time tooltip while dragging */}
                 {isDraggingPlayhead && (
-                  <div className="absolute -top-8 left-1/2 -translate-x-1/2 rounded border border-red-400 bg-red-500 px-2.5 py-1 font-mono text-[11px] whitespace-nowrap text-white shadow-xl">
+                  <div className="bg-primary text-primary-foreground absolute -top-7 left-1/2 -translate-x-1/2 px-2 py-0.5 font-mono text-[11px] whitespace-nowrap shadow">
                     {formatTimecode(currentTime)}
                   </div>
                 )}
@@ -766,10 +654,10 @@ export function Timeline({
           </div>
         </div>
 
-        {/* ═══════════════ FOOTER ═══════════════ */}
-        <div className="flex h-6 flex-shrink-0 items-center justify-between border-t border-zinc-800 bg-zinc-950/80 px-3 text-[10px] text-zinc-500">
+        {/* Footer */}
+        <div className="text-muted-foreground flex h-5 flex-shrink-0 items-center justify-between border-t px-3 text-[10px]">
           <span>30 fps</span>
-          <span className="text-zinc-600">Ctrl+Scroll to zoom • Click to seek</span>
+          <span className="opacity-50">{t('timelineCtrlScrollZoom')}</span>
           <span>{formatTimeShort(duration)}</span>
         </div>
       </div>

@@ -3,7 +3,6 @@
  */
 
 import { AlertCircle, Loader2 } from 'lucide-react'
-import { useKeyboardShortcuts } from '@/hooks/use-keyboard-shortcuts'
 import { StreamingPlayer, StreamingPlayerRef } from './player/streaming-player'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -11,12 +10,11 @@ import { AspectRatio } from '@/components/ui/aspect-ratio'
 import { PlayerControls } from './player/player-controls'
 import { Timeline } from './timeline/timeline'
 import { cn } from '@/utils/tailwind'
+import { useKeyboardShortcuts } from '@/hooks/use-keyboard-shortcuts'
 import { useTimelineStore } from '@/stores/timeline-store'
 
 interface VideoEditorProps {
   videoUrl?: string
-  /** Separate audio URL for dual-stream playback (1080p+ video with synced audio) */
-  audioUrl?: string
   poster?: string
   duration?: number
   title?: string
@@ -32,7 +30,6 @@ interface VideoEditorProps {
 
 export function VideoEditor({
   videoUrl,
-  audioUrl,
   poster,
   duration: initialDuration,
   title,
@@ -63,7 +60,6 @@ export function VideoEditor({
 
   useKeyboardShortcuts({
     enabled: true,
-    onToggleFullscreen: handleToggleFullscreen,
   })
 
   useEffect(() => {
@@ -109,19 +105,6 @@ export function VideoEditor({
     [initialDuration, videoUrl, initializeForVideo],
   )
 
-  function handleToggleFullscreen() {
-    if (!containerRef.current) return
-
-    if (!document.fullscreenElement) {
-      containerRef.current
-        .requestFullscreen()
-        .then(() => setIsFullscreen(true))
-        .catch(() => {})
-    } else {
-      document.exitFullscreen().then(() => setIsFullscreen(false))
-    }
-  }
-
   useEffect(() => {
     const handleFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement)
     document.addEventListener('fullscreenchange', handleFullscreenChange)
@@ -141,7 +124,6 @@ export function VideoEditor({
               <StreamingPlayer
                 ref={playerRef}
                 src={videoUrl}
-                audioSrc={audioUrl}
                 poster={poster}
                 className="h-full w-full"
                 isExternalUrl={isExternalUrl}
@@ -211,7 +193,7 @@ export function VideoEditor({
             )}
           </AspectRatio>
 
-          <PlayerControls onFullscreen={handleToggleFullscreen} />
+          <PlayerControls />
         </div>
       </div>
 

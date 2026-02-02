@@ -14,6 +14,7 @@ const config: ForgeConfig = {
     appBundleId: 'com.clipy.app',
     appCopyright: `Copyright © ${new Date().getFullYear()} Clipy`,
     darwinDarkModeSupport: true,
+    icon: './src/assets/icon',
     // Include the entire resources folder which contains platform-specific binaries
     // Structure should be:
     //   resources/

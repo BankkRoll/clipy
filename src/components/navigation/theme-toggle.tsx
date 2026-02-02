@@ -1,43 +1,19 @@
 /**
  * ToggleTheme - Dark/light mode toggle button
- * Calls theme.toggle() IPC and updates DOM class.
+ * Uses shared theme store to stay in sync with settings page.
  */
 
 import { Moon, Sun } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import React from 'react'
-import { isSuccessResponse } from '@/types/api'
+import { useThemeStore } from '@/stores/theme-store'
 import { useTranslation } from 'react-i18next'
-
-/** Toggle between dark and light theme via IPC */
-const toggleTheme = async () => {
-  try {
-    const response = await window.electronAPI.theme.toggle()
-
-    if (isSuccessResponse(response)) {
-      const newTheme = response.data
-
-      // Update DOM classes based on the new theme
-      if (newTheme === 'dark') {
-        document.documentElement.classList.add('dark')
-      } else if (newTheme === 'light') {
-        document.documentElement.classList.remove('dark')
-      }
-      // 'system' theme is handled by CSS media queries
-
-      console.log('Theme toggled to:', newTheme)
-    } else {
-      console.error('Failed to toggle theme:', response.error)
-    }
-  } catch (error) {
-    console.error('Failed to toggle theme:', error)
-  }
-}
 
 export default function ToggleTheme() {
   const [mounted, setMounted] = React.useState(false)
   const { t } = useTranslation()
+  const toggleTheme = useThemeStore(state => state.toggleTheme)
 
   React.useEffect(() => {
     setMounted(true)

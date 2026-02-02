@@ -1,14 +1,13 @@
 /**
  * Home Page
- * Landing page with hero section and main call-to-action.
+ * Landing page with hero section for entering YouTube URLs.
  */
 
 import { HeroSection } from '@/components/home/hero-section'
-import React from 'react'
 
 export default function HomePage() {
   return (
-    <div className="m-auto h-full w-full items-center justify-center space-y-12">
+    <div className="h-full w-full">
       <HeroSection />
     </div>
   )

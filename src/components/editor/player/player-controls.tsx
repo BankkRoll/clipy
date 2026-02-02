@@ -10,7 +10,6 @@ import {
   SkipForward,
   Volume2,
   VolumeX,
-  Maximize,
   ChevronLeft,
   ChevronRight,
   RotateCcw,
@@ -29,10 +28,10 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useTimelineStore } from '@/stores/timeline-store'
 import { cn } from '@/utils/tailwind'
+import { useTranslation } from 'react-i18next'
 
 interface PlayerControlsProps {
   className?: string
-  onFullscreen?: () => void
 }
 
 function formatTime(seconds: number): string {
@@ -50,7 +49,8 @@ function formatTime(seconds: number): string {
 
 const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
 
-export function PlayerControls({ className, onFullscreen }: PlayerControlsProps) {
+export function PlayerControls({ className }: PlayerControlsProps) {
+  const { t } = useTranslation()
   const [showVolumeSlider, setShowVolumeSlider] = useState(false)
   const volumeTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
@@ -102,7 +102,7 @@ export function PlayerControls({ className, onFullscreen }: PlayerControlsProps)
                 <SkipBack className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{isTrimmed ? 'Go to In (I)' : 'Start (Home)'}</TooltipContent>
+            <TooltipContent>{isTrimmed ? t('playerGoToIn') : t('playerStart')}</TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -111,7 +111,7 @@ export function PlayerControls({ className, onFullscreen }: PlayerControlsProps)
                 <ChevronLeft className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Previous frame (←)</TooltipContent>
+            <TooltipContent>{t('playerPrevFrame')}</TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -126,7 +126,7 @@ export function PlayerControls({ className, onFullscreen }: PlayerControlsProps)
                 )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{isPlaying ? 'Pause (Space)' : 'Play (Space)'}</TooltipContent>
+            <TooltipContent>{isPlaying ? t('playerPause') : t('playerPlay')}</TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -135,7 +135,7 @@ export function PlayerControls({ className, onFullscreen }: PlayerControlsProps)
                 <ChevronRight className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Next frame (→)</TooltipContent>
+            <TooltipContent>{t('playerNextFrame')}</TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -144,7 +144,7 @@ export function PlayerControls({ className, onFullscreen }: PlayerControlsProps)
                 <SkipForward className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{isTrimmed ? 'Go to Out (O)' : 'End (End)'}</TooltipContent>
+            <TooltipContent>{isTrimmed ? t('playerGoToOut') : t('playerEnd')}</TooltipContent>
           </Tooltip>
         </div>
 
@@ -156,7 +156,11 @@ export function PlayerControls({ className, onFullscreen }: PlayerControlsProps)
             {formatTime(duration)}
           </span>
 
-          {isTrimmed && <span className="text-primary text-xs">Clip: {formatTime(trimEnd - trimStart)}</span>}
+          {isTrimmed && (
+            <span className="text-primary text-xs">
+              {t('playerClip')}: {formatTime(trimEnd - trimStart)}
+            </span>
+          )}
         </div>
 
         {/* Right controls */}
@@ -173,7 +177,7 @@ export function PlayerControls({ className, onFullscreen }: PlayerControlsProps)
                   {isMuted || volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{isMuted ? 'Unmute (M)' : 'Mute (M)'}</TooltipContent>
+              <TooltipContent>{isMuted ? t('playerUnmute') : t('playerMute')}</TooltipContent>
             </Tooltip>
 
             <div
@@ -205,10 +209,10 @@ export function PlayerControls({ className, onFullscreen }: PlayerControlsProps)
                   </Button>
                 </DropdownMenuTrigger>
               </TooltipTrigger>
-              <TooltipContent>Speed</TooltipContent>
+              <TooltipContent>{t('playerSpeed')}</TooltipContent>
             </Tooltip>
             <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Playback Speed</DropdownMenuLabel>
+              <DropdownMenuLabel>{t('playerPlaybackSpeed')}</DropdownMenuLabel>
               <DropdownMenuSeparator />
               {PLAYBACK_RATES.map(rate => (
                 <DropdownMenuItem
@@ -216,7 +220,7 @@ export function PlayerControls({ className, onFullscreen }: PlayerControlsProps)
                   onClick={() => setPlaybackRate(rate)}
                   className={cn(rate === playbackRate && 'bg-accent')}
                 >
-                  {rate}x {rate === 1 && '(Normal)'}
+                  {rate}x {rate === 1 && `(${t('playerNormal')})`}
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
@@ -233,10 +237,10 @@ export function PlayerControls({ className, onFullscreen }: PlayerControlsProps)
                     </Button>
                   </DropdownMenuTrigger>
                 </TooltipTrigger>
-                <TooltipContent>Quality</TooltipContent>
+                <TooltipContent>{t('playerQuality')}</TooltipContent>
               </Tooltip>
               <DropdownMenuContent align="end">
-                <DropdownMenuLabel>Quality</DropdownMenuLabel>
+                <DropdownMenuLabel>{t('playerQuality')}</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 {qualities.map(quality => (
                   <DropdownMenuItem
@@ -254,18 +258,6 @@ export function PlayerControls({ className, onFullscreen }: PlayerControlsProps)
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
-          )}
-
-          {/* Fullscreen */}
-          {onFullscreen && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onFullscreen}>
-                  <Maximize className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Fullscreen (F)</TooltipContent>
-            </Tooltip>
           )}
         </div>
       </div>

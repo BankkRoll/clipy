@@ -3,7 +3,6 @@
  * TanStack Router route configuration for all app pages.
  */
 
-import DownloaderPage from '@/pages/DownloaderPage'
 import EditorPage from '@/pages/EditorPage'
 import HomePage from '../pages/HomePage'
 import LibraryPage from '@/pages/LibraryPage'
@@ -15,21 +14,6 @@ export const HomeRoute = createRoute({
   getParentRoute: () => RootRoute,
   path: '/',
   component: HomePage,
-})
-
-export interface DownloaderSearchParams {
-  url?: string
-}
-
-export const DownloaderRoute = createRoute({
-  getParentRoute: () => RootRoute,
-  path: '/downloader',
-  component: DownloaderPage,
-  validateSearch: (search: Record<string, unknown>): DownloaderSearchParams => {
-    return {
-      url: search.url ? String(search.url) : undefined,
-    }
-  },
 })
 
 export const LibraryRoute = createRoute({
@@ -63,4 +47,4 @@ export const EditorRoute = createRoute({
   },
 })
 
-export const rootTree = RootRoute.addChildren([HomeRoute, DownloaderRoute, LibraryRoute, SettingsRoute, EditorRoute])
+export const rootTree = RootRoute.addChildren([HomeRoute, LibraryRoute, SettingsRoute, EditorRoute])

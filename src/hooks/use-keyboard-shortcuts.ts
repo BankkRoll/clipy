@@ -8,7 +8,6 @@ import { useTimelineStore } from '@/stores/timeline-store'
 
 interface KeyboardShortcutsOptions {
   enabled?: boolean
-  onToggleFullscreen?: () => void
 }
 
 // Playback rates for J/K/L shuttle control
@@ -16,7 +15,7 @@ const SHUTTLE_RATES = [-4, -2, -1, -0.5, 0, 0.5, 1, 2, 4]
 const NORMAL_RATE_INDEX = SHUTTLE_RATES.indexOf(1)
 
 export function useKeyboardShortcuts(options: KeyboardShortcutsOptions = {}) {
-  const { enabled = true, onToggleFullscreen } = options
+  const { enabled = true } = options
 
   const shuttleIndexRef = useRef(NORMAL_RATE_INDEX)
 
@@ -251,14 +250,6 @@ export function useKeyboardShortcuts(options: KeyboardShortcutsOptions = {}) {
           break
         }
 
-        // === VIEW CONTROLS ===
-
-        // F - Toggle fullscreen
-        case 'f':
-          e.preventDefault()
-          onToggleFullscreen?.()
-          break
-
         // === QUICK SEEK ===
 
         // Number keys 1-9 - Jump to percentage of video
@@ -346,7 +337,6 @@ export function useKeyboardShortcuts(options: KeyboardShortcutsOptions = {}) {
       trimStart,
       trimEnd,
       isTrimmed,
-      onToggleFullscreen,
     ],
   )
 
@@ -419,7 +409,6 @@ export const KEYBOARD_SHORTCUTS = [
       { key: '↓', action: 'Volume down' },
     ],
   },
-  { category: 'View', shortcuts: [{ key: 'F', action: 'Toggle fullscreen' }] },
   {
     category: 'Markers',
     shortcuts: [

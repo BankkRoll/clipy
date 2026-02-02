@@ -9,14 +9,15 @@
  * - Stats cards showing download counts by status
  */
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Download, Folder, Pause, Play, Square } from 'lucide-react'
+import { Download, Pause, Play, Square } from 'lucide-react'
 import type { DownloadFilter, DownloadProgress } from '@/types/download'
-import { DownloadsList, LibraryHeader } from '@/components/library'
+import { DownloadsList } from '@/components/library/downloads-list'
+import { LibraryHeader } from '@/components/library/library-header'
+import { LibraryStats } from '@/components/library/library-stats'
+import { VideoPreviewModal } from '@/components/library/video-preview-modal'
 import React, { useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { isSuccessResponse } from '@/types/api'
 import { toast } from 'sonner'
 import { useNavigate } from '@tanstack/react-router'
@@ -29,7 +30,7 @@ export default function LibraryPage() {
   const [filter, setFilter] = useState<DownloadFilter>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [isLoading, setIsLoading] = useState(true)
-  const [selectedDownload, setSelectedDownload] = useState<DownloadProgress | null>(null)
+  const [selectedDownload, setSelectedDownload] = useState<(DownloadProgress & { blobUrl?: string }) | null>(null)
   const [isVideoLoading, setIsVideoLoading] = useState(false)
 
   // Real-time updates using event listeners instead of polling
@@ -88,12 +89,7 @@ export default function LibraryPage() {
     // Keyboard support for closing modal
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && selectedDownload) {
-        // Clean up blob URL to prevent memory leaks
-        if ((selectedDownload as any).blobUrl) {
-          URL.revokeObjectURL((selectedDownload as any).blobUrl)
-        }
-        setSelectedDownload(null)
-        setIsVideoLoading(false)
+        handleClosePreview()
       }
     }
 
@@ -163,15 +159,12 @@ export default function LibraryPage() {
     }
   }
 
-  const activeDownloads = downloads.filter(d => d.status === 'downloading')
-  const completedDownloads = downloads.filter(d => d.status === 'completed')
-  const failedDownloads = downloads.filter(d => d.status === 'failed')
-
+  // Calculate stats
   const stats = {
     total: downloads.length,
-    active: activeDownloads.length,
-    completed: completedDownloads.length,
-    failed: failedDownloads.length,
+    active: downloads.filter(d => d.status === 'downloading').length,
+    completed: downloads.filter(d => d.status === 'completed').length,
+    failed: downloads.filter(d => d.status === 'failed').length,
   }
 
   // Enhanced preview functionality
@@ -185,16 +178,16 @@ export default function LibraryPage() {
           // Read file as buffer via IPC and create blob URL for HTML5 video
           const response = await window.electronAPI.fileSystem.read(download.filePath)
           if (response.success && response.data) {
-            const blob = new Blob([response.data], { type: 'video/mp4' })
+            // Convert Buffer to Uint8Array for Blob compatibility
+            const uint8Array = new Uint8Array(response.data)
+            const blob = new Blob([uint8Array], { type: 'video/mp4' })
             const blobUrl = URL.createObjectURL(blob)
 
             // Create a modified download object with blob URL
-            const downloadWithBlob = {
+            setSelectedDownload({
               ...download,
               blobUrl: blobUrl,
-            }
-
-            setSelectedDownload(downloadWithBlob as any)
+            })
           } else {
             toast.error(t('msgUnableToReadVideoFile'))
           }
@@ -208,6 +201,15 @@ export default function LibraryPage() {
         setIsVideoLoading(false)
       }
     }
+  }
+
+  const handleClosePreview = () => {
+    // Clean up blob URL to prevent memory leaks
+    if (selectedDownload?.blobUrl) {
+      URL.revokeObjectURL(selectedDownload.blobUrl)
+    }
+    setSelectedDownload(null)
+    setIsVideoLoading(false)
   }
 
   const handleOpenFolder = (download: DownloadProgress) => {
@@ -268,47 +270,7 @@ export default function LibraryPage() {
       <LibraryHeader />
 
       {/* Enhanced Stats with Real-time Indicators */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Downloads</CardTitle>
-            <Download className="text-muted-foreground h-4 w-4" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.total}</div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">{t('activeDownloads')}</CardTitle>
-            <div className="bg-primary h-2 w-2 animate-pulse rounded-full" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-primary text-2xl font-bold">{stats.active}</div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">{t('completedDownloads')}</CardTitle>
-            <div className="h-2 w-2 rounded-full bg-green-600 dark:bg-green-400" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600 dark:text-green-400">{stats.completed}</div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">{t('failedDownloads')}</CardTitle>
-            <div className="bg-destructive h-2 w-2 rounded-full" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-destructive text-2xl font-bold">{stats.failed}</div>
-          </CardContent>
-        </Card>
-      </div>
+      <LibraryStats stats={stats} />
 
       {/* Enhanced Downloads List with Better Features */}
       <DownloadsList
@@ -329,123 +291,12 @@ export default function LibraryPage() {
 
       {/* Enhanced Preview Modal for Completed Downloads */}
       {selectedDownload && selectedDownload.status === 'completed' && (
-        <div
-          className="bg-background/50 fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm"
-          onClick={() => {
-            // Clean up blob URL to prevent memory leaks
-            if ((selectedDownload as any).blobUrl) {
-              URL.revokeObjectURL((selectedDownload as any).blobUrl)
-            }
-            setSelectedDownload(null)
-            setIsVideoLoading(false)
-          }}
-        >
-          <div
-            className="bg-background max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-lg border shadow-lg"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex flex-col md:flex-row">
-              {/* Video Player Section */}
-              <div className="flex-1 p-4">
-                {isVideoLoading ? (
-                  <div className="bg-muted flex h-64 w-full items-center justify-center rounded-lg">
-                    <div className="text-center">
-                      <div className="border-primary mx-auto mb-2 h-8 w-8 animate-spin rounded-full border-b-2"></div>
-                      <p className="text-muted-foreground text-sm">{t('loadingVideo')}</p>
-                    </div>
-                  </div>
-                ) : (
-                  <video
-                    controls
-                    className="w-full rounded-lg"
-                    preload="metadata"
-                    onError={e => {
-                      console.error('Video playback error:', e)
-                      toast.error(t('msgUnableToPlayVideoPreview'))
-                    }}
-                    onLoadStart={() => {
-                      // Video is loading
-                    }}
-                    onCanPlay={() => {
-                      // Video is ready to play
-                    }}
-                  >
-                    <source
-                      src={
-                        (selectedDownload as any).blobUrl ||
-                        (() => {
-                          // Convert file path to clipy-file:// URL (cross-platform)
-                          const normalizedPath = (selectedDownload.filePath || '').replace(/\\/g, '/')
-                          // Windows paths have drive letter (C:/), Unix paths start with /
-                          return /^[a-zA-Z]:/.test(normalizedPath)
-                            ? `clipy-file:///${normalizedPath}` // Windows
-                            : `clipy-file://${normalizedPath}` // Unix (path already has /)
-                        })()
-                      }
-                      type="video/mp4"
-                    />
-                    Your browser does not support the video tag.
-                  </video>
-                )}
-              </div>
-
-              {/* Info Section */}
-              <div className="w-full border-t p-4 md:w-80 md:border-t-0 md:border-l">
-                <h3 className="mb-4 text-lg font-semibold">{selectedDownload.title}</h3>
-                <div className="mb-6 space-y-3">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground text-sm">{t('previewSize')}</span>
-                    <span className="text-sm font-medium">{selectedDownload.size}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground text-sm">{t('previewQuality')}</span>
-                    <span className="text-sm font-medium">{t('previewQualityMP4')}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground text-sm">{t('previewCompleted')}</span>
-                    <span className="text-sm font-medium">
-                      {new Date(selectedDownload.startTime || 0).toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground text-sm">{t('previewDuration')}</span>
-                    <span className="text-sm font-medium">{t('previewDurationVideoFile')}</span>
-                  </div>
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  <Button
-                    onClick={() =>
-                      selectedDownload.filePath && window.electronAPI.shell.openPath(selectedDownload.filePath)
-                    }
-                    className="w-full"
-                  >
-                    <Play className="mr-2 h-4 w-4" />
-                    {t('openInExternalPlayer')}
-                  </Button>
-                  <Button variant="outline" onClick={() => handleOpenFolder(selectedDownload)} className="w-full">
-                    <Folder className="mr-2 h-4 w-4" />
-                    {t('openFolder')}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      // Clean up blob URL to prevent memory leaks
-                      if ((selectedDownload as any).blobUrl) {
-                        URL.revokeObjectURL((selectedDownload as any).blobUrl)
-                      }
-                      setSelectedDownload(null)
-                      setIsVideoLoading(false)
-                    }}
-                    className="w-full"
-                  >
-                    {t('closePreview')}
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <VideoPreviewModal
+          download={selectedDownload}
+          isLoading={isVideoLoading}
+          onClose={handleClosePreview}
+          onOpenFolder={() => handleOpenFolder(selectedDownload)}
+        />
       )}
     </div>
   )

@@ -9,6 +9,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/co
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import Logo from './logo'
 import { Separator } from '@/components/ui/separator'
 import SettingsButton from './settings-button'
 import ToggleTheme from './theme-toggle'
@@ -29,9 +30,7 @@ export default function AppNavigationMenu() {
       <div className="flex h-14 items-center px-4">
         <div className="flex items-center gap-6">
           <Link to="/" className="flex items-center gap-2">
-            <div className="bg-primary flex h-6 w-6 items-center justify-center rounded">
-              <span className="text-primary-foreground text-sm font-bold">C</span>
-            </div>
+            <Logo size={24} className="rounded" />
             <span className="text-lg font-semibold">{t('appName')}</span>
           </Link>
 
@@ -69,9 +68,7 @@ export default function AppNavigationMenu() {
                 <SheetHeader className="text-left">
                   <div className="flex items-center justify-between">
                     <SheetTitle className="flex items-center gap-2">
-                      <div className="bg-primary flex h-6 w-6 items-center justify-center rounded">
-                        <span className="text-primary-foreground text-sm font-bold">C</span>
-                      </div>
+                      <Logo size={24} className="rounded" />
                       {t('appName')}
                     </SheetTitle>
                   </div>

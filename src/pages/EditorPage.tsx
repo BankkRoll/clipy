@@ -1,39 +1,19 @@
 /**
  * EditorPage - Video editor page for trimming and exporting clips
- * Integrates VideoEditor component with export functionality
+ * Integrates VideoEditor component with enhanced export functionality
  */
 
-import {
-  AlertCircle,
-  ArrowLeft,
-  CheckCircle,
-  Clock,
-  Download,
-  FileVideo,
-  FolderOpen,
-  HardDrive,
-  Loader2,
-  RotateCcw,
-  Scissors,
-} from 'lucide-react'
+import { AlertCircle, ArrowLeft, Loader2 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { EditorHeader } from '@/components/editor/editor-header'
 import type { EditorSearchParams } from '@/routes/routes'
-import { Progress } from '@/components/ui/progress'
+import { ExportDialog, type ExportSettings, type ExportState } from '@/components/editor/export-dialog'
 import { VideoEditor } from '@/components/editor/video-editor'
+import type { VideoInfo } from '@/types/download'
 import { isSuccessResponse } from '@/types/api'
 import { toast } from 'sonner'
 import { useTimelineStore } from '@/stores/timeline-store'
@@ -48,12 +28,20 @@ interface VideoMetadata {
   fps: number
 }
 
-interface ExportSettings {
-  quality: 'low' | 'medium' | 'high'
-  codec: 'copy' | 'h264' | 'h265'
+// Default export settings
+const defaultExportSettings: ExportSettings = {
+  quality: 'high',
+  codec: 'copy',
+  format: 'mp4',
+  crf: 20,
+  preset: 'medium',
+  audioBitrate: 192,
+  audioCodec: 'copy',
+  resolution: 'source',
+  fps: 'source',
+  preserveMetadata: true,
+  twoPassEncoding: false,
 }
-
-type ExportState = 'idle' | 'preparing' | 'exporting' | 'completed' | 'failed'
 
 export default function EditorPage() {
   const navigate = useNavigate()
@@ -67,20 +55,17 @@ export default function EditorPage() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [metadata, setMetadata] = useState<VideoMetadata | null>(null)
   const [thumbnails, setThumbnails] = useState<string[]>([])
-  const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [videoTitle, setVideoTitle] = useState<string | null>(null)
   const [isStreamingMode, setIsStreamingMode] = useState(false) // True when streaming from URL
+  const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null) // Full video info for streaming
 
   // Export state
   const [showExportDialog, setShowExportDialog] = useState(false)
   const [exportState, setExportState] = useState<ExportState>('idle')
   const [exportProgress, setExportProgress] = useState(0)
   const [exportedFilePath, setExportedFilePath] = useState<string | null>(null)
-  const [exportSettings, setExportSettings] = useState<ExportSettings>({
-    quality: 'high',
-    codec: 'copy',
-  })
+  const [exportSettings, setExportSettings] = useState<ExportSettings>(defaultExportSettings)
 
   // Timeline store
   const {
@@ -103,7 +88,6 @@ export default function EditorPage() {
       loadVideo(filePath)
     } else {
       setError('No video source specified')
-      setIsLoading(false)
     }
 
     return () => {
@@ -119,7 +103,6 @@ export default function EditorPage() {
    * Load video from YouTube URL for live streaming preview
    */
   const loadFromUrl = async (url: string) => {
-    setIsLoading(true)
     setError(null)
     setIsStreamingMode(true)
 
@@ -131,47 +114,46 @@ export default function EditorPage() {
         throw new Error(response.error || 'Failed to get video info')
       }
 
-      const { videoInfo, streamingUrl } = response.data
+      const { videoInfo: info, streamingUrl } = response.data
 
       if (!streamingUrl) {
         throw new Error('No streaming URL available for this video. It may require authentication.')
       }
 
-      setVideoTitle(videoInfo.title)
+      setVideoTitle(info.title)
+      setVideoInfo(info) // Store full video info for header hover card
 
       // Create metadata from video info
       const videoMetadata: VideoMetadata = {
-        duration: videoInfo.duration,
-        width: videoInfo.bestVideoFormat?.width || 1920,
-        height: videoInfo.bestVideoFormat?.height || 1080,
-        bitrate: videoInfo.bestVideoFormat?.bitrate || 0,
-        codec: videoInfo.bestVideoFormat?.videoCodec || 'unknown',
+        duration: info.duration,
+        width: info.bestVideoFormat?.width || 1920,
+        height: info.bestVideoFormat?.height || 1080,
+        bitrate: info.bestVideoFormat?.bitrate || 0,
+        codec: info.bestVideoFormat?.videoCodec || 'unknown',
         size: 0, // Unknown for streaming
-        fps: videoInfo.bestVideoFormat?.fps || 30,
+        fps: info.bestVideoFormat?.fps || 30,
       }
       setMetadata(videoMetadata)
 
       // Initialize timeline with duration
-      initializeForVideo(videoInfo.duration, url)
+      initializeForVideo(info.duration, url)
 
       // Use streaming URL directly for video playback
       setVideoUrl(streamingUrl)
 
       // Use thumbnails from video info
-      if (videoInfo.thumbnails.length > 0) {
-        const thumbUrls = videoInfo.thumbnails.map((t: { url: string }) => t.url)
+      if (info.thumbnails.length > 0) {
+        const thumbUrls = info.thumbnails.map((t: { url: string }) => t.url)
         setThumbnails(thumbUrls)
         // Use a single thumbnail for timeline since we don't have local thumbnails
-        setTimelineThumbnails(thumbUrls, videoInfo.duration / thumbUrls.length)
+        setTimelineThumbnails(thumbUrls, info.duration / thumbUrls.length)
       }
 
-      toast.success(`Loaded: ${videoInfo.title}`)
+      toast.success(`Loaded: ${info.title}`)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load video from URL'
       setError(message)
       toast.error(message)
-    } finally {
-      setIsLoading(false)
     }
   }
 
@@ -179,7 +161,6 @@ export default function EditorPage() {
    * Load video file and extract metadata
    */
   const loadVideo = async (path: string) => {
-    setIsLoading(true)
     setError(null)
 
     try {
@@ -216,8 +197,6 @@ export default function EditorPage() {
       const message = err instanceof Error ? err.message : 'Failed to load video'
       setError(message)
       toast.error(message)
-    } finally {
-      setIsLoading(false)
     }
   }
 
@@ -284,9 +263,26 @@ export default function EditorPage() {
         setExportState('exporting')
         setExportProgress(10)
 
+        // Map quality settings
+        const qualityMap: Record<string, string> = {
+          source: 'best',
+          high: '1080p',
+          medium: '720p',
+          low: '480p',
+          custom: '720p',
+        }
+
+        // Map format - 'mov' is not supported for download, fallback to mp4
+        const formatMap: Record<string, 'mp4' | 'webm' | 'mkv'> = {
+          mp4: 'mp4',
+          webm: 'webm',
+          mkv: 'mkv',
+          mov: 'mp4', // MOV fallback to MP4 for downloads
+        }
+
         const downloadResponse = await window.electronAPI.downloadManager.start(sourceUrl, {
-          quality: exportSettings.quality === 'high' ? '720p' : exportSettings.quality === 'medium' ? '480p' : '360p',
-          format: 'mp4',
+          quality: qualityMap[exportSettings.quality] || '720p',
+          format: formatMap[exportSettings.format] || 'mp4',
           startTime: isTrimmed ? trimStart : undefined,
           endTime: isTrimmed ? trimEnd : undefined,
           downloadThumbnail: true,
@@ -309,12 +305,13 @@ export default function EditorPage() {
       } else if (filePath) {
         // Local file mode: Use video processor to trim
         const saveResult = await window.electronAPI.system.saveDialog({
-          title: 'Export Trimmed Video',
+          title: 'Export Video',
           defaultPath: generateExportFilename(filePath),
           filters: [
             { name: 'MP4 Video', extensions: ['mp4'] },
             { name: 'WebM Video', extensions: ['webm'] },
             { name: 'MKV Video', extensions: ['mkv'] },
+            { name: 'MOV Video', extensions: ['mov'] },
           ],
         })
 
@@ -328,14 +325,59 @@ export default function EditorPage() {
         setExportState('exporting')
         setExportProgress(10)
 
-        const trimResponse = await window.electronAPI.videoProcessor.trim({
+        // Map export settings to video processor options
+        const trimOptions: any = {
           inputPath: filePath,
           outputPath: outputPath,
           startTime: isTrimmed ? trimStart : 0,
           endTime: isTrimmed ? trimEnd : duration,
-          quality: exportSettings.quality,
-          codec: exportSettings.codec,
-        })
+        }
+
+        // Add codec settings
+        if (exportSettings.codec !== 'copy') {
+          trimOptions.quality = exportSettings.quality === 'source' ? 'high' : exportSettings.quality
+          trimOptions.codec = exportSettings.codec
+          trimOptions.crf = exportSettings.crf
+          trimOptions.preset = exportSettings.preset
+
+          // Resolution
+          if (exportSettings.resolution !== 'source' && metadata) {
+            const resHeights: Record<string, number> = {
+              '2160p': 2160,
+              '1440p': 1440,
+              '1080p': 1080,
+              '720p': 720,
+              '480p': 480,
+              '360p': 360,
+            }
+            trimOptions.height = resHeights[exportSettings.resolution]
+          }
+
+          // FPS
+          if (exportSettings.fps !== 'source') {
+            trimOptions.fps = parseInt(exportSettings.fps)
+          }
+
+          // Audio
+          if (exportSettings.audioCodec !== 'copy') {
+            trimOptions.audioCodec = exportSettings.audioCodec
+            trimOptions.audioBitrate = exportSettings.audioBitrate
+          }
+
+          // Two-pass encoding
+          if (exportSettings.twoPassEncoding) {
+            trimOptions.twoPass = true
+          }
+        } else {
+          trimOptions.codec = 'copy'
+        }
+
+        // Preserve metadata
+        if (exportSettings.preserveMetadata) {
+          trimOptions.preserveMetadata = true
+        }
+
+        const trimResponse = await window.electronAPI.videoProcessor.trim(trimOptions)
 
         setExportProgress(90)
 
@@ -361,13 +403,12 @@ export default function EditorPage() {
    */
   const generateExportFilename = (inputPath?: string): string => {
     let name = 'video'
-    let ext = '.mp4'
+    const ext = `.${exportSettings.format}`
 
     if (inputPath) {
       const parts = inputPath.split(/[/\\]/)
       const filename = parts[parts.length - 1]
       name = filename.replace(/\.[^.]+$/, '')
-      ext = filename.match(/\.[^.]+$/)?.[0] || '.mp4'
     } else if (videoTitle) {
       // Use video title for streaming mode
       name = videoTitle
@@ -389,20 +430,14 @@ export default function EditorPage() {
    * Format time for display
    */
   const formatTime = (seconds: number): string => {
-    const mins = Math.floor(seconds / 60)
+    const hours = Math.floor(seconds / 3600)
+    const mins = Math.floor((seconds % 3600) / 60)
     const secs = Math.floor(seconds % 60)
-    return `${mins}:${secs.toString().padStart(2, '0')}`
-  }
 
-  /**
-   * Format file size
-   */
-  const formatSize = (bytes: number): string => {
-    if (bytes === 0) return '0 B'
-    const k = 1024
-    const sizes = ['B', 'KB', 'MB', 'GB']
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
+    if (hours > 0) {
+      return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+    }
+    return `${mins}:${secs.toString().padStart(2, '0')}`
   }
 
   /**
@@ -423,245 +458,82 @@ export default function EditorPage() {
     setExportedFilePath(null)
   }
 
-  // Loading state
-  if (isLoading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="space-y-4 text-center">
-          <Loader2 className="text-primary mx-auto h-12 w-12 animate-spin" />
-          <p className="text-muted-foreground">Loading video...</p>
-        </div>
-      </div>
-    )
-  }
+  // Get the title to display
+  const displayTitle = isStreamingMode ? videoTitle || 'Loading...' : filePath?.split(/[/\\]/).pop() || 'Unknown'
 
-  // Error state - only show if we have no source at all
-  if (error || (!filePath && !sourceUrl)) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <Card className="max-w-md">
-          <CardContent className="space-y-4 pt-6 text-center">
-            <AlertCircle className="text-destructive mx-auto h-12 w-12" />
-            <h2 className="text-xl font-semibold">Failed to Load Video</h2>
-            <p className="text-muted-foreground">{error || 'No video source specified'}</p>
-            <Button onClick={() => navigate({ to: '/library' })}>
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back to Library
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    )
-  }
+  // Get thumbnail URL for export dialog
+  const thumbnailUrl = thumbnails[0] || videoInfo?.thumbnails?.[0]?.url || null
 
   return (
-    <div className="container mx-auto space-y-6 py-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => navigate({ to: '/library' })}>
-            <ArrowLeft className="h-5 w-5" />
-          </Button>
-          <div>
-            <p className="text-muted-foreground max-w-md truncate text-sm">
-              {isStreamingMode ? videoTitle || 'Loading...' : filePath?.split(/[/\\]/).pop() || 'Unknown'}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {isTrimmed && (
-            <Badge variant="secondary" className="gap-1">
-              <Scissors className="h-3 w-3" />
-              Trimmed: {formatTime(trimEnd - trimStart)}
-            </Badge>
-          )}
-          <Button onClick={() => setShowExportDialog(true)} disabled={!videoUrl}>
-            <Download className="mr-2 h-4 w-4" />
-            Export
-          </Button>
-        </div>
+    <div className="flex h-full flex-col">
+      {/* Header with hover card */}
+      <div className="container mx-auto w-full px-4 pt-4">
+        <EditorHeader
+          title={displayTitle}
+          isStreamingMode={isStreamingMode}
+          isTrimmed={isTrimmed}
+          trimDuration={formatTime(trimEnd - trimStart)}
+          videoUrl={videoUrl}
+          onExport={() => setShowExportDialog(true)}
+          metadata={metadata}
+          filePath={filePath}
+          videoInfo={videoInfo}
+        />
       </div>
 
-      {/* Video Metadata Bar */}
-      {metadata && (
-        <div className="text-muted-foreground flex items-center gap-6 text-sm">
-          <div className="flex items-center gap-1">
-            <FileVideo className="h-4 w-4" />
-            <span>
-              {metadata.width}x{metadata.height}
-            </span>
+      {/* Video Editor - fills remaining space */}
+      <div className="container mx-auto min-h-0 w-full flex-1 px-4 py-4">
+        {error ? (
+          <div className="flex h-full items-center justify-center">
+            <Card className="max-w-md">
+              <CardContent className="space-y-4 pt-6 text-center">
+                <AlertCircle className="text-destructive mx-auto h-10 w-10" />
+                <p className="text-muted-foreground">{error}</p>
+                <Button variant="outline" onClick={() => navigate({ to: '/' })}>
+                  <ArrowLeft className="mr-2 h-4 w-4" />
+                  Back to Home
+                </Button>
+              </CardContent>
+            </Card>
           </div>
-          <div className="flex items-center gap-1">
-            <Clock className="h-4 w-4" />
-            <span>{formatTime(metadata.duration)}</span>
+        ) : videoUrl ? (
+          <VideoEditor
+            videoUrl={videoUrl}
+            duration={metadata?.duration}
+            thumbnails={thumbnails}
+            className="h-full w-full"
+            isExternalUrl={isStreamingMode}
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            <Loader2 className="text-primary h-8 w-8 animate-spin" />
           </div>
-          <div className="flex items-center gap-1">
-            <HardDrive className="h-4 w-4" />
-            <span>{formatSize(metadata.size)}</span>
-          </div>
-          <Badge variant="outline">{metadata.codec.toUpperCase()}</Badge>
-          <Badge variant="outline">{metadata.fps.toFixed(0)} FPS</Badge>
-        </div>
-      )}
-
-      {/* Video Editor */}
-      {videoUrl && (
-        <VideoEditor
-          videoUrl={videoUrl}
-          duration={metadata?.duration}
-          thumbnails={thumbnails}
-          className="w-full"
-          isExternalUrl={isStreamingMode}
-        />
-      )}
+        )}
+      </div>
 
       {/* Export Dialog */}
-      <Dialog open={showExportDialog} onOpenChange={setShowExportDialog}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Export Video</DialogTitle>
-            <DialogDescription>
-              {isTrimmed
-                ? `Export trimmed clip (${formatTime(trimStart)} - ${formatTime(trimEnd)})`
-                : 'Export full video'}
-            </DialogDescription>
-          </DialogHeader>
-
-          {exportState === 'idle' && (
-            <div className="space-y-4 py-4">
-              {/* Quality Selection */}
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Quality</label>
-                <Select
-                  value={exportSettings.quality}
-                  onValueChange={v => setExportSettings(s => ({ ...s, quality: v as any }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="high">High (Larger file)</SelectItem>
-                    <SelectItem value="medium">Medium (Balanced)</SelectItem>
-                    <SelectItem value="low">Low (Smaller file)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Codec Selection */}
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Processing</label>
-                <Select
-                  value={exportSettings.codec}
-                  onValueChange={v => setExportSettings(s => ({ ...s, codec: v as any }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="copy">Fast (Copy streams)</SelectItem>
-                    <SelectItem value="h264">Re-encode (H.264)</SelectItem>
-                    <SelectItem value="h265">Re-encode (H.265/HEVC)</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-muted-foreground text-xs">
-                  {exportSettings.codec === 'copy'
-                    ? 'Fastest option, preserves original quality'
-                    : 'Slower but allows quality adjustments'}
-                </p>
-              </div>
-
-              {/* Export Info */}
-              <div className="bg-muted space-y-1 rounded-lg p-3">
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Duration:</span>
-                  <span>{formatTime(isTrimmed ? trimEnd - trimStart : duration)}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Source:</span>
-                  <span className="max-w-[200px] truncate">
-                    {isStreamingMode ? videoTitle : filePath?.split(/[/\\]/).pop() || 'Unknown'}
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {(exportState === 'preparing' || exportState === 'exporting') && (
-            <div className="space-y-4 py-8">
-              <div className="flex flex-col items-center gap-4">
-                <Loader2 className="text-primary h-10 w-10 animate-spin" />
-                <p className="text-muted-foreground text-sm">
-                  {exportState === 'preparing' ? 'Preparing export...' : 'Exporting video...'}
-                </p>
-              </div>
-              <Progress value={exportProgress} className="w-full" />
-            </div>
-          )}
-
-          {exportState === 'completed' && (
-            <div className="space-y-4 py-8">
-              <div className="flex flex-col items-center gap-4">
-                <CheckCircle className="h-12 w-12 text-green-500" />
-                <div className="text-center">
-                  <p className="font-medium">Export Complete!</p>
-                  <p className="text-muted-foreground max-w-[300px] truncate text-sm">
-                    {exportedFilePath?.split(/[/\\]/).pop()}
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {exportState === 'failed' && (
-            <div className="space-y-4 py-8">
-              <div className="flex flex-col items-center gap-4">
-                <AlertCircle className="text-destructive h-12 w-12" />
-                <p className="text-muted-foreground text-sm">Export failed. Please try again.</p>
-              </div>
-            </div>
-          )}
-
-          <DialogFooter>
-            {exportState === 'idle' && (
-              <>
-                <Button variant="outline" onClick={() => setShowExportDialog(false)}>
-                  Cancel
-                </Button>
-                <Button onClick={handleExport}>
-                  <Download className="mr-2 h-4 w-4" />
-                  Export
-                </Button>
-              </>
-            )}
-
-            {exportState === 'completed' && (
-              <>
-                <Button variant="outline" onClick={resetExport}>
-                  <RotateCcw className="mr-2 h-4 w-4" />
-                  Export Another
-                </Button>
-                <Button onClick={openExportedFile}>
-                  <FolderOpen className="mr-2 h-4 w-4" />
-                  Show in Folder
-                </Button>
-              </>
-            )}
-
-            {exportState === 'failed' && (
-              <>
-                <Button variant="outline" onClick={() => setShowExportDialog(false)}>
-                  Cancel
-                </Button>
-                <Button onClick={resetExport}>
-                  <RotateCcw className="mr-2 h-4 w-4" />
-                  Try Again
-                </Button>
-              </>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ExportDialog
+        open={showExportDialog}
+        onOpenChange={setShowExportDialog}
+        exportState={exportState}
+        exportProgress={exportProgress}
+        exportSettings={exportSettings}
+        onSettingsChange={setExportSettings}
+        isTrimmed={isTrimmed}
+        trimStart={trimStart}
+        trimEnd={trimEnd}
+        duration={duration}
+        isStreamingMode={isStreamingMode}
+        videoTitle={videoTitle}
+        filePath={filePath}
+        exportedFilePath={exportedFilePath}
+        onExport={handleExport}
+        onReset={resetExport}
+        onOpenExportedFile={openExportedFile}
+        metadata={metadata}
+        videoInfo={videoInfo}
+        thumbnailUrl={thumbnailUrl}
+      />
     </div>
   )
 }

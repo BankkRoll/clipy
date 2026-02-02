@@ -88,7 +88,7 @@ export function TimelineMarkers({ pixelsPerSecond, className }: TimelineMarkersP
               onMouseLeave={() => setHoveredMarker(null)}
             >
               <div
-                className="h-3 w-2.5 rounded-sm shadow-md"
+                className="h-3 w-2.5 shadow-md"
                 style={{
                   backgroundColor: marker.color,
                   clipPath: 'polygon(0 0, 100% 0, 100% 70%, 50% 100%, 0 70%)',
@@ -117,8 +117,8 @@ export function TimelineMarkers({ pixelsPerSecond, className }: TimelineMarkersP
                   />
                 ) : (
                   <div
-                    className="rounded px-2 py-0.5 text-xs font-medium whitespace-nowrap shadow-lg"
-                    style={{ backgroundColor: marker.color, color: '#000' }}
+                    className="px-2 py-0.5 text-xs font-medium whitespace-nowrap shadow-lg"
+                    style={{ backgroundColor: marker.color, color: 'hsl(var(--primary-foreground))' }}
                   >
                     <div>{marker.label}</div>
                     <div className="font-mono text-[10px] opacity-70">{formatTime(marker.time)}</div>

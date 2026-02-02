@@ -763,18 +763,23 @@ export interface DualStreamUrls {
   videoQuality: string | null
   /** Whether this is a combined format (single URL with both) */
   isCombined: boolean
+  /** Fallback combined URL (720p with audio) if dual-stream fails */
+  fallbackUrl: string | null
+  /** Quality of the fallback stream */
+  fallbackQuality: string | null
 }
 
 /**
- * Get streaming URLs for live preview with dual-stream support.
+ * Get streaming URLs for live preview.
  *
- * QUALITY STRATEGY:
- * YouTube's combined formats (audio+video) are limited to 360p-720p max.
- * Higher quality (1080p+) requires separate video-only + audio-only streams.
+ * PREVIEW STRATEGY:
+ * For preview, we ALWAYS use combined formats (audio+video in one stream).
+ * Combined formats are limited to ~720p max, but that's perfect for preview:
+ * - Simple: No need to sync separate audio/video streams
+ * - Reliable: Single URL, no dual-stream complexity
+ * - Fast: Lower quality means faster loading
  *
- * DUAL-STREAM APPROACH:
- * For high-quality preview, we return BOTH a video URL (1080p+) and an audio URL.
- * The player synchronizes both streams for 1080p+ video WITH full audio.
+ * Downloads use a different path (downloadWithYtdlp) which respects user's quality choice.
  *
  * PROTOCOL FILTER:
  * We must filter for 'https' protocol to get direct video URLs.
@@ -794,73 +799,56 @@ export function getStreamingUrls(videoInfo: VideoInfo): DualStreamUrls {
   const protocols = new Set(formats.map(f => f.protocol).filter(Boolean))
   logger.debug('Available streaming protocols', { protocols: Array.from(protocols) })
 
-  // Get all video-only formats sorted by quality (highest first, but prefer mp4/webm)
-  const videoOnlyFormats = formats
-    .filter(f => f.hasVideo && !f.hasAudio && f.url && isDirectUrl(f))
-    .sort((a, b) => {
-      // Prefer mp4/webm over other containers for browser compatibility
-      const aIsGood = a.container === 'mp4' || a.container === 'webm' ? 1 : 0
-      const bIsGood = b.container === 'mp4' || b.container === 'webm' ? 1 : 0
-      if (aIsGood !== bIsGood) return bIsGood - aIsGood
-
-      // Prefer higher resolution (no cap for maximum quality)
-      return (b.height || 0) - (a.height || 0)
-    })
-
-  // Get all audio-only formats sorted by quality
-  const audioOnlyFormats = formats
-    .filter(f => f.hasAudio && !f.hasVideo && f.url && isDirectUrl(f))
-    .sort((a, b) => {
-      // Prefer m4a/mp4 audio for browser compatibility
-      const aIsGood = a.container === 'm4a' || a.container === 'mp4' ? 2 : a.container === 'webm' ? 1 : 0
-      const bIsGood = b.container === 'm4a' || b.container === 'mp4' ? 2 : b.container === 'webm' ? 1 : 0
-      if (aIsGood !== bIsGood) return bIsGood - aIsGood
-
-      // Prefer higher bitrate audio
-      return (b.audioBitrate || 0) - (a.audioBitrate || 0)
-    })
-
-  // STRATEGY 1: Dual-stream (1080p+ video + separate audio) - BEST QUALITY
-  // Get highest quality video (prefer 1080p+ for editing/preview)
-  const bestVideoOnly = videoOnlyFormats.find(f => (f.height || 0) >= 720) || videoOnlyFormats[0]
-  const bestAudioOnly = audioOnlyFormats[0]
-
-  if (bestVideoOnly && bestAudioOnly) {
-    logger.info('Using dual-stream for high-quality preview', {
-      video: {
-        quality: bestVideoOnly.quality,
-        height: bestVideoOnly.height,
-        container: bestVideoOnly.container,
-        codec: bestVideoOnly.videoCodec,
-      },
-      audio: {
-        container: bestAudioOnly.container,
-        bitrate: bestAudioOnly.audioBitrate,
-        codec: bestAudioOnly.audioCodec,
-      },
-    })
-    return {
-      videoUrl: bestVideoOnly.url!,
-      audioUrl: bestAudioOnly.url!,
-      videoQuality: `${bestVideoOnly.height}p`,
-      isCombined: false,
-    }
-  }
-
-  // STRATEGY 2: Combined format (audio+video) - lower quality but simpler
-  // YouTube combined formats are typically limited to 360p-720p
+  // PREVIEW STRATEGY: ALWAYS use combined formats first (simpler, more reliable)
+  // Combined formats have BOTH audio and video in one stream (up to ~720p)
   const combinedFormats = formats
     .filter(f => f.hasAudio && f.hasVideo && f.url && isDirectUrl(f))
     .sort((a, b) => {
+      // Prefer mp4 container for maximum browser compatibility
       const aIsMp4 = a.container === 'mp4' ? 1 : 0
       const bIsMp4 = b.container === 'mp4' ? 1 : 0
       if (aIsMp4 !== bIsMp4) return bIsMp4 - aIsMp4
+      // Then prefer higher quality (up to 720p for combined)
       return (b.height || 0) - (a.height || 0)
     })
 
+  // Use combined format for preview (ALWAYS preferred for simplicity)
   if (combinedFormats.length > 0) {
     const chosen = combinedFormats[0]
-    logger.info('Using combined format for preview (limited to ~720p)', {
+    logger.info('Using combined format for preview (simple, reliable)', {
+      quality: chosen.quality,
+      height: chosen.height,
+      container: chosen.container,
+      hasAudio: chosen.hasAudio,
+      hasVideo: chosen.hasVideo,
+    })
+    return {
+      videoUrl: chosen.url!,
+      audioUrl: null, // Not needed - audio is in the combined stream
+      videoQuality: `${chosen.height}p`,
+      isCombined: true,
+      fallbackUrl: null, // No fallback needed - this IS the simple format
+      fallbackQuality: null,
+    }
+  }
+
+  // FALLBACK: If no combined format, try video-only (no audio for preview)
+  const videoOnlyFormats = formats
+    .filter(f => f.hasVideo && !f.hasAudio && f.url && isDirectUrl(f))
+    .sort((a, b) => {
+      const aIsGood = a.container === 'mp4' || a.container === 'webm' ? 1 : 0
+      const bIsGood = b.container === 'mp4' || b.container === 'webm' ? 1 : 0
+      if (aIsGood !== bIsGood) return bIsGood - aIsGood
+      // For preview fallback, prefer lower quality (faster loading)
+      // Cap at 720p for preview
+      const aHeight = Math.min(a.height || 0, 720)
+      const bHeight = Math.min(b.height || 0, 720)
+      return bHeight - aHeight
+    })
+
+  if (videoOnlyFormats.length > 0) {
+    const chosen = videoOnlyFormats[0]
+    logger.warn('Using video-only format for preview (no combined format available)', {
       quality: chosen.quality,
       height: chosen.height,
       container: chosen.container,
@@ -868,29 +856,19 @@ export function getStreamingUrls(videoInfo: VideoInfo): DualStreamUrls {
     return {
       videoUrl: chosen.url!,
       audioUrl: null,
-      videoQuality: `${chosen.height}p`,
-      isCombined: true,
-    }
-  }
-
-  // STRATEGY 3: Video-only as last resort (no audio)
-  if (bestVideoOnly) {
-    logger.warn('Using video-only format (no audio available)', {
-      quality: bestVideoOnly.quality,
-      height: bestVideoOnly.height,
-    })
-    return {
-      videoUrl: bestVideoOnly.url!,
-      audioUrl: null,
-      videoQuality: `${bestVideoOnly.height}p`,
+      videoQuality: `${chosen.height}p (no audio)`,
       isCombined: false,
+      fallbackUrl: null,
+      fallbackQuality: null,
     }
   }
 
   // No suitable formats found
   const allWithUrls = formats.filter(f => f.url)
   if (allWithUrls.length > 0) {
-    logger.warn('No direct HTTPS formats found', { available: allWithUrls.map(f => `${f.quality}/${f.protocol}`) })
+    logger.warn('No direct HTTPS formats found for preview', {
+      available: allWithUrls.map(f => `${f.quality}/${f.protocol}`),
+    })
   } else {
     logger.warn('No formats with URLs found')
   }
@@ -900,6 +878,8 @@ export function getStreamingUrls(videoInfo: VideoInfo): DualStreamUrls {
     audioUrl: null,
     videoQuality: null,
     isCombined: false,
+    fallbackUrl: null,
+    fallbackQuality: null,
   }
 }
 

@@ -1,26 +1,75 @@
 /**
  * HeroSection - Home page hero component
- * Main landing area with URL input, quick links (Library, Settings), and feature highlights.
+ * Centered landing area with scaling CLIPY background and URL input.
  */
 
-import { Card, CardContent } from '@/components/ui/card'
-import { CheckCircle, Clock, FolderOpen, Link as LinkIcon, Settings, Shield, Sparkles } from 'lucide-react'
+import { CheckCircle, Clock, FolderOpen, Link as LinkIcon, Loader2, Settings, Shield, Sparkles } from 'lucide-react'
 import { Link, useNavigate } from '@tanstack/react-router'
 
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { isSuccessResponse } from '@/types/api'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 export function HeroSection() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const [youtubeUrl, setYoutubeUrl] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [urlError, setUrlError] = useState<string | null>(null)
 
-  const handleProcessUrl = () => {
-    if (youtubeUrl.trim()) {
-      navigate({ to: '/downloader', search: { url: youtubeUrl } })
+  const validateUrl = (url: string): boolean => {
+    if (!url.trim()) {
+      setUrlError(null)
+      return false
+    }
+    const youtubePattern =
+      /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|shorts\/|embed\/)|youtu\.be\/)[a-zA-Z0-9_-]+/
+    if (!youtubePattern.test(url.trim())) {
+      setUrlError(t('errorInvalidYoutubeUrl'))
+      return false
+    }
+    setUrlError(null)
+    return true
+  }
+
+  const handleUrlChange = (value: string) => {
+    setYoutubeUrl(value)
+    validateUrl(value)
+  }
+
+  const isValidUrl = youtubeUrl.trim() && !urlError
+
+  const handleProcessUrl = async () => {
+    if (!isValidUrl || isLoading) return
+
+    setIsLoading(true)
+
+    try {
+      const url = youtubeUrl.trim()
+
+      // Fetch video info BEFORE navigating - keep loading state on button
+      const response = await window.electronAPI.downloadManager.getStreamingInfo(url)
+
+      if (!isSuccessResponse(response)) {
+        throw new Error(response.error || 'Failed to get video info')
+      }
+
+      const { videoInfo, streamingUrl } = response.data
+
+      if (!streamingUrl) {
+        throw new Error('No streaming URL available for this video. It may require authentication.')
+      }
+
+      // Success! Now navigate to editor
+      toast.success(`Loading: ${videoInfo.title}`)
+      navigate({ to: '/editor', search: { url } })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t('errorGeneric')
+      toast.error(message)
+      setIsLoading(false)
     }
   }
 
@@ -32,92 +81,93 @@ export function HeroSection() {
   ]
 
   return (
-    <div className="relative m-auto flex h-full w-full flex-col items-center justify-center overflow-hidden py-6">
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center select-none">
-        <div className="text-muted/20 text-[18rem] leading-none font-black tracking-tighter md:text-[22rem] lg:text-[25rem]">
+    <div className="relative flex min-h-[calc(100vh-4rem)] w-full items-center justify-center overflow-hidden">
+      {/* Scaling background text - positioned behind URL input */}
+      <div className="pointer-events-none absolute inset-x-0 top-[15%] flex justify-center select-none">
+        <span
+          className="text-muted/10 font-black tracking-tighter"
+          style={{ fontSize: 'clamp(8rem, 30vw, 32rem)', lineHeight: 1 }}
+        >
           {t('appName')}
-        </div>
+        </span>
       </div>
-      <div className="relative z-10 mx-auto flex max-w-3xl flex-1 flex-col justify-center px-6 py-10">
-        <div className="mb-6 flex justify-center">
-          <Badge variant="secondary" className="gap-2 px-4 py-1.5 text-xs font-medium">
-            <Sparkles className="h-3 w-3" />
-            {t('heroProfessionalTools')}
-            <Badge variant="outline" className="ml-2 text-xs">
-              {t('heroFree')}
-            </Badge>
-          </Badge>
+
+      {/* Main content - truly centered */}
+      <div className="relative z-10 flex w-full max-w-xl flex-col items-center px-6">
+        {/* URL Input */}
+        <div className="w-full">
+          <div className="bg-background/60 rounded-xl border-2 border-dashed border-white/10 p-6 backdrop-blur-md">
+            <div className="text-muted-foreground mb-3 flex items-center justify-center gap-2">
+              <LinkIcon className="h-4 w-4" />
+              <span className="text-sm font-medium">{t('heroDropLinkDownload')}</span>
+            </div>
+            <div className="relative">
+              <Input
+                value={youtubeUrl}
+                onChange={e => handleUrlChange(e.target.value)}
+                placeholder={t('heroUrlPlaceholder')}
+                className="bg-background/80 h-12 border-2 pr-28 text-base"
+                onKeyDown={e => e.key === 'Enter' && handleProcessUrl()}
+                disabled={isLoading}
+              />
+              <Button
+                onClick={handleProcessUrl}
+                disabled={!isValidUrl || isLoading}
+                className="absolute top-1 right-1 h-10 min-w-[100px] px-5 text-sm font-semibold"
+                variant={isValidUrl ? 'default' : 'outline'}
+              >
+                {isLoading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    {t('btnLoading')}
+                  </>
+                ) : (
+                  t('heroGet1Click')
+                )}
+              </Button>
+            </div>
+            {/* Error message - fixed height to prevent layout shift */}
+            <div className="mt-2 h-5">
+              {urlError && <p className="text-destructive text-center text-xs">{urlError}</p>}
+            </div>
+          </div>
         </div>
 
-        <div className="mb-6 w-full">
-          <Card className="border-muted-foreground/30 bg-muted/20 border-2 border-dashed backdrop-blur-sm">
-            <CardContent className="p-6">
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <div className="text-muted-foreground mb-2 flex items-center gap-2">
-                    <LinkIcon className="h-4 w-4" />
-                    <span className="text-sm font-medium">{t('heroDropLinkDownload')}</span>
-                  </div>
-                  <div className="relative">
-                    <Input
-                      value={youtubeUrl}
-                      onChange={e => setYoutubeUrl(e.target.value)}
-                      placeholder={t('heroUrlPlaceholder')}
-                      className="bg-background/80 h-12 border-2 pr-32 text-base"
-                      onKeyPress={e => e.key === 'Enter' && handleProcessUrl()}
-                    />
-                    <Button
-                      onClick={handleProcessUrl}
-                      disabled={!youtubeUrl.trim()}
-                      className="absolute top-1 right-1 h-10 px-6 text-sm font-semibold"
-                      variant={youtubeUrl.trim() ? 'default' : 'outline'}
-                    >
-                      {t('heroGet1Click')}
-                    </Button>
-                  </div>
-                </div>
+        {/* Quick Links */}
+        <div className="mt-8 flex justify-center gap-2">
+          <Link to="/library">
+            <Button variant="ghost" size="sm" className="h-16 w-16 flex-col gap-1.5 p-3">
+              <div className="bg-primary/10 rounded-md p-1.5">
+                <FolderOpen className="text-primary h-4 w-4" />
               </div>
-            </CardContent>
-          </Card>
+              <span className="text-[10px] font-medium">{t('titleLibrary')}</span>
+            </Button>
+          </Link>
+
+          <Link to="/settings">
+            <Button variant="ghost" size="sm" className="h-16 w-16 flex-col gap-1.5 p-3">
+              <div className="bg-primary/10 rounded-md p-1.5">
+                <Settings className="text-primary h-4 w-4" />
+              </div>
+              <span className="text-[10px] font-medium">{t('titleSettings')}</span>
+            </Button>
+          </Link>
         </div>
 
-        <div className="mb-16">
-          <div className="mx-auto flex max-w-3xl flex-wrap justify-center gap-3">
-            <Link to="/library">
-              <Button variant="ghost" size="sm" className="h-20 w-20 flex-col gap-2 p-4">
-                <div className="bg-primary/10 rounded-md p-2">
-                  <FolderOpen className="text-primary h-5 w-5" />
-                </div>
-                <span className="text-xs font-medium">{t('titleLibrary')}</span>
-              </Button>
-            </Link>
-
-            <Link to="/settings">
-              <Button variant="ghost" size="sm" className="h-20 w-20 flex-col gap-2 p-4">
-                <div className="bg-primary/10 rounded-md p-2">
-                  <Settings className="text-primary h-5 w-5" />
-                </div>
-                <span className="text-xs font-medium">{t('titleSettings')}</span>
-              </Button>
-            </Link>
-          </div>
-        </div>
-
-        <div className="border-border/50 border-t pt-8">
-          <div className="mx-auto flex flex-wrap items-center justify-center gap-6">
-            {stats.map((stat, index) => {
-              const Icon = stat.icon
-              return (
-                <div
-                  key={index}
-                  className="text-muted-foreground hover:text-foreground flex items-center gap-2 text-xs transition-colors"
-                >
-                  <Icon className="h-3 w-3" />
-                  <span className="font-medium">{stat.text}</span>
-                </div>
-              )
-            })}
-          </div>
+        {/* Stats */}
+        <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
+          {stats.map((stat, index) => {
+            const Icon = stat.icon
+            return (
+              <div
+                key={index}
+                className="text-muted-foreground/60 hover:text-muted-foreground flex items-center gap-1.5 text-[11px] transition-colors"
+              >
+                <Icon className="h-3 w-3" />
+                <span className="font-medium">{stat.text}</span>
+              </div>
+            )
+          })}
         </div>
       </div>
     </div>

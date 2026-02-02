@@ -5,6 +5,7 @@ import { ENABLED_LANGUAGES, LANGUAGES, LanguageConfig } from './languages.config
 import axios from 'axios'
 import fs from 'fs'
 import path from 'path'
+import { pathToFileURL } from 'url'
 
 const SOURCE_FILE = path.join(__dirname, '../src/localization/languages/en.ts')
 const OUTPUT_DIR = path.join(__dirname, '../src/localization/languages')
@@ -223,7 +224,7 @@ async function translateLanguage(language: LanguageConfig): Promise<void> {
 
   try {
     // Import the English translations
-    const enModule = await import(SOURCE_FILE)
+    const enModule = await import(pathToFileURL(SOURCE_FILE).href)
     const enTranslations = enModule.en.translation
 
     console.log(`📖 Loaded ${Object.keys(enTranslations).length} translation keys from en.ts`)
@@ -231,8 +232,7 @@ async function translateLanguage(language: LanguageConfig): Promise<void> {
     // Check if output file already exists
     const outputPath = path.join(OUTPUT_DIR, `${language.code}.ts`)
     if (fs.existsSync(outputPath)) {
-      console.log(`⚠️  File ${language.code}.ts already exists, skipping...`)
-      return
+      console.log(`📝 File ${language.code}.ts already exists, will be updated...`)
     }
 
     // Translate the content

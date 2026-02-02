@@ -1,6 +1,6 @@
 /**
- * StreamingPlayer - Advanced video player with HLS streaming support
- * Supports direct URLs and HLS/DASH adaptive streaming
+ * StreamingPlayer - Video player with HLS streaming support
+ * Simplified to use combined formats (single video+audio stream)
  */
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
@@ -11,11 +11,9 @@ import { useTimelineStore } from '@/stores/timeline-store'
 
 export interface StreamingPlayerProps {
   src?: string
-  /** Separate audio URL for dual-stream playback (1080p+ video with synced audio) */
-  audioSrc?: string
   poster?: string
   className?: string
-  /** Set to true for external URLs (YouTube, etc.) that don't support CORS */
+  /** Set to true for external URLs (YouTube, etc.) - Electron's webRequest handles CORS */
   isExternalUrl?: boolean
   onReady?: () => void
   onError?: (error: string) => void
@@ -24,7 +22,7 @@ export interface StreamingPlayerProps {
   onLoadedMetadata?: () => void
   onEnded?: () => void
   onBuffering?: (isBuffering: boolean) => void
-  onSeeked?: (time: number) => void // New callback for seek confirmation
+  onSeeked?: (time: number) => void
 }
 
 export interface StreamingPlayerRef {
@@ -44,7 +42,6 @@ export const StreamingPlayer = forwardRef<StreamingPlayerRef, StreamingPlayerPro
   (
     {
       src,
-      audioSrc,
       poster,
       className,
       isExternalUrl = false,
@@ -60,18 +57,12 @@ export const StreamingPlayer = forwardRef<StreamingPlayerRef, StreamingPlayerPro
     ref,
   ) => {
     const videoRef = useRef<HTMLVideoElement>(null)
-    const audioRef = useRef<HTMLAudioElement>(null)
     const hlsRef = useRef<Hls | null>(null)
     const canvasRef = useRef<HTMLCanvasElement>(null)
     const [isReady, setIsReady] = useState(false)
-    const [audioReady, setAudioReady] = useState(false)
 
-    // Track pending seeks to prevent loops and confirm sync
-    const pendingSeekTime = useRef<number | null>(null)
+    // Track pending seeks to prevent loops
     const lastExternalSeekTime = useRef<number>(0)
-
-    // Track if we're using dual-stream mode
-    const isDualStream = !!(audioSrc && src)
 
     const {
       isPlaying,
@@ -107,6 +98,7 @@ export const StreamingPlayer = forwardRef<StreamingPlayerRef, StreamingPlayerPro
       if (!video || !src) return
 
       setIsLoading(true)
+      setIsReady(false)
       destroyHls()
 
       // Check if source is HLS
@@ -132,7 +124,7 @@ export const StreamingPlayer = forwardRef<StreamingPlayerRef, StreamingPlayerPro
           console.log('[HLS] Manifest parsed, levels:', data.levels.length)
 
           // Extract quality levels
-          const qualities = data.levels.map((level, index) => ({
+          const qualities = data.levels.map(level => ({
             label: `${level.height}p`,
             height: level.height,
             bitrate: level.bitrate,
@@ -177,12 +169,20 @@ export const StreamingPlayer = forwardRef<StreamingPlayerRef, StreamingPlayerPro
         onReady?.()
       } else {
         // Direct video URL (MP4, WebM, etc.)
-        console.log('[StreamingPlayer] Loading direct video URL:', src.substring(0, 100))
-        console.log('[StreamingPlayer] isExternalUrl:', isExternalUrl)
+        console.log('[StreamingPlayer] Loading video URL:', src.substring(0, 100))
+
         video.src = src
-        setIsLoading(false)
-        setIsReady(true)
-        onReady?.()
+
+        // Wait for canplay event to confirm video is loading
+        const handleCanPlay = () => {
+          console.log('[StreamingPlayer] Video can play - stream working!')
+          setIsLoading(false)
+          setIsReady(true)
+          onReady?.()
+          video.removeEventListener('canplay', handleCanPlay)
+        }
+
+        video.addEventListener('canplay', handleCanPlay)
       }
 
       return () => {
@@ -190,82 +190,20 @@ export const StreamingPlayer = forwardRef<StreamingPlayerRef, StreamingPlayerPro
       }
     }, [src, destroyHls, setIsLoading, setQualities, setError, onReady, onError])
 
-    // Initialize audio element for dual-stream mode
-    useEffect(() => {
-      const audio = audioRef.current
-      if (!audio || !audioSrc) {
-        setAudioReady(false)
-        return
-      }
-
-      console.log('[StreamingPlayer] Loading audio for dual-stream:', audioSrc.substring(0, 100))
-      audio.src = audioSrc
-
-      const handleAudioReady = () => {
-        console.log('[StreamingPlayer] Audio ready for dual-stream playback')
-        setAudioReady(true)
-      }
-
-      const handleAudioError = () => {
-        console.warn('[StreamingPlayer] Audio failed to load, falling back to video-only')
-        setAudioReady(false)
-      }
-
-      audio.addEventListener('canplaythrough', handleAudioReady)
-      audio.addEventListener('error', handleAudioError)
-
-      return () => {
-        audio.removeEventListener('canplaythrough', handleAudioReady)
-        audio.removeEventListener('error', handleAudioError)
-      }
-    }, [audioSrc])
-
-    // Periodic audio sync to prevent drift during playback
-    useEffect(() => {
-      if (!isDualStream || !audioReady || !isPlaying) return
-
-      const video = videoRef.current
-      const audio = audioRef.current
-      if (!video || !audio) return
-
-      // Sync audio to video every 2 seconds to prevent drift
-      const syncInterval = setInterval(() => {
-        const drift = Math.abs(video.currentTime - audio.currentTime)
-        if (drift > 0.3) {
-          console.log(`[StreamingPlayer] Correcting audio drift: ${drift.toFixed(2)}s`)
-          audio.currentTime = video.currentTime
-        }
-      }, 2000)
-
-      return () => clearInterval(syncInterval)
-    }, [isDualStream, audioReady, isPlaying])
-
-    // Sync playback state with store (handles both video and audio for dual-stream)
+    // Sync playback state with store
     useEffect(() => {
       const video = videoRef.current
-      const audio = audioRef.current
       if (!video || !isReady) return
 
       if (isPlaying) {
-        // Play video first
         video.play().catch(err => {
           console.warn('[Player] Video play failed:', err)
           setIsPlaying(false)
         })
-        // Sync audio if dual-stream
-        if (isDualStream && audio && audioReady) {
-          audio.play().catch(err => {
-            console.warn('[Player] Audio play failed:', err)
-          })
-        }
       } else {
         video.pause()
-        // Sync audio pause
-        if (isDualStream && audio) {
-          audio.pause()
-        }
       }
-    }, [isPlaying, isReady, setIsPlaying, isDualStream, audioReady])
+    }, [isPlaying, isReady, setIsPlaying])
 
     // Sync playback rate
     useEffect(() => {
@@ -274,73 +212,44 @@ export const StreamingPlayer = forwardRef<StreamingPlayerRef, StreamingPlayerPro
       }
     }, [playbackRate])
 
-    // Sync volume (in dual-stream mode, audio controls volume; video is muted)
+    // Sync volume
     useEffect(() => {
       const video = videoRef.current
-      const audio = audioRef.current
-
-      if (isDualStream) {
-        // In dual-stream mode: video is always muted, audio element controls sound
-        if (video) {
-          video.muted = true
-          video.volume = 0
-        }
-        if (audio) {
-          audio.volume = volume
-          audio.muted = isMuted
-        }
-      } else {
-        // Single stream mode: video controls everything
-        if (video) {
-          video.volume = volume
-          video.muted = isMuted
-        }
+      if (video) {
+        video.volume = volume
+        video.muted = isMuted
       }
-    }, [volume, isMuted, isDualStream])
+    }, [volume, isMuted])
 
-    // Handle external seek (from timeline) - use isDragging to detect scrubbing
-    // Syncs both video and audio in dual-stream mode
+    // Handle external seek (from timeline)
     useEffect(() => {
       const video = videoRef.current
-      const audio = audioRef.current
       if (!video || !isReady) return
 
-      // Check if this is an external seek (from timeline dragging or clicking)
       const diff = Math.abs(video.currentTime - currentTime)
 
       // During active dragging, always seek immediately for smooth scrubbing
       if (isDragging && (dragType === 'playhead' || dragType === 'seek')) {
         if (diff > 0.01) {
-          pendingSeekTime.current = currentTime
           lastExternalSeekTime.current = Date.now()
           video.currentTime = currentTime
-          // Sync audio seek in dual-stream mode
-          if (isDualStream && audio && audioReady) {
-            audio.currentTime = currentTime
-          }
         }
         return
       }
 
       // For non-dragging seeks (clicks, keyboard), use slightly larger threshold
       if (diff > 0.05) {
-        pendingSeekTime.current = currentTime
         lastExternalSeekTime.current = Date.now()
         video.currentTime = currentTime
-        // Sync audio seek in dual-stream mode
-        if (isDualStream && audio && audioReady) {
-          audio.currentTime = currentTime
-        }
       }
-    }, [currentTime, isReady, isDragging, dragType, isDualStream, audioReady])
+    }, [currentTime, isReady, isDragging, dragType])
 
     // Video event handlers
     const handleTimeUpdate = useCallback(() => {
       const video = videoRef.current
       if (!video) return
 
-      // Don't update store while timeline is being dragged (prevents jitter during scrubbing)
-      // The timeline is the source of truth during drag operations
+      // Don't update store while timeline is being dragged
       if (
         isDragging &&
         (dragType === 'playhead' || dragType === 'seek' || dragType === 'trim-start' || dragType === 'trim-end')
@@ -374,16 +283,8 @@ export const StreamingPlayer = forwardRef<StreamingPlayerRef, StreamingPlayerPro
       onLoadedMetadata?.()
     }, [setDuration, onDurationChange, onLoadedMetadata])
 
-    // Handle seek completion - confirms video actually seeked
     const handleSeeked = useCallback(() => {
-      const video = videoRef.current
-      if (!video) return
-
-      // Clear pending seek
-      pendingSeekTime.current = null
-
-      // Notify callback of confirmed seek position
-      onSeeked?.(video.currentTime)
+      onSeeked?.(videoRef.current?.currentTime ?? 0)
     }, [onSeeked])
 
     const handleWaiting = useCallback(() => {
@@ -422,6 +323,12 @@ export const StreamingPlayer = forwardRef<StreamingPlayerRef, StreamingPlayerPro
       const video = videoRef.current
       if (!video?.error) return
 
+      console.error('[StreamingPlayer] Video error:', {
+        code: video.error.code,
+        message: video.error.message,
+        src: src?.substring(0, 150),
+      })
+
       // Map error codes to helpful messages
       let errorMessage = ''
       switch (video.error.code) {
@@ -429,65 +336,45 @@ export const StreamingPlayer = forwardRef<StreamingPlayerRef, StreamingPlayerPro
           errorMessage = 'Video loading aborted'
           break
         case MediaError.MEDIA_ERR_NETWORK:
-          errorMessage = 'Network error loading video - this may be due to CORS restrictions or expired URL'
+          errorMessage = 'Network error loading video'
           break
         case MediaError.MEDIA_ERR_DECODE:
           errorMessage = 'Video decode error - format may not be supported'
           break
         case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-          errorMessage =
-            'Video format not supported or CORS blocked - YouTube URLs cannot be played directly in browser'
+          errorMessage = 'Video format not supported'
           break
         default:
           errorMessage = `Video error: ${video.error.message || 'Unknown error'}`
       }
 
-      console.error('[StreamingPlayer] Video error:', {
-        code: video.error.code,
-        message: video.error.message,
-        src: src?.substring(0, 100),
-      })
-
+      console.error('[StreamingPlayer] Error:', errorMessage)
       setError(errorMessage)
       onError?.(errorMessage)
     }, [setError, onError, src])
 
-    // Expose methods via ref (handles dual-stream synchronization)
+    // Expose methods via ref
     useImperativeHandle(
       ref,
       () => ({
         play: async () => {
           const video = videoRef.current
-          const audio = audioRef.current
           if (!video) return
 
           // Start from trim start if at beginning and trimmed
           if (isTrimmed && video.currentTime < trimStart) {
             video.currentTime = trimStart
-            if (isDualStream && audio && audioReady) {
-              audio.currentTime = trimStart
-            }
           }
 
           await video.play()
-          // Sync audio play
-          if (isDualStream && audio && audioReady) {
-            audio.currentTime = video.currentTime // Ensure sync before play
-            await audio.play().catch(() => {}) // Don't fail if audio can't play
-          }
         },
 
         pause: () => {
           videoRef.current?.pause()
-          // Sync audio pause
-          if (isDualStream && audioRef.current) {
-            audioRef.current.pause()
-          }
         },
 
         seek: (time: number) => {
           const video = videoRef.current
-          const audio = audioRef.current
           if (!video) return
 
           let targetTime = Math.max(0, Math.min(time, video.duration))
@@ -496,10 +383,6 @@ export const StreamingPlayer = forwardRef<StreamingPlayerRef, StreamingPlayerPro
           }
 
           video.currentTime = targetTime
-          // Sync audio seek
-          if (isDualStream && audio && audioReady) {
-            audio.currentTime = targetTime
-          }
           setCurrentTime(targetTime)
         },
 
@@ -510,35 +393,17 @@ export const StreamingPlayer = forwardRef<StreamingPlayerRef, StreamingPlayerPro
           if (videoRef.current) {
             videoRef.current.playbackRate = rate
           }
-          // Sync audio playback rate
-          if (isDualStream && audioRef.current) {
-            audioRef.current.playbackRate = rate
-          }
         },
 
         setVolume: (vol: number) => {
-          if (isDualStream) {
-            // In dual-stream, audio element controls volume
-            if (audioRef.current) {
-              audioRef.current.volume = vol
-            }
-          } else {
-            if (videoRef.current) {
-              videoRef.current.volume = vol
-            }
+          if (videoRef.current) {
+            videoRef.current.volume = vol
           }
         },
 
         setMuted: (muted: boolean) => {
-          if (isDualStream) {
-            // In dual-stream, audio element controls mute
-            if (audioRef.current) {
-              audioRef.current.muted = muted
-            }
-          } else {
-            if (videoRef.current) {
-              videoRef.current.muted = muted
-            }
+          if (videoRef.current) {
+            videoRef.current.muted = muted
           }
         },
 
@@ -558,7 +423,7 @@ export const StreamingPlayer = forwardRef<StreamingPlayerRef, StreamingPlayerPro
           return canvas.toDataURL('image/jpeg', 0.8)
         },
       }),
-      [isTrimmed, trimStart, trimEnd, setCurrentTime, isDualStream, audioReady],
+      [isTrimmed, trimStart, trimEnd, setCurrentTime],
     )
 
     return (
@@ -569,11 +434,8 @@ export const StreamingPlayer = forwardRef<StreamingPlayerRef, StreamingPlayerPro
           className="h-full w-full object-contain"
           playsInline
           preload="auto"
-          // Don't use crossOrigin for external URLs (YouTube, etc.) - they don't support CORS
-          // This disables canvas frame capture but allows video playback
+          // Don't use crossOrigin for external URLs - Electron's webRequest handles CORS
           crossOrigin={isExternalUrl ? undefined : 'anonymous'}
-          // In dual-stream mode, video is muted (audio element handles sound)
-          muted={isDualStream}
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
           onSeeked={handleSeeked}
@@ -584,9 +446,6 @@ export const StreamingPlayer = forwardRef<StreamingPlayerRef, StreamingPlayerPro
           onPause={handlePause}
           onError={handleError}
         />
-
-        {/* Hidden audio element for dual-stream mode (1080p+ video with separate audio) */}
-        {isDualStream && <audio ref={audioRef} preload="auto" crossOrigin={isExternalUrl ? undefined : 'anonymous'} />}
 
         {/* Hidden canvas for frame capture */}
         <canvas ref={canvasRef} className="hidden" />

@@ -44,6 +44,41 @@ export class ConfigManager {
       tempPath: join(this.platform.getAppDataDir('clipy'), 'temp'),
       cachePath: join(this.platform.getAppDataDir('clipy'), 'cache'),
     },
+    editor: {
+      defaultCodec: 'copy',
+      defaultQuality: 'high',
+      preferFastTrim: true,
+      defaultAudioFormat: 'mp3',
+    },
+    notifications: {
+      downloadComplete: true,
+      downloadFailed: true,
+      soundEnabled: false,
+    },
+    privacy: {
+      saveDownloadHistory: true,
+      saveRecentlyViewed: true,
+    },
+    advanced: {
+      debugLogging: false,
+      ffmpegPath: '',
+      ytDlpPath: '',
+    },
+    shortcuts: [
+      { action: 'playPause', key: 'Space', modifiers: [] },
+      { action: 'seekBack5', key: 'ArrowLeft', modifiers: [] },
+      { action: 'seekForward5', key: 'ArrowRight', modifiers: [] },
+      { action: 'seekBack10', key: 'j', modifiers: [] },
+      { action: 'seekForward10', key: 'l', modifiers: [] },
+      { action: 'volumeUp', key: 'ArrowUp', modifiers: [] },
+      { action: 'volumeDown', key: 'ArrowDown', modifiers: [] },
+      { action: 'mute', key: 'm', modifiers: [] },
+      { action: 'fullscreen', key: 'f', modifiers: [] },
+      { action: 'setTrimStart', key: 'i', modifiers: [] },
+      { action: 'setTrimEnd', key: 'o', modifiers: [] },
+      { action: 'export', key: 'e', modifiers: ['ctrl'] },
+      { action: 'save', key: 's', modifiers: ['ctrl'] },
+    ],
   }
 
   private constructor() {

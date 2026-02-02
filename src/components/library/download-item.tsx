@@ -79,18 +79,27 @@ function getStatusIcon(status: string) {
   }
 }
 
-function getStatusBadge(status: string) {
+function getStatusBadge(status: string, t: (key: string) => string) {
+  const statusLabels: Record<string, string> = {
+    completed: t('statusCompleted'),
+    failed: t('statusFailed'),
+    downloading: t('statusDownloading'),
+    cancelled: t('downloadCancelled'),
+    paused: t('statusPaused'),
+  }
+  const label = statusLabels[status] || status
+
   switch (status) {
     case 'completed':
-      return <Badge variant="default">{status}</Badge>
+      return <Badge variant="default">{label}</Badge>
     case 'failed':
-      return <Badge variant="destructive">{status}</Badge>
+      return <Badge variant="destructive">{label}</Badge>
     case 'downloading':
-      return <Badge variant="default">{status}</Badge>
+      return <Badge variant="default">{label}</Badge>
     case 'cancelled':
-      return <Badge variant="outline">{status}</Badge>
+      return <Badge variant="outline">{label}</Badge>
     default:
-      return <Badge variant="secondary">{status}</Badge>
+      return <Badge variant="secondary">{label}</Badge>
   }
 }
 
@@ -196,7 +205,7 @@ export function DownloadItem({
                 <h3 className="truncate text-base font-medium">{download.title}</h3>
                 <div className="text-muted-foreground mt-2 flex items-center gap-2 text-sm">
                   {getStatusIcon(download.status)}
-                  {statusBadge || getStatusBadge(download.status)}
+                  {statusBadge || getStatusBadge(download.status, t)}
                   <span>•</span>
                   <span>{formatFileSize(download.totalBytes)}</span>
                   <span>•</span>

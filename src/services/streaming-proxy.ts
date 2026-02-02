@@ -224,11 +224,13 @@ function handleStreamRequest(req: IncomingMessage, res: ServerResponse, requestU
   const isManifest =
     parsedUrl.hostname.includes('manifest') || decodedUrl.includes('/manifest/') || decodedUrl.includes('.m3u8')
 
-  logger.info('Proxying video stream', {
+  logger.info('Proxying video stream request', {
     host: parsedUrl.hostname,
+    path: parsedUrl.pathname.substring(0, 50),
     hasRange: !!rangeHeader,
     range: rangeHeader?.substring(0, 50),
     isManifest,
+    fullUrl: decodedUrl.substring(0, 150),
   })
 
   // Execute proxy request with retry logic
@@ -266,6 +268,12 @@ function executeProxyRequest(
       timeout: REQUEST_TIMEOUT,
     },
     proxyRes => {
+      logger.info('Proxy received response from YouTube', {
+        statusCode: proxyRes.statusCode,
+        contentType: proxyRes.headers['content-type'],
+        contentLength: proxyRes.headers['content-length'],
+      })
+
       // Handle redirects
       if (proxyRes.statusCode === 301 || proxyRes.statusCode === 302 || proxyRes.statusCode === 307) {
         const redirectUrl = proxyRes.headers.location
@@ -275,6 +283,14 @@ function executeProxyRequest(
           executeProxyRequest(redirectUrl, headers, res, clientDisconnected, 0, isManifest)
           return
         }
+      }
+
+      // Handle YouTube errors (403, 404, etc.)
+      if (proxyRes.statusCode && proxyRes.statusCode >= 400) {
+        logger.warn('YouTube returned error status', {
+          statusCode: proxyRes.statusCode,
+          url: url.substring(0, 100),
+        })
       }
 
       // Forward response headers

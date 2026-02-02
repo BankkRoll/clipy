@@ -18,7 +18,7 @@ export function LibraryHeader() {
         <h1 className="text-3xl font-bold">{t('titleLibrary')}</h1>
         <p className="text-muted-foreground">{t('subtitleLibrary')}</p>
       </div>
-      <Link to="/downloader">
+      <Link to="/">
         <Button>
           <Download className="mr-2 h-4 w-4" />
           {t('downloadNew')}

@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import Logo from '@/components/navigation/logo'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { SystemInfo } from '@/types/system'
 import { isSuccessResponse } from '@/types/api'
@@ -75,9 +76,7 @@ export default function AboutSettings() {
       <CardContent className="space-y-6">
         {/* App Info */}
         <div className="flex items-center gap-4">
-          <div className="bg-primary text-primary-foreground flex h-12 w-12 items-center justify-center rounded-xl text-xl font-bold">
-            {systemInfo?.packageInfo?.name?.[0]?.toUpperCase() || 'C'}
-          </div>
+          <Logo size={48} className="rounded-xl" />
           <div>
             <h3 className="text-foreground text-lg font-semibold">
               {isLoading ? <Skeleton className="h-6 w-24" /> : systemInfo?.packageInfo?.name || 'Clipy'}
