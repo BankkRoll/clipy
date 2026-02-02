@@ -1,0 +1,100 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Download yt-dlp (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          mkdir -p resources
+          curl -L -o resources/yt-dlp.exe https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe
+
+      - name: Download yt-dlp (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          mkdir -p resources
+          curl -L -o resources/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos
+          chmod +x resources/yt-dlp
+
+      - name: Download yt-dlp (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          mkdir -p resources
+          curl -L -o resources/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
+          chmod +x resources/yt-dlp
+
+      - name: Download ffmpeg (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          curl -L -o ffmpeg.zip https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip
+          unzip ffmpeg.zip
+          mv ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe resources/
+        shell: bash
+
+      - name: Download ffmpeg (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          curl -L -o ffmpeg.zip https://evermeet.cx/ffmpeg/getrelease/zip
+          unzip ffmpeg.zip
+          mv ffmpeg resources/
+          chmod +x resources/ffmpeg
+
+      - name: Download ffmpeg (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          curl -L -o ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+          tar -xf ffmpeg.tar.xz
+          mv ffmpeg-*-static/ffmpeg resources/
+          chmod +x resources/ffmpeg
+
+      - name: Build
+        run: pnpm make
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os }}
+          path: out/make/**/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
