@@ -155,8 +155,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    timeout-minutes: 10
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -168,9 +171,18 @@ jobs:
           echo "Available artifacts:"
           find artifacts -type f 2>/dev/null || echo "No artifacts found"
 
+      - name: Delete existing release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete ${{ github.ref_name }} --repo ${{ github.repository }} --yes || true
+        continue-on-error: true
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: artifacts/**/*
           generate_release_notes: true
           fail_on_unmatched_files: false
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
