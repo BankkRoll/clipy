@@ -38,8 +38,8 @@ jobs:
       - name: Download ffmpeg
         run: |
           Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile "ffmpeg.zip"
-          Expand-Archive -Path "ffmpeg.zip" -DestinationPath "."
-          Move-Item -Path "ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe" -Destination "resources/ffmpeg.exe"
+          Expand-Archive -Path "ffmpeg.zip" -DestinationPath "." -Force
+          Move-Item -Path "ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe" -Destination "resources/ffmpeg.exe" -Force
         shell: pwsh
 
       - name: Build
