@@ -1,4 +1,10 @@
+/**
+ * Route Definitions
+ * TanStack Router route configuration for all app pages.
+ */
+
 import DownloaderPage from '@/pages/DownloaderPage'
+import EditorPage from '@/pages/EditorPage'
 import HomePage from '../pages/HomePage'
 import LibraryPage from '@/pages/LibraryPage'
 import { RootRoute } from './__root'
@@ -38,4 +44,23 @@ export const SettingsRoute = createRoute({
   component: SettingsPage,
 })
 
-export const rootTree = RootRoute.addChildren([HomeRoute, DownloaderRoute, LibraryRoute, SettingsRoute])
+export interface EditorSearchParams {
+  path?: string
+  downloadId?: string
+  url?: string // YouTube URL for live streaming preview
+}
+
+export const EditorRoute = createRoute({
+  getParentRoute: () => RootRoute,
+  path: '/editor',
+  component: EditorPage,
+  validateSearch: (search: Record<string, unknown>): EditorSearchParams => {
+    return {
+      path: search.path ? String(search.path) : undefined,
+      downloadId: search.downloadId ? String(search.downloadId) : undefined,
+      url: search.url ? String(search.url) : undefined,
+    }
+  },
+})
+
+export const rootTree = RootRoute.addChildren([HomeRoute, DownloaderRoute, LibraryRoute, SettingsRoute, EditorRoute])

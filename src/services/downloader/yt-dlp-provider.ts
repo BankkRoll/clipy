@@ -1,3 +1,17 @@
+/**
+ * yt-dlp Provider
+ * Low-level wrapper around the yt-dlp binary for video downloading.
+ *
+ * Handles:
+ * - Binary detection (yt-dlp, ffmpeg) across platforms
+ * - Cookie management for authenticated requests
+ * - Format selection (avoiding HLS streams that get 403 blocked)
+ * - Progress parsing from yt-dlp stdout
+ * - Video info extraction via --dump-json
+ *
+ * Based on the Python yt-dlp wrapper patterns.
+ */
+
 import { DownloadErrorCode, createDownloadError } from '../../types/download'
 import type { DownloadOptions, DownloadProgress, VideoFormatInfo, VideoInfo } from '../../types/download'
 import { dirname, extname, join } from 'node:path'
@@ -5,11 +19,14 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 
 import { EventEmitter } from 'events'
 import { PlatformUtils } from '../../utils/platform'
+import { Logger } from '../../utils/logger'
 import { get } from 'https'
 import { homedir } from 'os'
 import { spawn } from 'child_process'
 
-// Cross-platform binary detection using PlatformUtils
+const logger = Logger.getInstance()
+
+// Cross-platform binary detection
 function detectFfmpegPath(): string | null {
   return PlatformUtils.getInstance().resolveExecutable('ffmpeg')
 }
@@ -41,7 +58,7 @@ class CookieManager {
         writeFileSync(this.cookieFile, header, 'utf8')
       }
     } catch (error) {
-      console.error('Failed to ensure cookie file:', error)
+      logger.error('Failed to ensure cookie file', error as Error)
     }
   }
 
@@ -89,22 +106,49 @@ function getEnhancedYtdlpOptions(baseOpts: Record<string, any> = {}): Record<str
 }
 
 // Format selection (matching Python get_format_selector and get_audio_format_selector)
-function getFormatSelector(videoFormatId: string, audioFormatId: string): string | null {
+// IMPORTANT: Avoid HLS (m3u8) formats as YouTube blocks them with 403 errors
+// Maps user-selected quality (4K, 1080p, etc.) to yt-dlp format selectors
+function getFormatSelector(quality: string, audioFormatId: string): string | null {
   // Convert format ids to yt-dlp selectors
   // Prefer AAC/MP3 audio over Opus for better compatibility with media players
+  // Use [protocol!=m3u8] to avoid HLS streams that get 403 blocked
   const compatibleAudioSelector =
-    'bestaudio[ext=m4a]/bestaudio[acodec=aac]/bestaudio[acodec=mp4a]/bestaudio[ext=mp3]/bestaudio[acodec=mp3]/bestaudio'
+    'bestaudio[ext=m4a][protocol!=m3u8]/bestaudio[acodec=aac][protocol!=m3u8]/bestaudio[ext=mp3][protocol!=m3u8]/bestaudio[protocol!=m3u8]'
 
-  if (videoFormatId === 'auto') {
-    return null // Let yt-dlp choose automatically
-  } else if (videoFormatId === 'shorts_auto') {
-    return `bestvideo[height<=1080]+${compatibleAudioSelector}/best[height<=1080]`
-  } else if (videoFormatId === 'eco_360p') {
-    return `best[height<=720]/bestvideo[height<=360]+${compatibleAudioSelector}`
-  } else if (videoFormatId === 'hd_720p') {
-    return `bestvideo[height<=720]+${compatibleAudioSelector}`
-  } else {
-    return `bestvideo+${compatibleAudioSelector}/best`
+  // Map user-selected quality to yt-dlp format selectors
+  // IMPORTANT: Respect user's quality choice for downloads!
+  switch (quality) {
+    case '4K':
+    case '2160p':
+      // 4K/2160p - highest quality available
+      return `bestvideo[height<=2160][protocol!=m3u8][protocol!=m3u8_native]+${compatibleAudioSelector}/best[protocol!=m3u8]`
+    case '1440p':
+      // 1440p/2K
+      return `bestvideo[height<=1440][protocol!=m3u8][protocol!=m3u8_native]+${compatibleAudioSelector}/best[height<=1440][protocol!=m3u8]`
+    case '1080p':
+      // Full HD
+      return `bestvideo[height<=1080][protocol!=m3u8][protocol!=m3u8_native]+${compatibleAudioSelector}/best[height<=1080][protocol!=m3u8]`
+    case '720p':
+    case 'hd_720p':
+      // HD
+      return `bestvideo[height<=720][protocol!=m3u8][protocol!=m3u8_native]+${compatibleAudioSelector}/best[height<=720][protocol!=m3u8]`
+    case '480p':
+      // SD
+      return `bestvideo[height<=480][protocol!=m3u8][protocol!=m3u8_native]+${compatibleAudioSelector}/best[height<=480][protocol!=m3u8]`
+    case '360p':
+    case 'eco_360p':
+      // Low quality
+      return `best[height<=720][protocol!=m3u8][protocol!=m3u8_native]/bestvideo[height<=360][protocol!=m3u8]+${compatibleAudioSelector}`
+    case '240p':
+    case '144p':
+      // Very low quality
+      return `best[height<=360][protocol!=m3u8][protocol!=m3u8_native]/bestvideo[height<=240][protocol!=m3u8]+${compatibleAudioSelector}`
+    case 'best':
+    case 'highest':
+    case 'auto':
+    default:
+      // Best available quality - NO height restriction
+      return `bestvideo[protocol!=m3u8][protocol!=m3u8_native]+${compatibleAudioSelector}/best[protocol!=m3u8][protocol!=m3u8_native]`
   }
 }
 
@@ -149,7 +193,7 @@ async function downloadThumbnail(thumbnailUrl: string, outputPath: string): Prom
     const file = writeFileSync(finalOutputPath, '', { flag: 'w' })
     const request = get(thumbnailUrl, response => {
       if (response.statusCode !== 200) {
-        console.warn(`[THUMBNAIL] Failed to download thumbnail: HTTP ${response.statusCode}`)
+        logger.warn('Failed to download thumbnail', { statusCode: response.statusCode })
         resolve(null)
         return
       }
@@ -163,22 +207,22 @@ async function downloadThumbnail(thumbnailUrl: string, outputPath: string): Prom
         try {
           const buffer = Buffer.concat(chunks)
           writeFileSync(finalOutputPath, buffer)
-          console.log(`[THUMBNAIL] ✅ Saved thumbnail to: ${finalOutputPath}`)
+          logger.debug('Saved thumbnail', { path: finalOutputPath })
           resolve(finalOutputPath)
         } catch (error) {
-          console.error(`[THUMBNAIL] ❌ Failed to save thumbnail: ${error}`)
+          logger.error('Failed to save thumbnail', error instanceof Error ? error : new Error(String(error)))
           resolve(null)
         }
       })
     })
 
     request.on('error', error => {
-      console.error(`[THUMBNAIL] ❌ Request failed: ${error.message}`)
+      logger.error('Thumbnail request failed', error)
       resolve(null)
     })
 
     request.setTimeout(10000, () => {
-      console.warn(`[THUMBNAIL] Timeout downloading thumbnail`)
+      logger.warn('Thumbnail download timeout')
       request.destroy()
       resolve(null)
     })
@@ -194,14 +238,13 @@ export async function downloadWithYtdlp(
   eventEmitter: EventEmitter,
   controller: AbortController,
 ): Promise<void> {
-  console.log('='.repeat(80))
-  console.log(`[YTDLP-PROVIDER] 🚀 STARTING DOWNLOAD for video: ${videoId}`)
-  console.log(`[YTDLP-PROVIDER] 📋 Options:`, JSON.stringify(options, null, 2))
-  console.log(`[YTDLP-PROVIDER] 📊 Progress ID: ${progress.downloadId}`)
-  console.log(`[YTDLP-PROVIDER] 🍪 Cookies available: ${cookieManager.hasValidCookies()}`)
-  console.log(`[YTDLP-PROVIDER] 🔧 FFmpeg available: ${FFMPEG_PATH !== null}`)
-  console.log(`[YTDLP-PROVIDER] 📥 yt-dlp available: ${YTDLP_PATH !== null}`)
-  console.log('='.repeat(80))
+  logger.info('Starting download', {
+    videoId,
+    downloadId: progress.downloadId,
+    hasCookies: cookieManager.hasValidCookies(),
+    hasFFmpeg: FFMPEG_PATH !== null,
+    hasYtdlp: YTDLP_PATH !== null,
+  })
 
   if (!YTDLP_PATH) {
     throw createDownloadError('yt-dlp not found', DownloadErrorCode.UNKNOWN_ERROR)
@@ -213,7 +256,7 @@ export async function downloadWithYtdlp(
     }
 
     controller.signal.addEventListener('abort', () => {
-      console.log(`[YTDLP-PROVIDER] 🛑 DOWNLOAD ABORTED: ${progress.downloadId}`)
+      logger.info('Download aborted', { downloadId: progress.downloadId })
       cleanupAndReject(createDownloadError('Download cancelled by user', DownloadErrorCode.DOWNLOAD_CANCELLED))
     })
     ;(async () => {
@@ -246,33 +289,42 @@ export async function downloadWithYtdlp(
           audioQuality: '128K',
         }
 
-        // Use format selector  - prefer compatible audio codecs
-        // For full video downloads (previews), use more compatible formats
-        // For trimmed downloads, use higher quality 720p
-        const isFullVideo = !options.startTime && !options.endTime
-        const qualitySelector = isFullVideo ? 'eco_360p' : 'hd_720p' // Use eco_360p for previews instead of auto
-        const formatSelector = getFormatSelector(qualitySelector, 'auto_audio')
+        // Use format selector based on USER'S SELECTED QUALITY
+        // IMPORTANT: Respect the user's quality choice for downloads!
+        // options.quality comes from the UI (4K, 1080p, 720p, etc.)
+        const userQuality = options.quality || 'best' // Default to best if not specified
+        logger.debug('Using user-selected quality for download', { quality: userQuality })
+        const formatSelector = getFormatSelector(userQuality, 'auto_audio')
         if (formatSelector) {
           baseOpts.format = formatSelector
         }
 
-        // Add time range if specified
-        if (options.startTime || options.endTime) {
-          baseOpts.timeRange = {
-            start: options.startTime || 0,
-            end: options.endTime,
+        // Add time range if specified (both start and end must be valid numbers)
+        if (options.startTime !== undefined || options.endTime !== undefined) {
+          const start = options.startTime || 0
+          const end = options.endTime
+          if (end !== undefined && end > start) {
+            baseOpts.timeRange = { start, end }
+            logger.debug('Time range set', { start, end })
+          } else {
+            logger.debug('Invalid time range, downloading full video')
           }
         }
 
         const opts = getYtdlpOptsWithTimeRange(baseOpts, baseOpts.timeRange)
         const finalOpts = getEnhancedYtdlpOptions(opts)
 
-        console.log(`[YTDLP-PROVIDER] 🎬 Starting yt-dlp download...`)
+        logger.debug('Final yt-dlp options', finalOpts)
+
+        logger.debug('Starting yt-dlp process')
 
         // Convert options to command line args (matching Python subprocess call)
         const args: string[] = []
 
-        if (finalOpts.quiet) args.push('--quiet')
+        // Don't use --quiet so we can parse progress output
+        // if (finalOpts.quiet) args.push('--quiet')
+        args.push('--progress') // Ensure progress output is shown
+        args.push('--newline') // Output progress in newlines for parsing
         if (finalOpts.noWarnings) args.push('--no-warnings')
         if (finalOpts.outtmpl) args.push('-o', finalOpts.outtmpl)
         if (finalOpts.format) args.push('-f', finalOpts.format)
@@ -286,7 +338,7 @@ export async function downloadWithYtdlp(
 
         args.push(`https://www.youtube.com/watch?v=${videoId}`)
 
-        console.log(`[YTDLP-PROVIDER] Running: ${YTDLP_PATH} ${args.join(' ')}`)
+        logger.debug('Running yt-dlp', { command: `${YTDLP_PATH} ${args.join(' ')}` })
 
         // Spawn yt-dlp process (matching Python subprocess)
         const ytdlpProcess = spawn(YTDLP_PATH, args, {
@@ -295,45 +347,156 @@ export async function downloadWithYtdlp(
         })
 
         let stderr = ''
+        let lastActivityTime = Date.now()
 
-        ytdlpProcess.stderr?.on('data', data => {
-          stderr += data.toString()
+        // Track highest progress seen to prevent regression (yt-dlp can output lower values during network fluctuations)
+        let highestProgress = 0
+        let lastValidSpeed = '0 B/s'
+        let lastValidEta = '--:--'
+
+        // Parse yt-dlp progress output
+        ytdlpProcess.stdout?.on('data', data => {
+          lastActivityTime = Date.now() // Reset activity timer
+          const output = data.toString()
+
+          // Log all output for debugging
+          logger.debug('yt-dlp output', { stdout: output.trim() })
+
+          // Parse yt-dlp progress format: [download] 45.2% of 123.45MiB at 1.23MiB/s ETA 01:23
+          const progressMatch = output.match(
+            /\[download\]\s+([\d.]+)%\s+of\s+([\d.]+\w+)\s+at\s+([\d.]+\w+\/s)\s+ETA\s+([\d:]+)/i,
+          )
+          if (progressMatch) {
+            const [, percent, size, speed, eta] = progressMatch
+            const newProgress = parseFloat(percent)
+
+            // Only update progress if it's >= current highest (monotonically increasing)
+            // This prevents the UI from showing progress going backwards during network hiccups
+            if (newProgress >= highestProgress) {
+              highestProgress = newProgress
+              progress.progress = Math.round(newProgress * 10) / 10 // Round to 1 decimal place
+              progress.size = size
+
+              // Only update speed/eta if they're valid (not "Unknown")
+              if (!speed.includes('Unknown')) {
+                lastValidSpeed = speed
+              }
+              if (!eta.includes('Unknown')) {
+                lastValidEta = eta
+              }
+              progress.speed = lastValidSpeed
+              progress.eta = lastValidEta
+              progress.status = 'downloading'
+              eventEmitter.emit('progress', progress)
+            }
+          }
+
+          // Also handle "Unknown" speed/eta lines separately - don't regress progress
+          const unknownMatch = output.match(/\[download\]\s+([\d.]+)%\s+of\s+([\d.]+\w+)\s+at\s+Unknown/)
+          if (unknownMatch) {
+            const [, percent, size] = unknownMatch
+            const newProgress = parseFloat(percent)
+            if (newProgress >= highestProgress) {
+              highestProgress = newProgress
+              progress.progress = Math.round(newProgress * 10) / 10
+              progress.size = size
+              // Keep the last valid speed/eta
+              progress.speed = lastValidSpeed
+              progress.eta = lastValidEta
+              progress.status = 'downloading'
+              eventEmitter.emit('progress', progress)
+            }
+          }
+
+          // Match "already downloaded" message
+          if (output.includes('has already been downloaded')) {
+            logger.info('Video already downloaded, skipping')
+            highestProgress = 100
+            progress.progress = 100
+            progress.status = 'downloading'
+            eventEmitter.emit('progress', progress)
+          }
+
+          // Match merging/post-processing
+          if (output.includes('[Merger]') || output.includes('[ffmpeg]') || output.includes('Merging')) {
+            logger.debug('Post-processing/merging')
+            progress.status = 'downloading'
+            progress.speed = 'Processing...'
+            eventEmitter.emit('progress', progress)
+          }
+
+          // Also match fragment download format (use monotonic progress)
+          const fragMatch = output.match(/\[download\]\s+Downloading\s+item\s+(\d+)\s+of\s+(\d+)/)
+          if (fragMatch) {
+            const [, current, total] = fragMatch
+            const fragProgress = (parseInt(current) / parseInt(total)) * 100
+            // Only update if progress increased
+            if (fragProgress >= highestProgress) {
+              highestProgress = fragProgress
+              progress.progress = Math.round(fragProgress)
+              progress.status = 'downloading'
+              eventEmitter.emit('progress', progress)
+            }
+          }
         })
 
-        // Add timeout to prevent hanging processes
+        ytdlpProcess.stderr?.on('data', data => {
+          lastActivityTime = Date.now() // Reset activity timer
+          const errOutput = data.toString()
+          stderr += errOutput
+          // Log stderr for debugging (yt-dlp often outputs info to stderr)
+          logger.debug('yt-dlp stderr', { stderr: errOutput.trim() })
+        })
+
+        // Add timeout to prevent hanging processes - 15 minutes for large files
+        // Also check for stalled downloads (no activity for 5 minutes to allow for post-processing)
+        const DOWNLOAD_TIMEOUT = 900000 // 15 minutes total timeout
+        const STALL_TIMEOUT = 300000 // 5 minutes stall detection (merging can take time)
+
         const timeout = setTimeout(() => {
-          console.log(`[YTDLP-PROVIDER] Timeout reached, killing yt-dlp process`)
+          logger.warn('Download timeout reached, killing process')
+          progress.status = 'failed'
+          eventEmitter.emit('failed', progress)
           ytdlpProcess.kill('SIGTERM')
-          // The close handler will be called after kill
-        }, 120000) // 2 minutes timeout
+        }, DOWNLOAD_TIMEOUT)
+
+        // Check for stalled downloads every 30 seconds
+        const stallCheck = setInterval(() => {
+          const timeSinceActivity = Date.now() - lastActivityTime
+          if (timeSinceActivity > STALL_TIMEOUT) {
+            logger.warn('Download stalled, killing process', { inactiveSeconds: Math.round(timeSinceActivity / 1000) })
+            clearInterval(stallCheck)
+            progress.status = 'failed'
+            eventEmitter.emit('failed', progress)
+            ytdlpProcess.kill('SIGTERM')
+          }
+        }, 30000)
 
         ytdlpProcess.on('close', async code => {
           clearTimeout(timeout)
+          clearInterval(stallCheck)
           if (code === 0) {
-            console.log(`[YTDLP-PROVIDER] ✅ yt-dlp completed successfully`)
+            logger.info('yt-dlp completed successfully')
 
             // Find the downloaded file (matching Python's robust file detection)
             const baseName = outputTemplate.replace('.%(ext)s', '')
             const extensions = ['mp4', 'm4a', 'webm', 'mkv', 'mov', 'avi']
             let actualFile: string | null = null
 
-            console.log(`[YTDLP-PROVIDER] Looking for downloaded file with base name: ${baseName}`)
+            logger.debug('Looking for downloaded file', { baseName })
 
             for (const ext of extensions) {
               const testFile = `${baseName}.${ext}`
-              console.log(`[YTDLP-PROVIDER] Checking for file: ${testFile}`)
+              logger.debug('Checking for file', { path: testFile })
               if (existsSync(testFile)) {
                 actualFile = testFile
-                console.log(`[YTDLP-PROVIDER] Found file: ${actualFile}`)
+                logger.debug('Found downloaded file', { path: actualFile })
                 break
               }
             }
 
             if (!actualFile) {
-              console.error(`[YTDLP-PROVIDER] Downloaded file not found. Searched in:`)
-              extensions.forEach(ext => {
-                console.error(`[YTDLP-PROVIDER]   - ${baseName}.${ext}`)
-              })
+              logger.warn('Downloaded file not found', { baseName, searchedExtensions: extensions })
               throw createDownloadError('Downloaded file not found', DownloadErrorCode.UNKNOWN_ERROR)
             }
 
@@ -341,7 +504,7 @@ export async function downloadWithYtdlp(
 
             // Download thumbnail if requested
             if (options.downloadThumbnail && videoInfo.thumbnails.length > 0) {
-              console.log(`[YTDLP-PROVIDER] 📸 Downloading thumbnail...`)
+              logger.debug('Downloading thumbnail')
               const thumbnailUrl = videoInfo.thumbnails[videoInfo.thumbnails.length - 1]?.url // Use highest quality thumbnail
               if (thumbnailUrl) {
                 const thumbnailFilename = `${sanitizeFilename(videoInfo.title)}_thumbnail.jpg`
@@ -357,29 +520,25 @@ export async function downloadWithYtdlp(
             progress.progress = 100
             eventEmitter.emit('completed', progress)
 
-            console.log(`[YTDLP-PROVIDER] ✅ DOWNLOAD COMPLETED: ${actualFile}`)
-            console.log('='.repeat(80))
+            logger.info('Download completed', { filePath: actualFile })
 
             resolve()
           } else {
-            console.error(`[YTDLP-PROVIDER] ❌ yt-dlp failed with code ${code}: ${stderr}`)
+            logger.error('yt-dlp failed', new Error(`Exit code ${code}: ${stderr}`))
             reject(createDownloadError(`yt-dlp failed: ${stderr}`, DownloadErrorCode.UNKNOWN_ERROR))
           }
         })
 
         ytdlpProcess.on('error', error => {
           clearTimeout(timeout)
-          console.error(`[YTDLP-PROVIDER] Process error: ${error.message}`)
+          clearInterval(stallCheck)
+          logger.error('yt-dlp process error', error)
+          progress.status = 'failed'
+          eventEmitter.emit('failed', progress)
           reject(createDownloadError(`Process error: ${error.message}`, DownloadErrorCode.UNKNOWN_ERROR))
         })
       } catch (error) {
-        console.error('='.repeat(80))
-        console.error(`[YTDLP-PROVIDER] ❌ DOWNLOAD FAILED for ${videoId}`)
-        console.error(`[YTDLP-PROVIDER] ❌ Error:`, error)
-        if (error instanceof Error) {
-          console.error(`[YTDLP-PROVIDER] ❌ Error message: ${error.message}`)
-        }
-        console.error('='.repeat(80))
+        logger.error('Download failed', error instanceof Error ? error : new Error(String(error)))
         cleanupAndReject(error)
       }
     })()
@@ -389,7 +548,7 @@ export async function downloadWithYtdlp(
 // Legacy exports for compatibility (keeping youtubei.js interface)
 export async function initializeYtdlp(): Promise<void> {
   // No-op - we're using yt-dlp now
-  console.log('[YTDLP-PROVIDER] Initialized (using yt-dlp)')
+  logger.info('yt-dlp provider initialized')
 }
 
 export async function getVideoInfoFromYtdlp(videoId: string): Promise<VideoInfo> {
@@ -399,14 +558,16 @@ export async function getVideoInfoFromYtdlp(videoId: string): Promise<VideoInfo>
 
   try {
     // Use yt-dlp to extract video info (similar to Python extract_video_info_with_fallback)
-    const args = ['--quiet', '--no-warnings', '--dump-json', `https://www.youtube.com/watch?v=${videoId}`]
+    // NOTE: Don't use --quiet as it may suppress format URLs in some yt-dlp versions
+    // Use --no-warnings only to keep stderr clean while preserving full JSON output
+    const args = ['--no-warnings', '--dump-json', `https://www.youtube.com/watch?v=${videoId}`]
 
     // Add cookies if available
     if (cookieManager.hasValidCookies()) {
-      args.splice(3, 0, '--cookies', cookieManager.getCookieFilePath())
+      args.splice(2, 0, '--cookies', cookieManager.getCookieFilePath())
     }
 
-    console.log(`[YTDLP-INFO] Running: ${YTDLP_PATH} ${args.join(' ')}`)
+    logger.debug('Running yt-dlp info extraction', { command: args.join(' ') })
 
     const ytProcess = spawn(YTDLP_PATH, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -460,25 +621,28 @@ export async function getVideoInfoFromYtdlp(videoId: string): Promise<VideoInfo>
               availableQualities: extractAvailableQualities(info.formats || []),
             }
 
-            console.log(`[YTDLP-INFO] ✅ Successfully extracted info for: ${info.title}`)
+            logger.info('Extracted video info', { title: info.title })
             resolve(videoInfo)
           } catch (parseError) {
-            console.error(`[YTDLP-INFO] ❌ Failed to parse yt-dlp output: ${parseError}`)
+            logger.error(
+              'Failed to parse yt-dlp output',
+              parseError instanceof Error ? parseError : new Error(String(parseError)),
+            )
             reject(createDownloadError('Failed to parse video info', DownloadErrorCode.UNKNOWN_ERROR))
           }
         } else {
-          console.error(`[YTDLP-INFO] ❌ yt-dlp failed with code ${code}: ${stderr}`)
+          logger.error('yt-dlp info extraction failed', new Error(`Exit code ${code}: ${stderr}`))
           reject(createDownloadError(`Failed to get video info: ${stderr}`, DownloadErrorCode.NO_FORMAT_AVAILABLE))
         }
       })
 
       ytProcess.on('error', error => {
-        console.error(`[YTDLP-INFO] Process error: ${error.message}`)
+        logger.error('yt-dlp info process error', error)
         reject(createDownloadError(`Process error: ${error.message}`, DownloadErrorCode.UNKNOWN_ERROR))
       })
     })
   } catch (error) {
-    console.error(`[YTDLP-INFO] ❌ Error getting video info:`, error)
+    logger.error('Error getting video info', error instanceof Error ? error : new Error(String(error)))
     throw createDownloadError('Failed to get video info', DownloadErrorCode.UNKNOWN_ERROR)
   }
 }
@@ -538,7 +702,7 @@ function formatViewCount(views: number): string {
 
 function extractFormats(formats: any[]): VideoFormatInfo[] {
   // Convert yt-dlp formats to our format structure
-  return formats.map(format => ({
+  const result = formats.map(format => ({
     itag: parseInt(format.format_id) || 0,
     quality: format.format_note || format.quality || 'Unknown',
     format: format.format || format.ext || 'mp4',
@@ -548,14 +712,204 @@ function extractFormats(formats: any[]): VideoFormatInfo[] {
     fps: format.fps,
     width: format.width,
     height: format.height,
-    hasAudio: !!(format.audioBitrate || format.abr),
-    hasVideo: !!(format.width || format.height),
-    audioCodec: format.audio_codec,
-    videoCodec: format.video_codec,
+    hasAudio: !!(format.acodec && format.acodec !== 'none') || !!(format.audioBitrate || format.abr),
+    hasVideo: !!(format.vcodec && format.vcodec !== 'none') || !!(format.width || format.height),
+    audioCodec: format.acodec,
+    videoCodec: format.vcodec,
     mimeType: format.mime_type,
     url: format.url,
     contentLength: format.filesize,
+    // Include protocol to distinguish direct HTTPS URLs from HLS/DASH manifests
+    // 'https' = direct download, 'm3u8'/'m3u8_native' = HLS stream (problematic for proxying)
+    protocol: format.protocol,
   }))
+
+  // Debug: Log format URL availability
+  const withUrls = result.filter(f => f.url)
+  const combinedWithUrls = result.filter(f => f.url && f.hasAudio && f.hasVideo)
+  logger.debug('Extracted formats', {
+    total: result.length,
+    withUrls: withUrls.length,
+    combined: combinedWithUrls.length,
+  })
+
+  if (combinedWithUrls.length > 0) {
+    logger.debug('Best combined format', {
+      height: combinedWithUrls[0].height,
+      container: combinedWithUrls[0].container,
+    })
+  } else if (withUrls.length > 0) {
+    logger.debug('Best format with URL (no combined)', {
+      height: withUrls[0].height,
+      container: withUrls[0].container,
+      hasAudio: withUrls[0].hasAudio,
+      hasVideo: withUrls[0].hasVideo,
+    })
+  } else {
+    logger.warn('No formats have URLs - video preview will not work')
+  }
+
+  return result
+}
+
+/**
+ * Dual-stream URLs for high-quality preview with audio.
+ * Returns separate video (1080p+) and audio URLs for synchronized playback.
+ */
+export interface DualStreamUrls {
+  videoUrl: string | null
+  audioUrl: string | null
+  /** Quality of the video stream */
+  videoQuality: string | null
+  /** Whether this is a combined format (single URL with both) */
+  isCombined: boolean
+}
+
+/**
+ * Get streaming URLs for live preview with dual-stream support.
+ *
+ * QUALITY STRATEGY:
+ * YouTube's combined formats (audio+video) are limited to 360p-720p max.
+ * Higher quality (1080p+) requires separate video-only + audio-only streams.
+ *
+ * DUAL-STREAM APPROACH:
+ * For high-quality preview, we return BOTH a video URL (1080p+) and an audio URL.
+ * The player synchronizes both streams for 1080p+ video WITH full audio.
+ *
+ * PROTOCOL FILTER:
+ * We must filter for 'https' protocol to get direct video URLs.
+ * HLS manifests (m3u8/m3u8_native protocol) from manifest.googlevideo.com cause
+ * socket hangup errors when proxied through Node.js.
+ * @see https://github.com/nodejs/help/issues/1837
+ */
+export function getStreamingUrls(videoInfo: VideoInfo): DualStreamUrls {
+  const formats = videoInfo.formats
+
+  // Helper to check if a format uses direct HTTPS (not HLS/DASH manifests)
+  const isDirectUrl = (f: VideoFormatInfo): boolean => {
+    return f.protocol === 'https' || f.protocol === 'http'
+  }
+
+  // Debug: Log available protocol types
+  const protocols = new Set(formats.map(f => f.protocol).filter(Boolean))
+  logger.debug('Available streaming protocols', { protocols: Array.from(protocols) })
+
+  // Get all video-only formats sorted by quality (highest first, but prefer mp4/webm)
+  const videoOnlyFormats = formats
+    .filter(f => f.hasVideo && !f.hasAudio && f.url && isDirectUrl(f))
+    .sort((a, b) => {
+      // Prefer mp4/webm over other containers for browser compatibility
+      const aIsGood = a.container === 'mp4' || a.container === 'webm' ? 1 : 0
+      const bIsGood = b.container === 'mp4' || b.container === 'webm' ? 1 : 0
+      if (aIsGood !== bIsGood) return bIsGood - aIsGood
+
+      // Prefer higher resolution (no cap for maximum quality)
+      return (b.height || 0) - (a.height || 0)
+    })
+
+  // Get all audio-only formats sorted by quality
+  const audioOnlyFormats = formats
+    .filter(f => f.hasAudio && !f.hasVideo && f.url && isDirectUrl(f))
+    .sort((a, b) => {
+      // Prefer m4a/mp4 audio for browser compatibility
+      const aIsGood = a.container === 'm4a' || a.container === 'mp4' ? 2 : a.container === 'webm' ? 1 : 0
+      const bIsGood = b.container === 'm4a' || b.container === 'mp4' ? 2 : b.container === 'webm' ? 1 : 0
+      if (aIsGood !== bIsGood) return bIsGood - aIsGood
+
+      // Prefer higher bitrate audio
+      return (b.audioBitrate || 0) - (a.audioBitrate || 0)
+    })
+
+  // STRATEGY 1: Dual-stream (1080p+ video + separate audio) - BEST QUALITY
+  // Get highest quality video (prefer 1080p+ for editing/preview)
+  const bestVideoOnly = videoOnlyFormats.find(f => (f.height || 0) >= 720) || videoOnlyFormats[0]
+  const bestAudioOnly = audioOnlyFormats[0]
+
+  if (bestVideoOnly && bestAudioOnly) {
+    logger.info('Using dual-stream for high-quality preview', {
+      video: {
+        quality: bestVideoOnly.quality,
+        height: bestVideoOnly.height,
+        container: bestVideoOnly.container,
+        codec: bestVideoOnly.videoCodec,
+      },
+      audio: {
+        container: bestAudioOnly.container,
+        bitrate: bestAudioOnly.audioBitrate,
+        codec: bestAudioOnly.audioCodec,
+      },
+    })
+    return {
+      videoUrl: bestVideoOnly.url!,
+      audioUrl: bestAudioOnly.url!,
+      videoQuality: `${bestVideoOnly.height}p`,
+      isCombined: false,
+    }
+  }
+
+  // STRATEGY 2: Combined format (audio+video) - lower quality but simpler
+  // YouTube combined formats are typically limited to 360p-720p
+  const combinedFormats = formats
+    .filter(f => f.hasAudio && f.hasVideo && f.url && isDirectUrl(f))
+    .sort((a, b) => {
+      const aIsMp4 = a.container === 'mp4' ? 1 : 0
+      const bIsMp4 = b.container === 'mp4' ? 1 : 0
+      if (aIsMp4 !== bIsMp4) return bIsMp4 - aIsMp4
+      return (b.height || 0) - (a.height || 0)
+    })
+
+  if (combinedFormats.length > 0) {
+    const chosen = combinedFormats[0]
+    logger.info('Using combined format for preview (limited to ~720p)', {
+      quality: chosen.quality,
+      height: chosen.height,
+      container: chosen.container,
+    })
+    return {
+      videoUrl: chosen.url!,
+      audioUrl: null,
+      videoQuality: `${chosen.height}p`,
+      isCombined: true,
+    }
+  }
+
+  // STRATEGY 3: Video-only as last resort (no audio)
+  if (bestVideoOnly) {
+    logger.warn('Using video-only format (no audio available)', {
+      quality: bestVideoOnly.quality,
+      height: bestVideoOnly.height,
+    })
+    return {
+      videoUrl: bestVideoOnly.url!,
+      audioUrl: null,
+      videoQuality: `${bestVideoOnly.height}p`,
+      isCombined: false,
+    }
+  }
+
+  // No suitable formats found
+  const allWithUrls = formats.filter(f => f.url)
+  if (allWithUrls.length > 0) {
+    logger.warn('No direct HTTPS formats found', { available: allWithUrls.map(f => `${f.quality}/${f.protocol}`) })
+  } else {
+    logger.warn('No formats with URLs found')
+  }
+
+  return {
+    videoUrl: null,
+    audioUrl: null,
+    videoQuality: null,
+    isCombined: false,
+  }
+}
+
+/**
+ * Legacy single-URL function for backward compatibility.
+ * @deprecated Use getStreamingUrls() for dual-stream support
+ */
+export function getStreamingUrl(videoInfo: VideoInfo): string | null {
+  const urls = getStreamingUrls(videoInfo)
+  return urls.videoUrl
 }
 
 function extractAvailableQualities(formats: any[]): string[] {

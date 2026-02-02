@@ -1,3 +1,8 @@
+/**
+ * Router Instance
+ * Creates the TanStack Router with memory history for Electron.
+ */
+
 import { createMemoryHistory, createRouter } from '@tanstack/react-router'
 import { rootTree } from './routes'
 

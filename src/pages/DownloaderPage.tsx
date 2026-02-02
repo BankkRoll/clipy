@@ -1,3 +1,13 @@
+/**
+ * Downloader Page
+ *
+ * Main download interface for YouTube videos. Handles:
+ * - URL input and validation
+ * - Video info fetching via yt-dlp
+ * - Download options selection (quality, format)
+ * - Starting downloads with duplicate detection
+ */
+
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { DownloadOptions, VideoInfo } from '@/types/download'
 import React, { useState } from 'react'
@@ -37,10 +47,17 @@ export default function DownloaderPage() {
     const minLoadingTime = new Promise(resolve => setTimeout(resolve, 500))
 
     try {
-      const [response] = await Promise.all([window.electronAPI.downloadManager.getInfo(url), minLoadingTime])
+      // Use getStreamingInfo to get both video info AND streaming URL
+      // This ensures we have playable URLs for the video preview
+      const [response] = await Promise.all([window.electronAPI.downloadManager.getStreamingInfo(url), minLoadingTime])
 
       if (isSuccessResponse(response)) {
-        setVideoInfo(response.data)
+        console.log('[Downloader] Got streaming info:', {
+          title: response.data.videoInfo.title,
+          formatsWithUrls: response.data.videoInfo.formats.filter((f: any) => f.url).length,
+          streamingUrl: response.data.streamingUrl ? 'available' : 'not available',
+        })
+        setVideoInfo(response.data.videoInfo)
       } else {
         setError(response.error)
       }

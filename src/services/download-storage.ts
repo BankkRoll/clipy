@@ -1,8 +1,17 @@
+/**
+ * Download Storage Service
+ * Persists download history to disk as JSON for recovery across app restarts.
+ * Simple file-based storage - no database dependencies.
+ */
+
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 
 import type { DownloadProgress } from '../types/download'
+import { Logger } from '../utils/logger'
 import { app } from 'electron'
 import { join } from 'path'
+
+const logger = Logger.getInstance()
 
 const downloadsFilePath = join(app.getPath('userData'), 'downloads.json')
 
@@ -18,6 +27,10 @@ const defaultStorage: DownloadStorageData = {
 
 let downloadStorage: DownloadStorageData
 
+/**
+ * Load download storage from disk. Returns cached data if already loaded.
+ * Creates default empty storage if file doesn't exist.
+ */
 export function loadDownloadStorage(): DownloadStorageData {
   if (downloadStorage) {
     return downloadStorage
@@ -35,26 +48,29 @@ export function loadDownloadStorage(): DownloadStorageData {
       downloadStorage = { ...defaultStorage }
     }
   } catch (error) {
-    console.error('Error loading download storage file, falling back to defaults:', error)
+    logger.warn('Error loading download storage, using defaults', error as Error)
     downloadStorage = { ...defaultStorage }
   }
 
   return downloadStorage
 }
 
+/** Persist current storage state to disk */
 export function saveDownloadStorage(): void {
   try {
     downloadStorage.lastUpdated = Date.now()
     writeFileSync(downloadsFilePath, JSON.stringify(downloadStorage, null, 2), 'utf-8')
   } catch (error) {
-    console.error('Failed to save download storage file:', error)
+    logger.error('Failed to save download storage', error as Error)
   }
 }
 
+/** Get all stored downloads from memory (loads from disk if needed) */
 export function getStoredDownloads(): DownloadProgress[] {
   return loadDownloadStorage().downloads
 }
 
+/** Add or update a download in storage. Updates existing if downloadId matches. */
 export function addDownloadToStorage(download: DownloadProgress): void {
   const storage = loadDownloadStorage()
   const existingIndex = storage.downloads.findIndex(d => d.downloadId === download.downloadId)
@@ -69,6 +85,7 @@ export function addDownloadToStorage(download: DownloadProgress): void {
   saveDownloadStorage()
 }
 
+/** Remove a download from storage by ID. Returns true if found and removed. */
 export function removeDownloadFromStorage(downloadId: string): boolean {
   const storage = loadDownloadStorage()
   const initialLength = storage.downloads.length
@@ -83,6 +100,7 @@ export function removeDownloadFromStorage(downloadId: string): boolean {
   return wasRemoved
 }
 
+/** Partially update a download's fields. Returns true if found and updated. */
 export function updateDownloadInStorage(downloadId: string, updates: Partial<DownloadProgress>): boolean {
   const storage = loadDownloadStorage()
   const downloadIndex = storage.downloads.findIndex(d => d.downloadId === downloadId)
@@ -97,14 +115,20 @@ export function updateDownloadInStorage(downloadId: string, updates: Partial<Dow
   return false
 }
 
+/**
+ * Remove downloads older than maxAgeDays.
+ * Also cleans up stale "downloading"/"initializing" entries from crashed sessions.
+ * Returns count of removed entries.
+ */
 export function clearOldDownloads(maxAgeDays: number = 30): number {
   const storage = loadDownloadStorage()
   const cutoffTime = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000
 
   const initialLength = storage.downloads.length
   storage.downloads = storage.downloads.filter(download => {
-    // Keep active downloads and recently completed ones
-    return download.status === 'downloading' || download.status === 'initializing' || download.startTime > cutoffTime
+    // Keep only recent downloads (within maxAgeDays)
+    // Don't keep "downloading" or "initializing" status - those are stale from previous sessions
+    return download.startTime > cutoffTime
   })
 
   const removedCount = initialLength - storage.downloads.length

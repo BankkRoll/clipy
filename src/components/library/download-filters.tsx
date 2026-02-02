@@ -1,3 +1,8 @@
+/**
+ * DownloadFilters - Filter controls for download list
+ * Search box and status filter dropdown (all, active, completed, failed).
+ */
+
 import { AlertCircle, CheckCircle, Download, Search } from 'lucide-react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 

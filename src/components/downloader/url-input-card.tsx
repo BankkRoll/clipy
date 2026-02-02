@@ -1,3 +1,8 @@
+/**
+ * UrlInputCard - YouTube URL input component
+ * Large centered input field with branded background for entering video URLs.
+ */
+
 import { Card, CardContent } from '@/components/ui/card'
 
 import { Button } from '@/components/ui/button'

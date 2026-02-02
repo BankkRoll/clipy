@@ -1,3 +1,14 @@
+/**
+ * Library Page
+ *
+ * Download history and management interface. Features:
+ * - Real-time download progress via IPC events
+ * - Filter by status (all, active, completed, failed)
+ * - Video preview modal with blob URL playback
+ * - Actions: cancel, delete, retry, open folder, edit
+ * - Stats cards showing download counts by status
+ */
+
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Download, Folder, Pause, Play, Square } from 'lucide-react'
 import type { DownloadFilter, DownloadProgress } from '@/types/download'
@@ -8,10 +19,12 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { isSuccessResponse } from '@/types/api'
 import { toast } from 'sonner'
+import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
 export default function LibraryPage() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const [downloads, setDownloads] = useState<DownloadProgress[]>([])
   const [filter, setFilter] = useState<DownloadFilter>('all')
   const [searchQuery, setSearchQuery] = useState('')
@@ -204,6 +217,16 @@ export default function LibraryPage() {
     }
   }
 
+  // Navigate to editor for trimming/editing
+  const handleEditDownload = (download: DownloadProgress) => {
+    if (download.status === 'completed' && download.filePath) {
+      navigate({
+        to: '/editor',
+        search: { path: download.filePath },
+      })
+    }
+  }
+
   // Real-time status indicators
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -300,6 +323,7 @@ export default function LibraryPage() {
         onRetryDownload={handleRetryDownload}
         onPreviewDownload={handlePreviewDownload}
         onOpenFolder={handleOpenFolder}
+        onEditDownload={handleEditDownload}
         getStatusBadge={getStatusBadge}
       />
 
@@ -347,7 +371,17 @@ export default function LibraryPage() {
                     }}
                   >
                     <source
-                      src={(selectedDownload as any).blobUrl || `file://${selectedDownload.filePath || ''}`}
+                      src={
+                        (selectedDownload as any).blobUrl ||
+                        (() => {
+                          // Convert file path to clipy-file:// URL (cross-platform)
+                          const normalizedPath = (selectedDownload.filePath || '').replace(/\\/g, '/')
+                          // Windows paths have drive letter (C:/), Unix paths start with /
+                          return /^[a-zA-Z]:/.test(normalizedPath)
+                            ? `clipy-file:///${normalizedPath}` // Windows
+                            : `clipy-file://${normalizedPath}` // Unix (path already has /)
+                        })()
+                      }
                       type="video/mp4"
                     />
                     Your browser does not support the video tag.

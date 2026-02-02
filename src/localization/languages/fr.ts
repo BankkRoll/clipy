@@ -1,3 +1,8 @@
+/**
+ * French Language Pack
+ * All UI strings for the French locale.
+ */
+
 export const fr = {
   translation: {
     appName: 'Clipy',
@@ -133,7 +138,13 @@ export const fr = {
     settingsThumbnailCache: 'Cache des miniatures',
     settingsItems: 'éléments',
     settingsClearCache: 'Effacer le cache',
+    settingsClearCacheDesc: 'Effacer les miniatures et métadonnées en cache',
     settingsClearThumbnails: 'Effacer les miniatures',
+    settingsClearTemp: 'Effacer temp',
+    settingsCleanTempDesc: 'Nettoyer les fichiers de téléchargement temporaires',
+    settingsNotSet: 'Non défini',
+    settingsUnknown: 'Inconnu',
+    settingsSelectDownloadFolder: 'Sélectionner le dossier de téléchargement',
     settingsAutoCleanupTitle: 'Nettoyage automatique',
     settingsAutoCleanupDesc:
       "Les fichiers cache sont automatiquement nettoyés lorsqu'ils dépassent 1 Go ou ont plus de 30 jours.",
@@ -222,6 +233,7 @@ export const fr = {
     msgFolderOpened: 'Dossier ouvert avec succès',
     msgFolderOpenFailed: "Échec de l'ouverture du dossier",
     statusGettingInfo: 'Obtention des infos vidéo...',
+    loading: 'Chargement...',
     quality4k: '4K',
     quality1440p: '1440p',
     quality1080p: '1080p',
@@ -234,6 +246,8 @@ export const fr = {
     formatWebM: 'WebM',
     formatMKV: 'MKV',
     btnReset: 'Réinitialiser',
+    actionEdit: 'Éditer',
+    actionPreview: 'Aperçu',
     actionOpenFile: 'Ouvrir le fichier',
     actionOpenFolder: 'Ouvrir le dossier',
     actionDelete: 'Supprimer',

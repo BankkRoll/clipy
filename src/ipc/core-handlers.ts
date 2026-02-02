@@ -5,14 +5,74 @@
 
 import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron'
 import { createErrorResponse, createSuccessResponse } from '../types/api'
+import { join } from 'path'
+import { readFileSync } from 'fs'
 
 import { ConfigManager } from '../utils/config'
 import { IPC_CHANNELS } from './channels'
 import { Logger } from '../utils/logger'
+import { PlatformUtils } from '../utils/platform'
+import { ValidationUtils } from '../utils/validation'
 import type { ThemeMode } from '../types/system'
 
 const logger = Logger.getInstance()
 const configManager = ConfigManager.getInstance()
+const platform = PlatformUtils.getInstance()
+
+/**
+ * Allowed extensions for shell.openPath (media and document files only)
+ * This prevents opening executables or scripts which could be a security risk
+ */
+const ALLOWED_OPEN_EXTENSIONS = [
+  // Video formats
+  '.mp4',
+  '.webm',
+  '.mkv',
+  '.avi',
+  '.mov',
+  '.wmv',
+  '.flv',
+  '.m4v',
+  // Audio formats
+  '.mp3',
+  '.m4a',
+  '.wav',
+  '.flac',
+  '.aac',
+  '.ogg',
+  '.opus',
+  '.wma',
+  // Image formats (for thumbnails)
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.gif',
+  '.webp',
+  '.bmp',
+  // Document formats (metadata, subtitles)
+  '.json',
+  '.txt',
+  '.srt',
+  '.vtt',
+]
+
+/**
+ * Get allowed paths for shell operations
+ * Only files within these directories can be opened via shell.openPath
+ */
+function getAllowedShellPaths(): string[] {
+  const config = configManager.getAll()
+  const appDataDir = platform.getAppDataDir('clipy')
+
+  return [
+    join(appDataDir, 'downloads'),
+    join(appDataDir, 'cache'),
+    join(appDataDir, 'temp'),
+    config.download?.downloadPath || join(appDataDir, 'downloads'),
+    // Also allow user's system Downloads folder
+    platform.getDownloadsDir(),
+  ].filter((p, i, arr) => arr.indexOf(p) === i) // Remove duplicates
+}
 
 /**
  * Window Management Handlers
@@ -78,6 +138,7 @@ export function setupWindowHandlers(): void {
 
 /**
  * Shell Operation Handlers
+ * Security: Only allows opening files within allowed directories and with safe extensions
  */
 export function setupShellHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.SHELL_OPEN_PATH, async (_event, filePath: string) => {
@@ -86,8 +147,33 @@ export function setupShellHandlers(): void {
         return createErrorResponse('Invalid file path provided', 'INVALID_FILE_PATH')
       }
 
-      await shell.openPath(filePath)
-      logger.info('Opened file in default application', { filePath })
+      // Security: Validate path is within allowed directories and has safe extension
+      const pathValidation = ValidationUtils.validateShellOpenPath(
+        filePath,
+        getAllowedShellPaths(),
+        ALLOWED_OPEN_EXTENSIONS,
+      )
+
+      if (!pathValidation.isValid) {
+        logger.warn('Shell open blocked - security validation failed', {
+          filePath,
+          error: pathValidation.error,
+        })
+        return createErrorResponse(
+          pathValidation.error || 'File cannot be opened for security reasons',
+          'SHELL_OPEN_BLOCKED',
+        )
+      }
+
+      const result = await shell.openPath(pathValidation.value!)
+
+      // shell.openPath returns empty string on success, error message on failure
+      if (result) {
+        logger.error('Failed to open file', new Error(result), { filePath })
+        return createErrorResponse(`Failed to open file: ${result}`, 'SHELL_OPEN_FAILED')
+      }
+
+      logger.info('Opened file in default application', { filePath: pathValidation.value })
       return createSuccessResponse(undefined)
     } catch (error) {
       logger.error('Failed to open file path', error as Error, { filePath })
@@ -101,12 +187,49 @@ export function setupShellHandlers(): void {
         return createErrorResponse('Invalid file path provided', 'INVALID_FILE_PATH')
       }
 
-      await shell.showItemInFolder(filePath)
-      logger.info('Showed item in folder', { filePath })
+      // Security: Validate path is within allowed directories
+      // Note: showItemInFolder doesn't execute files, so we don't need extension validation
+      const pathValidation = ValidationUtils.validateSecurePath(filePath, getAllowedShellPaths())
+
+      if (!pathValidation.isValid) {
+        logger.warn('Show in folder blocked - security validation failed', {
+          filePath,
+          error: pathValidation.error,
+        })
+        return createErrorResponse(
+          pathValidation.error || 'Cannot show item for security reasons',
+          'SHELL_SHOW_BLOCKED',
+        )
+      }
+
+      shell.showItemInFolder(pathValidation.value!)
+      logger.info('Showed item in folder', { filePath: pathValidation.value })
       return createSuccessResponse(undefined)
     } catch (error) {
       logger.error('Failed to show item in folder', error as Error, { filePath })
       return createErrorResponse('Failed to show item in folder', 'SHELL_SHOW_FAILED')
+    }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SHELL_OPEN_EXTERNAL, async (_event, url: string) => {
+    try {
+      if (typeof url !== 'string' || !url.trim()) {
+        return createErrorResponse('Invalid URL provided', 'INVALID_URL')
+      }
+
+      // Security: Only allow http/https URLs
+      const urlLower = url.toLowerCase()
+      if (!urlLower.startsWith('http://') && !urlLower.startsWith('https://')) {
+        logger.warn('External URL blocked - invalid protocol', { url })
+        return createErrorResponse('Only HTTP/HTTPS URLs are allowed', 'INVALID_URL_PROTOCOL')
+      }
+
+      await shell.openExternal(url)
+      logger.info('Opened external URL', { url })
+      return createSuccessResponse(undefined)
+    } catch (error) {
+      logger.error('Failed to open external URL', error as Error, { url })
+      return createErrorResponse('Failed to open external URL', 'SHELL_OPEN_EXTERNAL_FAILED')
     }
   })
 }
@@ -190,14 +313,35 @@ export function setupThemeHandlers(): void {
 export function setupSystemHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.SYSTEM_INFO, async () => {
     try {
+      // Load package.json to get app metadata
+      let packageInfo = null
+      try {
+        const packagePath = app.isPackaged
+          ? join(process.resourcesPath, 'app', 'package.json')
+          : join(app.getAppPath(), 'package.json')
+        const packageData = readFileSync(packagePath, 'utf-8')
+        packageInfo = JSON.parse(packageData)
+      } catch (pkgError) {
+        logger.warn('Failed to load package.json', pkgError as Error)
+      }
+
+      // Map platform to user-friendly OS name
+      const osNameMap: Record<string, string> = {
+        win32: 'Windows',
+        darwin: 'macOS',
+        linux: 'Linux',
+        freebsd: 'FreeBSD',
+        sunos: 'SunOS',
+      }
+
       const systemInfo = {
         appName: app.getName(),
         appVersion: app.getVersion(),
-        os: process.platform,
+        os: osNameMap[process.platform] || process.platform,
         arch: process.arch,
         nodeVersion: process.version,
         electronVersion: process.versions.electron,
-        packageInfo: null, // Could load package.json here if needed
+        packageInfo,
       }
       return createSuccessResponse(systemInfo)
     } catch (error) {

@@ -1,3 +1,8 @@
+/**
+ * DownloadItem - Single download entry in the library
+ * Shows progress, status, thumbnail, and action buttons (preview, edit, delete).
+ */
+
 import {
   AlertCircle,
   CheckCircle,
@@ -8,6 +13,7 @@ import {
   FolderOpen,
   MoreHorizontal,
   Play,
+  Scissors,
   Trash2,
   X,
 } from 'lucide-react'
@@ -46,6 +52,7 @@ interface DownloadItemProps {
   onRetry: (downloadId: string) => void
   onPreview?: (download: DownloadProgress) => void
   onOpenFolder?: (download: DownloadProgress) => void
+  onEdit?: (download: DownloadProgress) => void
   statusBadge?: React.ReactNode
 }
 
@@ -94,6 +101,7 @@ export function DownloadItem({
   onRetry,
   onPreview,
   onOpenFolder,
+  onEdit,
   statusBadge,
 }: DownloadItemProps) {
   const { t } = useTranslation()
@@ -154,7 +162,14 @@ export function DownloadItem({
           >
             {download.thumbnailPath ? (
               <img
-                src={`file://${download.thumbnailPath}`}
+                src={(() => {
+                  // Convert file path to clipy-file:// URL (cross-platform)
+                  const normalizedPath = download.thumbnailPath.replace(/\\/g, '/')
+                  // Windows paths have drive letter (C:/), Unix paths start with /
+                  return /^[a-zA-Z]:/.test(normalizedPath)
+                    ? `clipy-file:///${normalizedPath}` // Windows: clipy-file:///C:/...
+                    : `clipy-file://${normalizedPath}` // Unix: clipy-file:///Users/... (path already has /)
+                })()}
                 alt={download.title}
                 className="h-full w-full rounded-lg object-cover"
                 onError={e => {
@@ -225,10 +240,23 @@ export function DownloadItem({
 
                 {download.status === 'completed' && download.filePath && (
                   <>
-                    <Button variant="outline" size="sm" onClick={() => onPreview?.(download)} title="Preview">
+                    <Button variant="outline" size="sm" onClick={() => onEdit?.(download)} title={t('actionEdit')}>
+                      <Scissors className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onPreview?.(download)}
+                      title={t('actionPreview')}
+                    >
                       <Eye className="h-4 w-4" />
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => onOpenFolder?.(download)} title="Open Folder">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onOpenFolder?.(download)}
+                      title={t('actionOpenFolder')}
+                    >
                       <FolderOpen className="h-4 w-4" />
                     </Button>
                   </>
@@ -243,6 +271,10 @@ export function DownloadItem({
                   <DropdownMenuContent align="end">
                     {download.status === 'completed' && download.filePath && (
                       <>
+                        <DropdownMenuItem onClick={() => onEdit?.(download)}>
+                          <Scissors className="mr-2 h-4 w-4" />
+                          {t('actionEdit')}
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => handleOpenFile(download.filePath!)}>
                           <Play className="mr-2 h-4 w-4" />
                           {t('actionOpenFile')}

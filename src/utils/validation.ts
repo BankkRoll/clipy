@@ -3,6 +3,8 @@
  * Input validation and error handling utilities
  */
 
+import path from 'path'
+
 import { DownloadError, DownloadErrorCode, createDownloadError } from '../types/download'
 import type { DownloadFilter, DownloadOptions } from '../types/download'
 
@@ -329,6 +331,152 @@ export class ValidationUtils {
    */
   static sanitizeFilename(filename: string): string {
     return this.platform.sanitizeFilename(filename)
+  }
+
+  /**
+   * Validate that a file path is within allowed directories (prevents path traversal)
+   * Works cross-platform (Windows, macOS, Linux)
+   */
+  static validateSecurePath(filePath: string, allowedBasePaths: string[]): ValidationResult<string> {
+    try {
+      if (!filePath || typeof filePath !== 'string') {
+        return { isValid: false, error: 'File path is required' }
+      }
+
+      const platformInfo = this.platform.getPlatformInfo()
+
+      // Normalize the path to resolve . and .. segments
+      const normalizedPath = path.normalize(filePath)
+
+      // Check for null bytes (security vulnerability on some systems)
+      if (normalizedPath.includes('\0')) {
+        return { isValid: false, error: 'File path contains invalid null bytes' }
+      }
+
+      // Check for path traversal patterns BEFORE normalization removes them
+      // This catches attempts like ../../etc/passwd even if normalize() resolves them
+      const traversalPatterns = [
+        /\.\.[/\\]/, // ../ or ..\
+        /[/\\]\.\.[/\\]/, // /../ or \..\
+        /[/\\]\.\.$/, // Ends with /.. or \..
+      ]
+
+      for (const pattern of traversalPatterns) {
+        if (pattern.test(filePath)) {
+          this.logger.warn('Path traversal attempt detected', { filePath })
+          return { isValid: false, error: 'Path traversal not allowed' }
+        }
+      }
+
+      // Convert to absolute path if relative
+      const absolutePath = path.isAbsolute(normalizedPath) ? normalizedPath : path.resolve(normalizedPath)
+
+      // Normalize all allowed paths for comparison
+      const normalizedAllowedPaths = allowedBasePaths.map(p => {
+        const normalized = path.normalize(p)
+        // Ensure consistent trailing separator handling
+        return normalized.endsWith(path.sep) ? normalized : normalized + path.sep
+      })
+
+      // Check if the path starts with any of the allowed base paths
+      // Use case-insensitive comparison on Windows
+      const isAllowed = normalizedAllowedPaths.some(allowedPath => {
+        const pathToCheck = absolutePath + (absolutePath.endsWith(path.sep) ? '' : path.sep)
+
+        if (platformInfo.isWindows) {
+          // Case-insensitive comparison on Windows
+          return (
+            pathToCheck.toLowerCase().startsWith(allowedPath.toLowerCase()) ||
+            absolutePath.toLowerCase() === allowedPath.slice(0, -1).toLowerCase()
+          )
+        } else {
+          // Case-sensitive comparison on Unix systems
+          return pathToCheck.startsWith(allowedPath) || absolutePath === allowedPath.slice(0, -1)
+        }
+      })
+
+      if (!isAllowed) {
+        this.logger.warn('Path outside allowed directories', {
+          filePath: absolutePath,
+          allowedPaths: normalizedAllowedPaths,
+        })
+        return { isValid: false, error: 'Path is outside allowed directories' }
+      }
+
+      // Additional Windows-specific checks
+      if (platformInfo.isWindows) {
+        // Check for reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+        const reservedNames = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i
+        const fileName = path.basename(absolutePath)
+        const fileNameWithoutExt = fileName.replace(/\.[^.]+$/, '')
+
+        if (reservedNames.test(fileNameWithoutExt)) {
+          return { isValid: false, error: 'File name is a reserved Windows device name' }
+        }
+
+        // Check for alternate data streams (file.txt:stream)
+        if (absolutePath.includes(':') && !absolutePath.match(/^[A-Za-z]:/)) {
+          return { isValid: false, error: 'Alternate data streams not allowed' }
+        }
+      }
+
+      return { isValid: true, value: absolutePath }
+    } catch (error) {
+      this.logger.error('Secure path validation failed', error as Error, { filePath })
+      return { isValid: false, error: 'Path validation failed' }
+    }
+  }
+
+  /**
+   * Validate file extension against an allowlist
+   */
+  static validateFileExtension(filePath: string, allowedExtensions: string[]): ValidationResult<string> {
+    try {
+      const ext = path.extname(filePath).toLowerCase()
+
+      // Normalize extensions to include the dot
+      const normalizedAllowed = allowedExtensions.map(e =>
+        e.startsWith('.') ? e.toLowerCase() : `.${e.toLowerCase()}`,
+      )
+
+      if (!normalizedAllowed.includes(ext)) {
+        return {
+          isValid: false,
+          error: `File extension '${ext}' is not allowed. Allowed: ${normalizedAllowed.join(', ')}`,
+        }
+      }
+
+      return { isValid: true, value: ext }
+    } catch (error) {
+      this.logger.error('File extension validation failed', error as Error, { filePath })
+      return { isValid: false, error: 'Extension validation failed' }
+    }
+  }
+
+  /**
+   * Validate shell command path (for shell.openPath security)
+   * Only allows opening files within downloads/cache directories with safe extensions
+   */
+  static validateShellOpenPath(
+    filePath: string,
+    allowedBasePaths: string[],
+    allowedExtensions?: string[],
+  ): ValidationResult<string> {
+    // First validate the path is within allowed directories
+    const pathValidation = this.validateSecurePath(filePath, allowedBasePaths)
+    if (!pathValidation.isValid) {
+      return pathValidation
+    }
+
+    // If extension whitelist provided, validate extension
+    if (allowedExtensions && allowedExtensions.length > 0) {
+      const extValidation = this.validateFileExtension(filePath, allowedExtensions)
+      if (!extValidation.isValid) {
+        return { isValid: false, error: extValidation.error }
+      }
+    }
+
+    return { isValid: true, value: pathValidation.value }
   }
 
   /**

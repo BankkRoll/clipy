@@ -1,3 +1,8 @@
+/**
+ * useMobile - Responsive breakpoint hook
+ * Detects mobile viewport based on media query.
+ */
+
 import * as React from 'react'
 
 const MOBILE_BREAKPOINT = 768

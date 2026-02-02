@@ -1,6 +1,10 @@
+/**
+ * DownloadSettings - Download preferences panel
+ * Clean, minimal design with quality, format, path, and performance settings.
+ */
+
 import type { AppConfig, DownloadConfig } from '@/types/system'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Download, FileVideo, Folder, Image, Settings2, Subtitles, Zap } from 'lucide-react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -8,7 +12,6 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
@@ -36,13 +39,11 @@ export default function DownloadSettings() {
     fetchConfig()
   }, [])
 
-  // Debounced update to prevent excessive API calls during slider dragging
   const debouncedUpdateRef = useRef<NodeJS.Timeout | null>(null)
   const handleUpdate = useCallback(
     (updates: Partial<DownloadConfig>, debounce = false) => {
       if (!config) return
 
-      // Update local state immediately
       const newConfig = { ...config, ...updates }
       setConfig(newConfig)
 
@@ -55,11 +56,9 @@ export default function DownloadSettings() {
       }
 
       if (debounce) {
-        // Clear previous timeout
         if (debouncedUpdateRef.current) {
           clearTimeout(debouncedUpdateRef.current)
         }
-        // Set new debounced update
         debouncedUpdateRef.current = setTimeout(performUpdate, 500)
       } else {
         performUpdate()
@@ -68,7 +67,6 @@ export default function DownloadSettings() {
     [config],
   )
 
-  // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
       if (debouncedUpdateRef.current) {
@@ -80,7 +78,11 @@ export default function DownloadSettings() {
 
   const handleBrowse = async () => {
     try {
-      const response = await window.electronAPI.system.openDialog()
+      const response = await window.electronAPI.system.openDialog({
+        title: t('settingsSelectDownloadFolder'),
+        defaultPath: config?.downloadPath,
+        properties: ['openDirectory', 'createDirectory'],
+      })
       if (isSuccessResponse(response) && response.data) {
         handleUpdate({ downloadPath: response.data as string })
       }
@@ -91,19 +93,10 @@ export default function DownloadSettings() {
 
   if (!config) {
     return (
-      <Card className="border-border/50 bg-card/50 border shadow-lg backdrop-blur-sm">
-        <CardHeader className="pb-6">
-          <div className="flex items-center gap-3">
-            <div className="bg-primary/10 flex h-10 w-10 items-center justify-center rounded-xl">
-              <Download className="text-primary h-5 w-5" />
-            </div>
-            <div>
-              <CardTitle className="text-foreground text-2xl font-bold">{t('settingsDownloadTitle')}</CardTitle>
-              <CardDescription className="text-muted-foreground mt-1 text-base">
-                {t('settingsDownloadDescription')}
-              </CardDescription>
-            </div>
-          </div>
+      <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+        <CardHeader>
+          <CardTitle className="text-xl font-semibold">{t('settingsDownloadTitle')}</CardTitle>
+          <CardDescription>{t('settingsDownloadDescription')}</CardDescription>
         </CardHeader>
         <CardContent>
           <p className="text-muted-foreground">{t('settingsFailedToLoadDownloads')}</p>
@@ -113,53 +106,32 @@ export default function DownloadSettings() {
   }
 
   return (
-    <Card className="border-border/50 bg-card/50 border shadow-lg backdrop-blur-sm">
-      <CardHeader className="pb-6">
-        <div className="flex items-center gap-3">
-          <div className="bg-primary/10 flex h-10 w-10 items-center justify-center rounded-xl">
-            <Download className="text-primary h-5 w-5" />
-          </div>
-          <div>
-            <CardTitle className="text-foreground text-2xl font-bold">{t('settingsDownloadTitle')}</CardTitle>
-            <CardDescription className="text-muted-foreground mt-1 text-base">
-              {t('settingsDownloadDescription')}
-            </CardDescription>
-          </div>
-        </div>
+    <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+      <CardHeader>
+        <CardTitle className="text-xl font-semibold">{t('settingsDownloadTitle')}</CardTitle>
+        <CardDescription>{t('settingsDownloadDescription')}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-8">
-        <div>
-          <div className="mb-6 flex items-center gap-3">
-            <div className="bg-primary/10 flex h-8 w-8 items-center justify-center rounded-lg">
-              <FileVideo className="text-primary h-4 w-4" />
-            </div>
-            <h3 className="text-foreground text-lg font-bold">{t('settingsQualityFormat')}</h3>
-          </div>
-
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-            <div className="space-y-3">
-              <Label htmlFor="quality" className="text-foreground text-sm font-semibold">
+        {/* Quality & Format */}
+        <div className="space-y-4">
+          <h3 className="text-foreground font-medium">{t('settingsQualityFormat')}</h3>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="quality" className="text-sm">
                 {t('settingsDefaultVideoQuality')}
               </Label>
               {isLoading ? (
-                <Skeleton className="h-12 w-full" />
+                <Skeleton className="h-10 w-full" />
               ) : (
                 <Select
                   value={config.defaultVideoQuality}
                   onValueChange={value => handleUpdate({ defaultVideoQuality: value })}
                 >
-                  <SelectTrigger className="border-border/50 bg-muted/30 h-12">
+                  <SelectTrigger id="quality">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="best">
-                      <div className="flex items-center gap-2">
-                        <Badge variant="secondary" className="bg-primary/10 text-primary border-primary/20 text-xs">
-                          {t('settingsRecommended')}
-                        </Badge>
-                        {t('settingsBestAvailable')}
-                      </div>
-                    </SelectItem>
+                    <SelectItem value="best">{t('settingsBestAvailable')}</SelectItem>
                     <SelectItem value="4k">{t('quality4k')}</SelectItem>
                     <SelectItem value="1440p">{t('quality1440p')}</SelectItem>
                     <SelectItem value="1080p">{t('quality1080p')}</SelectItem>
@@ -171,26 +143,19 @@ export default function DownloadSettings() {
               )}
             </div>
 
-            <div className="space-y-3">
-              <Label htmlFor="format" className="text-foreground text-sm font-semibold">
+            <div className="space-y-2">
+              <Label htmlFor="format" className="text-sm">
                 {t('settingsVideoFormat')}
               </Label>
               {isLoading ? (
-                <Skeleton className="h-12 w-full" />
+                <Skeleton className="h-10 w-full" />
               ) : (
                 <Select value={config.videoFormat} onValueChange={value => handleUpdate({ videoFormat: value as any })}>
-                  <SelectTrigger className="border-border/50 bg-muted/30 h-12">
+                  <SelectTrigger id="format">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="mp4">
-                      <div className="flex items-center gap-2">
-                        <Badge variant="secondary" className="bg-primary/10 text-primary border-primary/20 text-xs">
-                          {t('settingsMostCompatible')}
-                        </Badge>
-                        {t('formatMP4')}
-                      </div>
-                    </SelectItem>
+                    <SelectItem value="mp4">{t('formatMP4')}</SelectItem>
                     <SelectItem value="webm">{t('formatWebM')}</SelectItem>
                     <SelectItem value="mkv">{t('formatMKV')}</SelectItem>
                   </SelectContent>
@@ -198,86 +163,44 @@ export default function DownloadSettings() {
               )}
             </div>
           </div>
+        </div>
 
-          <div className="from-primary/5 to-primary/10 border-primary/20 mt-6 rounded-xl border bg-gradient-to-r p-5">
-            <div className="flex items-start gap-4">
-              <div className="bg-primary/20 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg">
-                <Zap className="text-primary h-4 w-4" />
-              </div>
-              <div className="text-sm">
-                <p className="text-foreground mb-2 font-semibold">{t('settingsSmartQualityTitle')}</p>
-                <p className="text-muted-foreground leading-relaxed">{t('settingsSmartQualityDesc')}</p>
-              </div>
+        {/* Download Location */}
+        <div className="space-y-4">
+          <h3 className="text-foreground font-medium">{t('settingsStorageLocation')}</h3>
+          <div className="space-y-2">
+            <Label htmlFor="location" className="text-sm">
+              {t('settingsDownloadDirectory')}
+            </Label>
+            <div className="flex gap-2">
+              <Input id="location" value={config.downloadPath} readOnly className="flex-1 font-mono text-sm" />
+              <Button variant="outline" onClick={handleBrowse}>
+                {t('settingsBrowse')}
+              </Button>
             </div>
+            <p className="text-muted-foreground text-xs">{t('settingsDownloadDirectoryDesc')}</p>
+          </div>
+
+          <div className="flex items-center justify-between py-2">
+            <div>
+              <p className="text-foreground text-sm font-medium">{t('settingsCreateSubdirectories')}</p>
+              <p className="text-muted-foreground text-xs">{t('settingsCreateSubdirectoriesDesc')}</p>
+            </div>
+            <Switch
+              checked={config.createSubdirectories}
+              onCheckedChange={checked => handleUpdate({ createSubdirectories: checked })}
+            />
           </div>
         </div>
 
-        <Separator className="bg-border/50" />
-
-        <div>
-          <div className="mb-6 flex items-center gap-3">
-            <div className="bg-primary/10 flex h-8 w-8 items-center justify-center rounded-lg">
-              <Folder className="text-primary h-4 w-4" />
-            </div>
-            <h3 className="text-foreground text-lg font-bold">{t('settingsStorageLocation')}</h3>
-          </div>
-
-          <div className="space-y-6">
-            <div className="space-y-3">
-              <Label htmlFor="location" className="text-foreground text-sm font-semibold">
-                {t('settingsDownloadDirectory')}
-              </Label>
-              <div className="flex gap-3">
-                <Input
-                  id="location"
-                  value={config.downloadPath}
-                  readOnly
-                  className="border-border/50 bg-muted/30 h-12 flex-1"
-                />
-                <Button
-                  variant="outline"
-                  onClick={handleBrowse}
-                  className="border-primary/20 text-primary hover:bg-primary/10 h-12 px-6"
-                >
-                  {t('settingsBrowse')}
-                </Button>
-              </div>
-              <p className="text-muted-foreground text-xs">{t('settingsDownloadDirectoryDesc')}</p>
-            </div>
-
-            <div className="bg-muted/30 border-border/50 flex items-center justify-between rounded-lg border p-4">
+        {/* Additional Content */}
+        <div className="space-y-4">
+          <h3 className="text-foreground font-medium">{t('settingsAdditionalContent')}</h3>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between py-2">
               <div>
-                <p className="text-foreground font-semibold">{t('settingsCreateSubdirectories')}</p>
-                <p className="text-muted-foreground mt-1 text-sm">{t('settingsCreateSubdirectoriesDesc')}</p>
-              </div>
-              <Switch
-                checked={config.createSubdirectories}
-                onCheckedChange={checked => handleUpdate({ createSubdirectories: checked })}
-              />
-            </div>
-          </div>
-        </div>
-
-        <Separator className="bg-border/50" />
-
-        <div>
-          <div className="mb-6 flex items-center gap-3">
-            <div className="bg-primary/10 flex h-8 w-8 items-center justify-center rounded-lg">
-              <Settings2 className="text-primary h-4 w-4" />
-            </div>
-            <h3 className="text-foreground text-lg font-bold">{t('settingsAdditionalContent')}</h3>
-          </div>
-
-          <div className="space-y-4">
-            <div className="bg-muted/30 border-border/50 hover:bg-muted/50 flex items-center justify-between rounded-lg border p-4 transition-colors">
-              <div className="flex items-center gap-4">
-                <div className="bg-muted flex h-8 w-8 items-center justify-center rounded-lg">
-                  <Subtitles className="text-muted-foreground h-4 w-4" />
-                </div>
-                <div>
-                  <p className="text-foreground font-semibold">{t('settingsDownloadSubtitles')}</p>
-                  <p className="text-muted-foreground mt-1 text-sm">{t('settingsDownloadSubtitlesDesc')}</p>
-                </div>
+                <p className="text-foreground text-sm font-medium">{t('settingsDownloadSubtitles')}</p>
+                <p className="text-muted-foreground text-xs">{t('settingsDownloadSubtitlesDesc')}</p>
               </div>
               <Switch
                 checked={config.downloadSubtitles}
@@ -285,15 +208,10 @@ export default function DownloadSettings() {
               />
             </div>
 
-            <div className="bg-muted/30 border-border/50 hover:bg-muted/50 flex items-center justify-between rounded-lg border p-4 transition-colors">
-              <div className="flex items-center gap-4">
-                <div className="bg-muted flex h-8 w-8 items-center justify-center rounded-lg">
-                  <Image className="text-muted-foreground h-4 w-4" />
-                </div>
-                <div>
-                  <p className="text-foreground font-semibold">{t('settingsDownloadThumbnails')}</p>
-                  <p className="text-muted-foreground mt-1 text-sm">{t('settingsDownloadThumbnailsDesc')}</p>
-                </div>
+            <div className="flex items-center justify-between py-2">
+              <div>
+                <p className="text-foreground text-sm font-medium">{t('settingsDownloadThumbnails')}</p>
+                <p className="text-muted-foreground text-xs">{t('settingsDownloadThumbnailsDesc')}</p>
               </div>
               <Switch
                 checked={config.downloadThumbnails}
@@ -301,15 +219,10 @@ export default function DownloadSettings() {
               />
             </div>
 
-            <div className="bg-muted/30 border-border/50 hover:bg-muted/50 flex items-center justify-between rounded-lg border p-4 transition-colors">
-              <div className="flex items-center gap-4">
-                <div className="bg-muted flex h-8 w-8 items-center justify-center rounded-lg">
-                  <FileVideo className="text-muted-foreground h-4 w-4" />
-                </div>
-                <div>
-                  <p className="text-foreground font-semibold">{t('settingsSaveMetadata')}</p>
-                  <p className="text-muted-foreground mt-1 text-sm">{t('settingsSaveMetadataDesc')}</p>
-                </div>
+            <div className="flex items-center justify-between py-2">
+              <div>
+                <p className="text-foreground text-sm font-medium">{t('settingsSaveMetadata')}</p>
+                <p className="text-muted-foreground text-xs">{t('settingsSaveMetadataDesc')}</p>
               </div>
               <Switch
                 checked={config.saveMetadata}
@@ -319,65 +232,41 @@ export default function DownloadSettings() {
           </div>
         </div>
 
-        <Separator className="bg-border/50" />
+        {/* Performance */}
+        <div className="space-y-4">
+          <h3 className="text-foreground font-medium">{t('settingsPerformance')}</h3>
 
-        <div>
-          <div className="mb-6 flex items-center gap-3">
-            <div className="bg-primary/10 flex h-8 w-8 items-center justify-center rounded-lg">
-              <Zap className="text-primary h-4 w-4" />
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label className="text-sm">{t('settingsConcurrentDownloads')}</Label>
+              <Badge variant="outline" className="font-mono">
+                {config.maxConcurrentDownloads}
+              </Badge>
             </div>
-            <h3 className="text-foreground text-lg font-bold">{t('settingsPerformance')}</h3>
-          </div>
-
-          <div className="space-y-6">
-            <div className="bg-muted/30 border-border/50 rounded-xl border p-5">
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <p className="text-foreground font-semibold">{t('settingsConcurrentDownloads')}</p>
-                  <p className="text-muted-foreground mt-1 text-sm">{t('settingsConcurrentDownloadsDesc')}</p>
-                </div>
-                <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-xs">
-                  {config.maxConcurrentDownloads} {t('settingsDownloadsCount')}
-                </Badge>
-              </div>
-              <Slider
-                value={[config.maxConcurrentDownloads]}
-                onValueChange={value => handleUpdate({ maxConcurrentDownloads: value[0] }, true)}
-                onValueCommit={value => handleUpdate({ maxConcurrentDownloads: value[0] }, false)}
-                max={8}
-                min={1}
-                step={1}
-                className="w-full"
-              />
-              <div className="text-muted-foreground mt-3 flex justify-between text-xs">
-                <span>{t('settingsConservative')}</span>
-                <span>{t('settingsBalanced')}</span>
-                <span>{t('settingsAggressive')}</span>
-              </div>
-            </div>
-
-            <div className="bg-muted/30 border-border/50 flex items-center justify-between rounded-lg border p-4">
-              <div>
-                <p className="text-foreground font-semibold">{t('settingsAutoRetryFailed')}</p>
-                <p className="text-muted-foreground mt-1 text-sm">{t('settingsAutoRetryFailedDesc')}</p>
-              </div>
-              <Switch
-                checked={config.autoRetryFailed}
-                onCheckedChange={checked => handleUpdate({ autoRetryFailed: checked })}
-              />
+            <Slider
+              value={[config.maxConcurrentDownloads]}
+              onValueChange={value => handleUpdate({ maxConcurrentDownloads: value[0] }, true)}
+              onValueCommit={value => handleUpdate({ maxConcurrentDownloads: value[0] }, false)}
+              max={8}
+              min={1}
+              step={1}
+            />
+            <div className="text-muted-foreground flex justify-between text-xs">
+              <span>{t('settingsConservative')}</span>
+              <span>{t('settingsBalanced')}</span>
+              <span>{t('settingsAggressive')}</span>
             </div>
           </div>
 
-          <div className="from-primary/5 to-primary/10 border-primary/20 mt-6 rounded-xl border bg-gradient-to-r p-5">
-            <div className="flex items-start gap-4">
-              <div className="bg-primary/20 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg">
-                <Settings2 className="text-primary h-4 w-4" />
-              </div>
-              <div className="text-sm">
-                <p className="text-foreground mb-2 font-semibold">{t('settingsPerformanceImpactTitle')}</p>
-                <p className="text-muted-foreground leading-relaxed">{t('settingsPerformanceImpactDesc')}</p>
-              </div>
+          <div className="flex items-center justify-between py-2">
+            <div>
+              <p className="text-foreground text-sm font-medium">{t('settingsAutoRetryFailed')}</p>
+              <p className="text-muted-foreground text-xs">{t('settingsAutoRetryFailedDesc')}</p>
             </div>
+            <Switch
+              checked={config.autoRetryFailed}
+              onCheckedChange={checked => handleUpdate({ autoRetryFailed: checked })}
+            />
           </div>
         </div>
       </CardContent>

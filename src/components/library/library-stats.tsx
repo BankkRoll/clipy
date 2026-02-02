@@ -1,3 +1,8 @@
+/**
+ * LibraryStats - Download statistics cards
+ * Shows total, active, completed, and failed download counts.
+ */
+
 import { Card, CardContent } from '@/components/ui/card'
 import { AlertCircle, CheckCircle, Clock, Download } from 'lucide-react'
 import React from 'react'

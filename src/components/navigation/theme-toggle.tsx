@@ -1,3 +1,8 @@
+/**
+ * ToggleTheme - Dark/light mode toggle button
+ * Calls theme.toggle() IPC and updates DOM class.
+ */
+
 import { Moon, Sun } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -5,7 +10,7 @@ import React from 'react'
 import { isSuccessResponse } from '@/types/api'
 import { useTranslation } from 'react-i18next'
 
-// Theme toggle function
+/** Toggle between dark and light theme via IPC */
 const toggleTheme = async () => {
   try {
     const response = await window.electronAPI.theme.toggle()

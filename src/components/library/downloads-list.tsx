@@ -1,3 +1,8 @@
+/**
+ * DownloadsList - Filterable list of all downloads
+ * Renders DownloadItem for each download with search and filter controls.
+ */
+
 import { BarChart3, Download, FileVideo } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
@@ -25,6 +30,7 @@ interface DownloadsListProps {
   onRetryDownload: (downloadId: string) => void
   onPreviewDownload?: (download: DownloadProgress) => void
   onOpenFolder?: (download: DownloadProgress) => void
+  onEditDownload?: (download: DownloadProgress) => void
   getStatusBadge?: (status: string) => React.ReactNode
 }
 
@@ -40,6 +46,7 @@ export function DownloadsList({
   onRetryDownload,
   onPreviewDownload,
   onOpenFolder,
+  onEditDownload,
   getStatusBadge,
 }: DownloadsListProps) {
   const { t } = useTranslation()
@@ -93,6 +100,7 @@ export function DownloadsList({
                 onRetry={onRetryDownload}
                 onPreview={onPreviewDownload}
                 onOpenFolder={onOpenFolder}
+                onEdit={onEditDownload}
                 statusBadge={getStatusBadge?.(download.status)}
               />
             ))

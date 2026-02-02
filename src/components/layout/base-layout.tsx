@@ -1,3 +1,8 @@
+/**
+ * BaseLayout - App shell with window controls and navigation
+ * Wraps all pages with title bar, nav menu, and scrollable content area.
+ */
+
 import DragWindowRegion from '@/components/layout/window-region'
 import AppNavigationMenu from '@/components/navigation/navigation-menu'
 import React from 'react'

@@ -1,3 +1,8 @@
+/**
+ * System Types
+ * Type definitions for app configuration, window state, and system info.
+ */
+
 export type ThemeMode = 'light' | 'dark' | 'system'
 
 export interface PackageInfo {
@@ -46,6 +51,17 @@ export interface StoragePaths {
   temp: string
 }
 
+/**
+ * Window state for persistence across sessions
+ */
+export interface WindowState {
+  x?: number
+  y?: number
+  width: number
+  height: number
+  isMaximized: boolean
+}
+
 export interface DownloadConfig {
   defaultVideoQuality: string
   videoFormat: 'mp4' | 'webm' | 'mkv' | 'mp3' | 'm4a' | 'opus'
@@ -72,4 +88,5 @@ export interface AppConfig {
     tempPath: string
     cachePath: string
   }
+  windowState?: WindowState
 }

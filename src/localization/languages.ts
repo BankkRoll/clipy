@@ -1,3 +1,8 @@
+/**
+ * Supported Languages
+ * List of available language options for the language selector.
+ */
+
 export interface Language {
   key: string
   nativeName: string

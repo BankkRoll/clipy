@@ -1,3 +1,14 @@
+/**
+ * yt-dlp Manager
+ * High-level download orchestration layer that manages:
+ * - Download queue and concurrency limits
+ * - Download state persistence across app restarts
+ * - Event forwarding to renderer process
+ * - Retry logic for failed downloads
+ *
+ * Uses yt-dlp-provider.ts for actual download execution.
+ */
+
 import { existsSync, mkdirSync } from 'node:fs'
 import type { DownloadConfig, DownloadFilter, DownloadOptions, DownloadProgress, VideoInfo } from '../../types/download'
 import { DownloadErrorCode, createDownloadError, isDownloadError } from '../../types/download'
@@ -7,12 +18,21 @@ import {
   loadDownloadStorage,
   removeDownloadFromStorage,
   updateDownloadInStorage,
-} from '../download_storage'
-import { downloadWithYtdlp, getVideoInfoFromYtdlp, initializeYtdlp, isYtdlpInitialized } from './yt-dlp-provider'
+} from '../download-storage'
+import {
+  downloadWithYtdlp,
+  getVideoInfoFromYtdlp,
+  initializeYtdlp,
+  isYtdlpInitialized,
+  getStreamingUrl,
+} from './yt-dlp-provider'
 
 import { app } from 'electron'
 import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
+import { Logger } from '../../utils/logger'
+
+const logger = Logger.getInstance()
 
 interface DownloadManagerState {
   config: DownloadConfig
@@ -70,22 +90,35 @@ export async function initializeDownloadManager(config?: Partial<DownloadConfig>
   // Load persisted downloads from storage
   const storedDownloads = loadDownloadStorage().downloads
   for (const download of storedDownloads) {
+    // Mark stale "in-progress" downloads as failed on startup
+    // (if they were truly in progress, the app restart interrupted them)
+    if (
+      download.status === 'downloading' ||
+      download.status === 'initializing' ||
+      download.status === 'fetching-info' ||
+      download.status === 'retrying'
+    ) {
+      logger.debug('Marking stale download as failed', { downloadId: download.downloadId })
+      download.status = 'failed'
+      download.error = createDownloadError('Download interrupted by app restart', DownloadErrorCode.UNKNOWN_ERROR)
+      updateDownloadInStorage(download.downloadId, { status: 'failed', error: download.error })
+    }
     globalState.downloadHistory.set(download.downloadId, download)
   }
 
   // Clean up old completed downloads (keep only last 30 days)
   const removedCount = clearOldDownloads(30)
   if (removedCount > 0) {
-    console.log(`[YTDLP-MANAGER] Cleaned up ${removedCount} old downloads`)
+    logger.info('Cleaned up old downloads', { count: removedCount })
   }
 
   try {
     await initializeYtdlp()
     globalState.ytdlpReady = true
-    console.log('[YTDLP-MANAGER] yt-dlp initialized successfully')
+    logger.info('yt-dlp initialized successfully')
     globalState.eventEmitter.emit('initialized', true)
   } catch (error) {
-    console.warn('[YTDLP-MANAGER] yt-dlp failed to initialize:', error)
+    logger.warn('yt-dlp failed to initialize', error as Error)
     globalState.ytdlpReady = false
     globalState.eventEmitter.emit('initialized', false)
   }
@@ -130,11 +163,11 @@ export async function getVideoInfo(url: string): Promise<VideoInfo> {
   const cacheKey = videoId
   const cached = videoInfoCache.get(cacheKey)
   if (cached && Date.now() - cached.timestamp < VIDEO_INFO_CACHE_TTL) {
-    console.log(`[YTDLP-MANAGER] Returning cached video info for: ${videoId}`)
+    logger.debug('Returning cached video info', { videoId })
     return cached.info
   }
 
-  console.log(`[YTDLP-MANAGER] Getting video info for URL: ${url}`)
+  logger.debug('Getting video info', { url })
 
   if (!state.ytdlpReady || !isYtdlpInitialized()) {
     throw createDownloadError(
@@ -144,7 +177,7 @@ export async function getVideoInfo(url: string): Promise<VideoInfo> {
   }
 
   try {
-    console.log('[YTDLP-MANAGER] Getting video info using yt-dlp...')
+    logger.debug('Fetching video info via yt-dlp')
     const info = await getVideoInfoFromYtdlp(videoId)
     if (info.formats.length === 0) {
       throw createDownloadError('No formats available for this video', DownloadErrorCode.NO_FORMAT_AVAILABLE)
@@ -155,7 +188,7 @@ export async function getVideoInfo(url: string): Promise<VideoInfo> {
 
     return info
   } catch (error: unknown) {
-    console.error('[YTDLP-MANAGER] yt-dlp failed to get video info:', error)
+    logger.error('Failed to get video info', error as Error)
     throw isDownloadError(error)
       ? error
       : createDownloadError(error instanceof Error ? error.message : String(error), DownloadErrorCode.UNKNOWN_ERROR)
@@ -165,15 +198,19 @@ export async function getVideoInfo(url: string): Promise<VideoInfo> {
 export async function startDownload(url: string, options: DownloadOptions = {}): Promise<string> {
   const state = ensureState()
 
-  // Check if this URL is already being downloaded
+  // Check if this URL is already being actively downloaded
+  // Only consider it "in progress" if we have an active AbortController for it
   const existingDownload = Array.from(state.downloadHistory.values()).find(
     download =>
       download.url === url &&
-      (download.status === 'downloading' || download.status === 'initializing' || download.status === 'fetching-info'),
+      (download.status === 'downloading' ||
+        download.status === 'initializing' ||
+        download.status === 'fetching-info') &&
+      state.activeDownloads.has(download.downloadId), // Must have active controller
   )
 
   if (existingDownload) {
-    console.log(`[YTDLP-MANAGER] Download already in progress for URL: ${url}`)
+    logger.debug('Download already in progress', { url })
     return existingDownload.downloadId
   }
 
@@ -226,17 +263,18 @@ export async function startDownload(url: string, options: DownloadOptions = {}):
       state.eventEmitter.emit('progress', progress)
 
       const selectedProvider = options.provider || 'auto'
-      console.log(`[YTDLP-MANAGER] Selected provider: ${selectedProvider}`)
+      logger.debug('Selected download provider', { provider: selectedProvider })
 
       if ((selectedProvider === 'ytdlp' || selectedProvider === 'auto') && state.ytdlpReady && isYtdlpInitialized()) {
         try {
-          console.log('[YTDLP-MANAGER] Attempting download with yt-dlp')
+          logger.debug('Attempting download with yt-dlp')
           progress.usedProvider = 'ytdlp'
           await downloadWithYtdlp(videoId, options, progress, videoInfo!, state.eventEmitter, controller)
           return
         } catch (ytdlpError: unknown) {
-          console.warn(
-            `[YTDLP-MANAGER] yt-dlp download failed: ${ytdlpError instanceof Error ? ytdlpError.message : String(ytdlpError)}`,
+          logger.warn(
+            'yt-dlp download failed',
+            ytdlpError instanceof Error ? ytdlpError : new Error(String(ytdlpError)),
           )
           if (selectedProvider === 'ytdlp') {
             throw ytdlpError
@@ -261,7 +299,10 @@ export async function startDownload(url: string, options: DownloadOptions = {}):
           ...progress,
         })
       }
-      console.error(`[YTDLP-MANAGER] Download failed permanently for ${downloadId}:`, finalError)
+      logger.error(
+        `Download failed permanently [${downloadId}]`,
+        finalError instanceof Error ? finalError : new Error(String(finalError)),
+      )
     } finally {
       state.activeDownloads.delete(downloadId)
     }
@@ -436,4 +477,19 @@ export function cleanup(): void {
     globalState.eventEmitter.removeAllListeners()
     globalState = null
   }
+}
+
+/**
+ * Get video info with streaming URL for live preview
+ * Returns video info plus a direct streaming URL for the editor
+ */
+export async function getVideoInfoWithStreamingUrl(
+  url: string,
+): Promise<{ videoInfo: VideoInfo; streamingUrl: string | null }> {
+  const videoInfo = await getVideoInfo(url)
+  const streamingUrl = getStreamingUrl(videoInfo)
+
+  logger.debug('Streaming URL status', { available: !!streamingUrl })
+
+  return { videoInfo, streamingUrl }
 }

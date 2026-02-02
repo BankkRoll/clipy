@@ -11,8 +11,10 @@ import { ConfigManager } from '../utils/config'
 import { DownloadManager } from '../services/download-manager'
 import { IPC_CHANNELS } from './channels'
 import { Logger } from '../utils/logger'
+import { PlatformUtils } from '../utils/platform'
 import { StorageManager } from '../services/storage-manager'
 import { ValidationUtils } from '../utils/validation'
+import { getVideoInfoWithStreamingUrl } from '../services/downloader/yt-dlp-manager'
 
 const logger = Logger.getInstance()
 const downloadManager = DownloadManager.getInstance()
@@ -172,15 +174,67 @@ export function setupDownloadOperationHandlers(): void {
       return ValidationUtils.handleDownloadError(error)
     }
   })
+
+  // Get video info with streaming URL for editor preview
+  ipcMain.handle(IPC_CHANNELS.DOWNLOAD_STREAMING_INFO, async (_event, url: string) => {
+    try {
+      const urlValidation = ValidationUtils.validateUrl(url)
+      if (!urlValidation.isValid) {
+        return createErrorResponse(urlValidation.error || 'Invalid URL', 'INVALID_URL')
+      }
+
+      const { videoInfo, streamingUrl } = await getVideoInfoWithStreamingUrl(url)
+
+      logger.info('Got streaming info', { url, hasStreamingUrl: !!streamingUrl })
+
+      return createSuccessResponse({
+        videoInfo,
+        streamingUrl,
+      })
+    } catch (error) {
+      logger.error('Failed to get streaming info', error as Error, { url })
+      return ValidationUtils.handleDownloadError(error)
+    }
+  })
+}
+
+import { join } from 'path'
+
+const platform = PlatformUtils.getInstance()
+
+/**
+ * Get allowed file operation paths (downloads, cache, temp directories)
+ * This ensures file operations are restricted to safe directories
+ */
+function getAllowedFilePaths(): string[] {
+  const config = configManager.getAll()
+  const appDataDir = platform.getAppDataDir('clipy')
+
+  return [
+    join(appDataDir, 'downloads'),
+    join(appDataDir, 'cache'),
+    join(appDataDir, 'temp'),
+    config.download?.downloadPath || join(appDataDir, 'downloads'),
+    config.storage?.cachePath || join(appDataDir, 'cache'),
+    config.storage?.tempPath || join(appDataDir, 'temp'),
+  ].filter((p, i, arr) => arr.indexOf(p) === i) // Remove duplicates
 }
 
 /**
  * File Operation Handlers
+ * All file operations validate paths to prevent path traversal attacks
  */
 export function setupFileHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.FILE_EXISTS, async (_event, filePath: string) => {
     try {
-      const exists = await storageManager.fileExists(filePath)
+      // Validate path is within allowed directories
+      const pathValidation = ValidationUtils.validateSecurePath(filePath, getAllowedFilePaths())
+      if (!pathValidation.isValid) {
+        logger.warn('File exists check blocked - path not allowed', { filePath })
+        return createErrorResponse(pathValidation.error || 'Path not allowed', 'PATH_NOT_ALLOWED')
+      }
+
+      const exists = await storageManager.fileExists(pathValidation.value!)
       return createSuccessResponse(exists)
     } catch (error) {
       logger.error('Failed to check file existence', error as Error, { filePath })
@@ -190,7 +244,14 @@ export function setupFileHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.FILE_READ, async (_event, filePath: string) => {
     try {
-      const buffer = await storageManager.readFile(filePath)
+      // Validate path is within allowed directories
+      const pathValidation = ValidationUtils.validateSecurePath(filePath, getAllowedFilePaths())
+      if (!pathValidation.isValid) {
+        logger.warn('File read blocked - path not allowed', { filePath })
+        return createErrorResponse(pathValidation.error || 'Path not allowed', 'PATH_NOT_ALLOWED')
+      }
+
+      const buffer = await storageManager.readFile(pathValidation.value!)
       return createSuccessResponse(buffer)
     } catch (error) {
       logger.error('Failed to read file', error as Error, { filePath })
@@ -200,7 +261,14 @@ export function setupFileHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.FILE_WRITE, async (_event, filePath: string, data: Buffer) => {
     try {
-      await storageManager.writeFile(filePath, data)
+      // Validate path is within allowed directories
+      const pathValidation = ValidationUtils.validateSecurePath(filePath, getAllowedFilePaths())
+      if (!pathValidation.isValid) {
+        logger.warn('File write blocked - path not allowed', { filePath })
+        return createErrorResponse(pathValidation.error || 'Path not allowed', 'PATH_NOT_ALLOWED')
+      }
+
+      await storageManager.writeFile(pathValidation.value!, data)
       return createSuccessResponse(undefined)
     } catch (error) {
       logger.error('Failed to write file', error as Error, { filePath })
@@ -210,7 +278,14 @@ export function setupFileHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.FILE_DELETE, async (_event, filePath: string) => {
     try {
-      await storageManager.deleteFile(filePath)
+      // Validate path is within allowed directories
+      const pathValidation = ValidationUtils.validateSecurePath(filePath, getAllowedFilePaths())
+      if (!pathValidation.isValid) {
+        logger.warn('File delete blocked - path not allowed', { filePath })
+        return createErrorResponse(pathValidation.error || 'Path not allowed', 'PATH_NOT_ALLOWED')
+      }
+
+      await storageManager.deleteFile(pathValidation.value!)
       return createSuccessResponse(undefined)
     } catch (error) {
       logger.error('Failed to delete file', error as Error, { filePath })
@@ -368,6 +443,42 @@ export function setupProgressBroadcasting(): void {
 }
 
 /**
+ * Streaming Proxy Handlers
+ */
+import { getProxyUrl, isProxyRunning, getProxyPort } from '../services/streaming-proxy'
+
+export function setupProxyHandlers(): void {
+  // Get a proxied URL for a video stream
+  ipcMain.handle(IPC_CHANNELS.PROXY_GET_URL, async (_event, streamUrl: string) => {
+    try {
+      if (!streamUrl || typeof streamUrl !== 'string') {
+        return createErrorResponse('Stream URL is required', 'INVALID_URL')
+      }
+
+      if (!isProxyRunning()) {
+        return createErrorResponse('Streaming proxy is not running', 'PROXY_NOT_RUNNING')
+      }
+
+      const proxyUrl = getProxyUrl(streamUrl)
+      logger.info('Generated proxy URL', { originalUrl: streamUrl.substring(0, 50), proxyPort: getProxyPort() })
+
+      return createSuccessResponse({ proxyUrl })
+    } catch (error) {
+      logger.error('Failed to generate proxy URL', error as Error)
+      return createErrorResponse('Failed to generate proxy URL', 'PROXY_ERROR')
+    }
+  })
+
+  // Check proxy status
+  ipcMain.handle(IPC_CHANNELS.PROXY_STATUS, async () => {
+    return createSuccessResponse({
+      running: isProxyRunning(),
+      port: getProxyPort(),
+    })
+  })
+}
+
+/**
  * Setup all download handlers
  */
 export function setupDownloadHandlers(): void {
@@ -378,6 +489,7 @@ export function setupDownloadHandlers(): void {
   setupStorageHandlers()
   setupConfigHandlers()
   setupProgressBroadcasting()
+  setupProxyHandlers()
 
   logger.info('Download IPC handlers initialized successfully')
 }

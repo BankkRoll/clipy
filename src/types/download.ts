@@ -1,3 +1,8 @@
+/**
+ * Download Types
+ * Type definitions for video downloads, progress tracking, and error handling.
+ */
+
 export enum DownloadErrorCode {
   INVALID_URL = 'INVALID_URL',
   VIDEO_UNAVAILABLE = 'VIDEO_UNAVAILABLE',
@@ -143,6 +148,8 @@ export interface VideoFormatInfo {
   mimeType?: string
   url?: string
   contentLength?: number
+  /** Download protocol: 'https' for direct URLs, 'm3u8'/'m3u8_native' for HLS streams */
+  protocol?: string
 }
 
 export interface VideoInfo {

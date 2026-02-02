@@ -1,3 +1,8 @@
+/**
+ * LibraryHeader - Page header for Library view
+ * Shows title and "Download New" CTA button.
+ */
+
 import { Button } from '@/components/ui/button'
 import { Link } from '@tanstack/react-router'
 import { Download } from 'lucide-react'

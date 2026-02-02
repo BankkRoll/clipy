@@ -1,3 +1,8 @@
+/**
+ * Home Page
+ * Landing page with hero section and main call-to-action.
+ */
+
 import { HeroSection } from '@/components/home/hero-section'
 import React from 'react'
 

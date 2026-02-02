@@ -3,6 +3,21 @@
  * Single source of truth for all Inter-Process Communication channels
  */
 
+/**
+ * Allowed broadcast channels for renderer process event listeners.
+ * Only these channels can be listened to via contextBridge.
+ * This is a security measure to prevent unauthorized channel listening.
+ */
+export const ALLOWED_BROADCAST_CHANNELS = [
+  'download-progress-update',
+  'download-completed',
+  'download-failed',
+  'download-deleted',
+  'theme-changed',
+] as const
+
+export type AllowedBroadcastChannel = (typeof ALLOWED_BROADCAST_CHANNELS)[number]
+
 export const IPC_CHANNELS = {
   // Core System Operations
   WINDOW_MINIMIZE: 'window:minimize',
@@ -19,6 +34,7 @@ export const IPC_CHANNELS = {
   // Shell Operations
   SHELL_OPEN_PATH: 'shell:open-path',
   SHELL_SHOW_ITEM_IN_FOLDER: 'shell:show-item-in-folder',
+  SHELL_OPEN_EXTERNAL: 'shell:open-external',
 
   // Download Operations
   DOWNLOAD_START: 'download:start',
@@ -28,6 +44,7 @@ export const IPC_CHANNELS = {
   DOWNLOAD_PROGRESS: 'download:progress',
   DOWNLOAD_LIST: 'download:list',
   DOWNLOAD_INFO: 'download:info',
+  DOWNLOAD_STREAMING_INFO: 'download:streaming-info', // Get video info with streaming URL for editor preview
 
   // File Operations
   FILE_EXISTS: 'file:exists',
@@ -60,6 +77,10 @@ export const IPC_CHANNELS = {
   VIDEO_PREVIEW: 'video:preview',
   VIDEO_TRIM: 'video:trim',
   VIDEO_INFO: 'video:info',
+
+  // Streaming Proxy
+  PROXY_GET_URL: 'proxy:get-url', // Get proxy URL for a video stream
+  PROXY_STATUS: 'proxy:status', // Check if proxy is running
 } as const
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS]

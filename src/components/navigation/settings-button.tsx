@@ -1,3 +1,7 @@
+/**
+ * SettingsButton - Gear icon button linking to settings page
+ */
+
 import { Button } from '@/components/ui/button'
 import { Settings } from 'lucide-react'
 import { Link } from '@tanstack/react-router'

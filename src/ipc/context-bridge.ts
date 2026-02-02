@@ -3,12 +3,45 @@
  * Securely exposes Electron APIs to the renderer process
  */
 
-import { DownloadFilter, DownloadListData, DownloadOptions, DownloadProgress, VideoInfo } from '@/types/download'
+import { ALLOWED_BROADCAST_CHANNELS, IPC_CHANNELS } from './channels'
 import { AppConfig, StoragePaths, ThemeMode } from '@/types/system'
+import { DownloadFilter, DownloadListData, DownloadOptions, DownloadProgress, VideoInfo } from '@/types/download'
 import { contextBridge, ipcRenderer } from 'electron'
 
 import { ApiResponse } from '@/types/api'
-import { IPC_CHANNELS } from './channels'
+
+// Video processing types
+interface TrimOptions {
+  inputPath: string
+  outputPath?: string
+  startTime: number
+  endTime: number
+  quality?: 'low' | 'medium' | 'high'
+  codec?: 'copy' | 'h264' | 'h265'
+}
+
+interface ThumbnailOptions {
+  inputPath: string
+  outputDir?: string
+  count?: number
+  interval?: number
+  width?: number
+}
+
+interface WaveformOptions {
+  inputPath: string
+  samples?: number
+}
+
+interface VideoMetadata {
+  duration: number
+  width: number
+  height: number
+  bitrate: number
+  codec: string
+  size: number
+  fps: number
+}
 
 // Define the secure API interface
 interface ElectronAPI {
@@ -32,6 +65,7 @@ interface ElectronAPI {
   shell: {
     openPath: (filePath: string) => Promise<void>
     showItemInFolder: (filePath: string) => Promise<void>
+    openExternal: (url: string) => Promise<void>
   }
 
   // Download operations
@@ -43,13 +77,14 @@ interface ElectronAPI {
     getProgress: (downloadId?: string) => Promise<DownloadProgress | DownloadProgress[]>
     list: (filter?: DownloadFilter) => Promise<DownloadListData>
     getInfo: (url: string) => Promise<VideoInfo>
+    getStreamingInfo: (url: string) => Promise<{ videoInfo: VideoInfo; streamingUrl: string | null }>
   }
 
   // File operations
   fileSystem: {
     exists: (filePath: string) => Promise<boolean>
-    read: (filePath: string) => Promise<ApiResponse<Buffer | null>>
-    write: (filePath: string, data: Buffer) => Promise<ApiResponse<void>>
+    read: (filePath: string) => Promise<ApiResponse<Uint8Array | null>>
+    write: (filePath: string, data: Uint8Array) => Promise<ApiResponse<void>>
     delete: (filePath: string) => Promise<ApiResponse<void>>
   }
 
@@ -76,6 +111,23 @@ interface ElectronAPI {
     getStoragePaths: () => Promise<StoragePaths>
   }
 
+  // Video processing operations
+  videoProcessor: {
+    getInfo: (filePath: string) => Promise<ApiResponse<VideoMetadata>>
+    trim: (options: TrimOptions) => Promise<ApiResponse<{ outputPath: string; duration: number }>>
+    preview: (inputPath: string, timePosition: number) => Promise<ApiResponse<{ outputPath: string }>>
+    getThumbnails: (
+      options: ThumbnailOptions,
+    ) => Promise<ApiResponse<{ thumbnails: string[]; interval: number; duration: number }>>
+    getWaveform: (options: WaveformOptions) => Promise<ApiResponse<{ waveform: number[]; samples: number }>>
+  }
+
+  // Streaming proxy operations (for YouTube video preview)
+  streamingProxy: {
+    getProxyUrl: (streamUrl: string) => Promise<ApiResponse<{ proxyUrl: string }>>
+    getStatus: () => Promise<ApiResponse<{ running: boolean; port: number }>>
+  }
+
   // Event listeners
   on: (channel: string, listener: (...args: any[]) => void) => void
   removeListener: (channel: string, listener: (...args: any[]) => void) => void
@@ -98,6 +150,17 @@ interface OpenDialogOptions {
   title?: string
   defaultPath?: string
   filters?: Electron.FileFilter[]
+  properties?: Array<
+    | 'openFile'
+    | 'openDirectory'
+    | 'multiSelections'
+    | 'showHiddenFiles'
+    | 'createDirectory'
+    | 'promptToCreate'
+    | 'noResolveAliases'
+    | 'treatPackageAsDirectory'
+    | 'dontAddToRecent'
+  >
 }
 
 interface SaveDialogOptions {
@@ -140,6 +203,7 @@ function createSecureAPI(): ElectronAPI {
     shell: {
       openPath: (filePath: string) => ipcRenderer.invoke(IPC_CHANNELS.SHELL_OPEN_PATH, filePath),
       showItemInFolder: (filePath: string) => ipcRenderer.invoke(IPC_CHANNELS.SHELL_SHOW_ITEM_IN_FOLDER, filePath),
+      openExternal: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.SHELL_OPEN_EXTERNAL, url),
     },
 
     // Download operations
@@ -151,13 +215,14 @@ function createSecureAPI(): ElectronAPI {
       getProgress: (downloadId?: string) => ipcRenderer.invoke(IPC_CHANNELS.DOWNLOAD_PROGRESS, downloadId),
       list: (filter?: DownloadFilter) => ipcRenderer.invoke(IPC_CHANNELS.DOWNLOAD_LIST, filter),
       getInfo: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.DOWNLOAD_INFO, url),
+      getStreamingInfo: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.DOWNLOAD_STREAMING_INFO, url),
     },
 
     // File operations
     fileSystem: {
       exists: (filePath: string) => ipcRenderer.invoke(IPC_CHANNELS.FILE_EXISTS, filePath),
       read: (filePath: string) => ipcRenderer.invoke(IPC_CHANNELS.FILE_READ, filePath),
-      write: (filePath: string, data: Buffer) => ipcRenderer.invoke(IPC_CHANNELS.FILE_WRITE, filePath, data),
+      write: (filePath: string, data: Uint8Array) => ipcRenderer.invoke(IPC_CHANNELS.FILE_WRITE, filePath, data),
       delete: (filePath: string) => ipcRenderer.invoke(IPC_CHANNELS.FILE_DELETE, filePath),
     },
 
@@ -184,18 +249,27 @@ function createSecureAPI(): ElectronAPI {
       getStoragePaths: () => ipcRenderer.invoke(IPC_CHANNELS.STORAGE_PATHS),
     },
 
-    // Event listeners (secure wrapper)
-    on: (channel: string, listener: (...args: any[]) => void) => {
-      // Only allow specific channels for security
-      const allowedChannels = [
-        'download-progress-update',
-        'download-completed',
-        'download-failed',
-        'download-deleted',
-        'theme-changed',
-      ]
+    // Video processing operations
+    videoProcessor: {
+      getInfo: (filePath: string) => ipcRenderer.invoke(IPC_CHANNELS.VIDEO_INFO, filePath),
+      trim: (options: TrimOptions) => ipcRenderer.invoke(IPC_CHANNELS.VIDEO_TRIM, options),
+      preview: (inputPath: string, timePosition: number) =>
+        ipcRenderer.invoke(IPC_CHANNELS.VIDEO_PREVIEW, inputPath, timePosition),
+      getThumbnails: (options: ThumbnailOptions) => ipcRenderer.invoke('video:thumbnails', options),
+      getWaveform: (options: WaveformOptions) => ipcRenderer.invoke('video:waveform', options),
+    },
 
-      if (allowedChannels.includes(channel)) {
+    // Streaming proxy operations (for YouTube video preview)
+    streamingProxy: {
+      getProxyUrl: (streamUrl: string) => ipcRenderer.invoke(IPC_CHANNELS.PROXY_GET_URL, streamUrl),
+      getStatus: () => ipcRenderer.invoke(IPC_CHANNELS.PROXY_STATUS),
+    },
+
+    // Event listeners (secure wrapper)
+    // Uses ALLOWED_BROADCAST_CHANNELS from channels.ts as single source of truth
+    on: (channel: string, listener: (...args: any[]) => void) => {
+      // Only allow specific channels for security (type-safe check)
+      if ((ALLOWED_BROADCAST_CHANNELS as readonly string[]).includes(channel)) {
         ipcRenderer.on(channel, listener)
       } else {
         console.warn(`Attempted to listen to unauthorized channel: ${channel}`)
@@ -203,29 +277,13 @@ function createSecureAPI(): ElectronAPI {
     },
 
     removeListener: (channel: string, listener: (...args: any[]) => void) => {
-      const allowedChannels = [
-        'download-progress-update',
-        'download-completed',
-        'download-failed',
-        'download-deleted',
-        'theme-changed',
-      ]
-
-      if (allowedChannels.includes(channel)) {
+      if ((ALLOWED_BROADCAST_CHANNELS as readonly string[]).includes(channel)) {
         ipcRenderer.removeListener(channel, listener)
       }
     },
 
     once: (channel: string, listener: (...args: any[]) => void) => {
-      const allowedChannels = [
-        'download-progress-update',
-        'download-completed',
-        'download-failed',
-        'download-deleted',
-        'theme-changed',
-      ]
-
-      if (allowedChannels.includes(channel)) {
+      if ((ALLOWED_BROADCAST_CHANNELS as readonly string[]).includes(channel)) {
         ipcRenderer.once(channel, listener)
       }
     },

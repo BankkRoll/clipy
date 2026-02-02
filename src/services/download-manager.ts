@@ -1,6 +1,14 @@
 /**
  * Download Manager Service
- * Orchestrates video downloads, progress tracking, and queue management
+ *
+ * High-level orchestration layer for video downloads. Provides:
+ * - Queue management with configurable concurrency
+ * - Job state tracking (active, completed, failed)
+ * - Event-based progress updates to renderer
+ * - Retry support for failed downloads
+ *
+ * Uses yt-dlp-manager internally for actual download execution.
+ * This is the main entry point for download operations from IPC handlers.
  */
 
 import type { DownloadFilter, DownloadOptions, DownloadProgress, VideoInfo } from '../types/download'
@@ -18,14 +26,15 @@ import { Logger } from '../utils/logger'
 import { VideoCache } from './video-cache'
 import { VideoProcessor } from './video-processor'
 
+/** Represents a download task in the queue */
 export interface DownloadJob {
-  id: string
-  url: string
-  options: DownloadOptions
-  progress: DownloadProgress
-  createdAt: number
-  startedAt?: number
-  completedAt?: number
+  id: string // Internal job ID (different from yt-dlp's downloadId)
+  url: string // Source URL
+  options: DownloadOptions // User-specified options (quality, format, etc.)
+  progress: DownloadProgress // Current download state and progress
+  createdAt: number // Timestamp when job was created
+  startedAt?: number // Timestamp when download actually started
+  completedAt?: number // Timestamp when download finished
 }
 
 export class DownloadManager extends EventEmitter {
@@ -36,6 +45,8 @@ export class DownloadManager extends EventEmitter {
   private jobQueue: DownloadJob[] = []
   private maxConcurrentDownloads: number
   private isProcessing = false
+  // Maps yt-dlp downloadId to job.id for event lookup
+  private downloadIdToJobId = new Map<string, string>()
 
   private configManager = ConfigManager.getInstance()
   private logger = Logger.getInstance()
@@ -82,31 +93,51 @@ export class DownloadManager extends EventEmitter {
     // Forward events from the yt-dlp manager
     addEventListener('progress', (...args: unknown[]) => {
       const progress = args[0] as DownloadProgress
+      // Update the job's progress in activeJobs
+      const jobId = this.downloadIdToJobId.get(progress.downloadId)
+      if (jobId) {
+        const job = this.activeJobs.get(jobId)
+        if (job) {
+          job.progress = progress
+        }
+      }
       this.emit('progress', progress)
     })
 
     addEventListener('completed', (...args: unknown[]) => {
       const progress = args[0] as DownloadProgress
-      const job = this.activeJobs.get(progress.downloadId)
+      // Look up job using the downloadId -> jobId map
+      const jobId = this.downloadIdToJobId.get(progress.downloadId)
+      const job = jobId ? this.activeJobs.get(jobId) : null
       if (job) {
         job.progress = progress
         job.completedAt = Date.now()
         this.completedJobs.set(job.id, job)
         this.activeJobs.delete(job.id)
+        this.downloadIdToJobId.delete(progress.downloadId)
+        this.logger.info('Download completed', { jobId: job.id, downloadId: progress.downloadId })
         this.emit('completed', progress)
         this.processQueue()
+      } else {
+        this.logger.warn('Received completion for unknown download', { downloadId: progress.downloadId })
       }
     })
 
     addEventListener('failed', (...args: unknown[]) => {
       const progress = args[0] as DownloadProgress
-      const job = this.activeJobs.get(progress.downloadId)
+      // Look up job using the downloadId -> jobId map
+      const jobId = this.downloadIdToJobId.get(progress.downloadId)
+      const job = jobId ? this.activeJobs.get(jobId) : null
       if (job) {
         job.progress = progress
         this.failedJobs.set(job.id, job)
         this.activeJobs.delete(job.id)
+        this.downloadIdToJobId.delete(progress.downloadId)
+        this.logger.info('Download failed', { jobId: job.id, downloadId: progress.downloadId })
         this.emit('failed', progress)
         this.processQueue()
+      } else {
+        this.logger.warn('Received failure for unknown download', { downloadId: progress.downloadId })
       }
     })
   }
@@ -211,14 +242,18 @@ export class DownloadManager extends EventEmitter {
       this.activeJobs.set(job.id, job)
 
       // Use yt-dlp manager for actual download
-      const result = await startDownload(job.url, job.options)
-      job.progress.downloadId = result
+      const downloadId = await startDownload(job.url, job.options)
+      job.progress.downloadId = downloadId
 
-      this.logger.info('Download job started', { jobId: job.id, downloadId: result })
+      // Create mapping from yt-dlp downloadId to our job.id for event lookup
+      this.downloadIdToJobId.set(downloadId, job.id)
+
+      this.logger.info('Download job started', { jobId: job.id, downloadId })
     } catch (error) {
       this.logger.error('Failed to start job', error as Error, { jobId: job.id })
       job.progress.status = 'failed'
       this.failedJobs.set(job.id, job)
+      this.activeJobs.delete(job.id)
       this.emit('failed', job.progress)
     }
   }
@@ -238,6 +273,10 @@ export class DownloadManager extends EventEmitter {
       if (cancelled) {
         job.progress.status = 'cancelled'
         this.activeJobs.delete(downloadId)
+        // Clean up downloadId mapping
+        if (job.progress.downloadId) {
+          this.downloadIdToJobId.delete(job.progress.downloadId)
+        }
         this.emit('cancelled', job.progress)
         this.processQueue() // Process next in queue
       }

@@ -1,3 +1,8 @@
+/**
+ * HeroSection - Home page hero component
+ * Main landing area with URL input, quick links (Library, Settings), and feature highlights.
+ */
+
 import { Card, CardContent } from '@/components/ui/card'
 import { CheckCircle, Clock, FolderOpen, Link as LinkIcon, Settings, Shield, Sparkles } from 'lucide-react'
 import { Link, useNavigate } from '@tanstack/react-router'

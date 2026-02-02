@@ -1,3 +1,8 @@
+/**
+ * English Language Pack
+ * All UI strings for the English locale.
+ */
+
 export const en = {
   translation: {
     // App Info
@@ -145,7 +150,13 @@ export const en = {
     settingsThumbnailCache: 'Thumbnail Cache',
     settingsItems: 'items',
     settingsClearCache: 'Clear Cache',
+    settingsClearCacheDesc: 'Clear cached thumbnails and metadata',
     settingsClearThumbnails: 'Clear Thumbnails',
+    settingsClearTemp: 'Clear Temp',
+    settingsCleanTempDesc: 'Clean up temporary download files',
+    settingsNotSet: 'Not set',
+    settingsUnknown: 'Unknown',
+    settingsSelectDownloadFolder: 'Select Download Folder',
     settingsAutoCleanupTitle: 'Auto-cleanup',
     settingsAutoCleanupDesc: 'Cache files are automatically cleaned when they exceed 1GB or are older than 30 days.',
     settingsDownloadLocations: 'Download Locations',
@@ -306,6 +317,7 @@ export const en = {
 
     // Status
     statusGettingInfo: 'Getting video info...',
+    loading: 'Loading...',
 
     // Quality & Format
     quality4k: '4K',
@@ -325,6 +337,8 @@ export const en = {
     btnLoading: 'Loading...',
 
     // Actions
+    actionEdit: 'Edit',
+    actionPreview: 'Preview',
     actionOpenFile: 'Open File',
     actionOpenFolder: 'Open Folder',
     actionDelete: 'Delete',

@@ -1,3 +1,8 @@
+/**
+ * DragWindowRegion - Custom title bar with window controls
+ * Draggable region for moving the window + minimize/maximize/close buttons.
+ */
+
 import { Minus, Square, X } from 'lucide-react'
 
 import React from 'react'

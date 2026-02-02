@@ -3,7 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <title>Clipy</title>
-    <meta http-equiv="Content-Security-Policy" content="script-src 'self';" />
+    <!--
+      Content Security Policy (CSP)
+      - default-src 'self': Only allow resources from same origin by default
+      - script-src 'self': Only allow scripts from same origin (no inline, no eval)
+      - style-src 'self' 'unsafe-inline': Allow styles from same origin + inline styles (required for Tailwind)
+      - img-src 'self' data: https: clipy-file:: Allow images from same origin, data URIs, HTTPS, and clipy-file protocol (thumbnails)
+      - media-src 'self' file: blob: https: clipy-file:: Allow media from same origin, local files, blobs, HTTPS, and clipy-file (video playback)
+      - connect-src 'self' https: http://127.0.0.1:* clipy-file:: Allow connections to same origin, HTTPS APIs, local proxy, and clipy-file protocol
+      - font-src 'self': Only allow fonts from same origin
+      - object-src 'none': Disallow plugins (Flash, etc.)
+      - base-uri 'self': Restrict base tag to same origin
+      - form-action 'self': Restrict form submissions to same origin
+      - frame-ancestors 'none': Prevent embedding in iframes (clickjacking protection)
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: clipy-file:; media-src 'self' file: blob: https: clipy-file: http://127.0.0.1:*; connect-src 'self' https: http://127.0.0.1:* clipy-file:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';"
+    />
     <link rel="stylesheet" href="/src/styles/global.css" />
   </head>
   <body>

@@ -1,3 +1,12 @@
+/**
+ * Clipy - Renderer Process Entry Point
+ *
+ * Root React component that initializes:
+ * - Theme (dark/light/system) from main process config
+ * - i18n language from localStorage
+ * - TanStack Router for navigation
+ */
+
 import './localization/i18n'
 
 import React, { useEffect } from 'react'
@@ -11,8 +20,9 @@ import { useTranslation } from 'react-i18next'
 export default function App() {
   const { i18n } = useTranslation()
 
+  // Initialize theme and language on mount
   useEffect(() => {
-    // Get current theme from main process
+    // Fetch theme preference from main process config
     const loadTheme = async () => {
       try {
         const response = await window.electronAPI.theme.get()
@@ -30,18 +40,19 @@ export default function App() {
       }
     }
 
+    // Apply theme by toggling 'dark' class on <html>
+    // System theme relies on CSS prefers-color-scheme media query
     const applyTheme = (theme: string) => {
       if (theme === 'dark') {
         document.documentElement.classList.add('dark')
       } else if (theme === 'light') {
         document.documentElement.classList.remove('dark')
       }
-      // 'system' theme is handled by CSS media queries
     }
 
     loadTheme()
 
-    // Update language from localStorage (maintained for backward compatibility)
+    // Restore saved language (backward compat with old 'lang' key)
     const savedLang = localStorage.getItem('i18nextLng') || localStorage.getItem('lang')
     if (savedLang) {
       i18n.changeLanguage(savedLang)
@@ -52,6 +63,7 @@ export default function App() {
   return <RouterProvider router={router} />
 }
 
+// Mount the app to the DOM
 const root = createRoot(document.getElementById('app')!)
 root.render(
   <React.StrictMode>

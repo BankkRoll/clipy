@@ -3,12 +3,13 @@
  * Handles video processing operations: trimming, preview generation, format conversion
  */
 
-import { dirname, extname, join } from 'path'
+import { dirname, extname } from 'path'
 
 import { ConfigManager } from '../utils/config'
 import { FileSystemUtils } from '../utils/file-system'
 import { Logger } from '../utils/logger'
-import { existsSync } from 'fs'
+import { PlatformUtils } from '../utils/platform'
+import { existsSync, statSync } from 'fs'
 import { spawn } from 'child_process'
 
 export interface TimeRange {
@@ -53,26 +54,19 @@ export class VideoProcessor {
   }
 
   /**
-   * Initialize FFmpeg path
+   * Initialize FFmpeg path using cross-platform resolution
    */
   private initializeFFmpeg(): void {
-    // Try to find FFmpeg in resources or system PATH
-    const possiblePaths = [
-      join(process.cwd(), 'resources', 'ffmpeg.exe'),
-      join(process.cwd(), 'resources', 'ffmpeg'),
-      'ffmpeg', // System PATH
-    ]
+    const platform = PlatformUtils.getInstance()
+    const resolved = platform.resolveExecutable('ffmpeg')
 
-    for (const path of possiblePaths) {
-      if (existsSync(path) || path === 'ffmpeg') {
-        this.ffmpegPath = path
-        this.logger.info('FFmpeg found', { path })
-        break
-      }
-    }
-
-    if (!this.ffmpegPath) {
-      this.logger.warn('FFmpeg not found - video processing will be limited')
+    if (resolved) {
+      this.ffmpegPath = resolved
+      this.logger.info('FFmpeg found', { path: resolved })
+    } else {
+      // Fallback to system PATH
+      this.ffmpegPath = 'ffmpeg'
+      this.logger.warn('FFmpeg not found in resources, falling back to system PATH')
     }
   }
 
@@ -158,33 +152,47 @@ export class VideoProcessor {
   }
 
   /**
-   * Get video metadata using ffprobe
+   * Get video metadata using ffprobe (with ffmpeg fallback)
    */
   async getVideoMetadata(filePath: string): Promise<VideoMetadata> {
+    // First try ffprobe (preferred, more accurate)
     try {
       const ffprobePath = this.ffmpegPath?.replace('ffmpeg', 'ffprobe') ?? 'ffprobe'
 
-      const args = ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', filePath]
+      // Check if ffprobe exists before trying to use it
+      const ffprobeExists = existsSync(ffprobePath) || ffprobePath === 'ffprobe'
 
-      const result = await this.executeFFprobe(ffprobePath, args)
-      const data = JSON.parse(result)
+      if (ffprobeExists) {
+        const args = ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', filePath]
 
-      const videoStream = data.streams.find((s: any) => s.codec_type === 'video')
-      const format = data.format
+        const result = await this.executeFFprobe(ffprobePath, args)
+        const data = JSON.parse(result)
 
-      if (!videoStream) {
-        throw new Error('No video stream found')
+        const videoStream = data.streams.find((s: any) => s.codec_type === 'video')
+        const format = data.format
+
+        if (!videoStream) {
+          throw new Error('No video stream found')
+        }
+
+        return {
+          duration: parseFloat(format.duration) || 0,
+          width: videoStream.width || 0,
+          height: videoStream.height || 0,
+          bitrate: parseInt(format.bit_rate) || 0,
+          codec: videoStream.codec_name || 'unknown',
+          size: parseInt(format.size) || 0,
+          fps: this.parseFrameRate(videoStream.r_frame_rate) || 0,
+        }
       }
+    } catch (error) {
+      this.logger.warn('FFprobe failed, falling back to ffmpeg', { error: (error as Error).message })
+    }
 
-      return {
-        duration: parseFloat(format.duration) || 0,
-        width: videoStream.width || 0,
-        height: videoStream.height || 0,
-        bitrate: parseInt(format.bit_rate) || 0,
-        codec: videoStream.codec_name || 'unknown',
-        size: parseInt(format.size) || 0,
-        fps: this.parseFrameRate(videoStream.r_frame_rate) || 0,
-      }
+    // Fallback: use ffmpeg -i to parse metadata
+    try {
+      this.logger.info('Using ffmpeg fallback for metadata extraction', { filePath })
+      return await this.getMetadataViaFFmpeg(filePath)
     } catch (error) {
       this.logger.error('Failed to get video metadata', error as Error, { filePath })
       throw new Error(`Failed to get video metadata: ${(error as Error).message}`)
@@ -525,5 +533,107 @@ export class VideoProcessor {
         reject(error)
       })
     })
+  }
+
+  /**
+   * Get video metadata using ffmpeg -i (fallback when ffprobe not available)
+   * Parses the stderr output from ffmpeg which contains video information
+   */
+  private async getMetadataViaFFmpeg(filePath: string): Promise<VideoMetadata> {
+    return new Promise((resolve, reject) => {
+      if (!this.ffmpegPath) {
+        reject(new Error('FFmpeg not available'))
+        return
+      }
+
+      this.logger.debug('Getting metadata via ffmpeg -i', { filePath })
+
+      // ffmpeg -i <file> outputs info to stderr and exits with error (no output file)
+      const ffmpeg = spawn(this.ffmpegPath, ['-i', filePath], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        cwd: process.cwd(),
+      })
+
+      let stderr = ''
+
+      ffmpeg.stderr?.on('data', data => {
+        stderr += data.toString()
+      })
+
+      ffmpeg.on('close', () => {
+        // ffmpeg -i always exits with code 1 when no output specified, but that's fine
+        try {
+          const metadata = this.parseFFmpegOutput(stderr, filePath)
+          this.logger.debug('Parsed metadata from ffmpeg', { metadata })
+          resolve(metadata)
+        } catch (error) {
+          this.logger.error('Failed to parse ffmpeg output', error as Error, { stderr })
+          reject(error)
+        }
+      })
+
+      ffmpeg.on('error', error => {
+        this.logger.error('FFmpeg process error', error)
+        reject(error)
+      })
+    })
+  }
+
+  /**
+   * Parse ffmpeg -i output to extract video metadata
+   * Example output:
+   *   Duration: 00:05:10.23, start: 0.000000, bitrate: 1234 kb/s
+   *   Stream #0:0: Video: h264, yuv420p, 1920x1080, 30 fps
+   */
+  private parseFFmpegOutput(output: string, filePath: string): VideoMetadata {
+    const metadata: VideoMetadata = {
+      duration: 0,
+      width: 0,
+      height: 0,
+      bitrate: 0,
+      codec: 'unknown',
+      size: 0,
+      fps: 0,
+    }
+
+    // Parse duration: "Duration: 00:05:10.23"
+    const durationMatch = output.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i)
+    if (durationMatch) {
+      const hours = parseInt(durationMatch[1], 10)
+      const minutes = parseInt(durationMatch[2], 10)
+      const seconds = parseFloat(durationMatch[3])
+      metadata.duration = hours * 3600 + minutes * 60 + seconds
+    }
+
+    // Parse bitrate: "bitrate: 1234 kb/s"
+    const bitrateMatch = output.match(/bitrate:\s*(\d+)\s*kb\/s/i)
+    if (bitrateMatch) {
+      metadata.bitrate = parseInt(bitrateMatch[1], 10) * 1000 // Convert to bits
+    }
+
+    // Parse video stream: "Stream #0:0: Video: h264, yuv420p, 1920x1080"
+    // or "Stream #0:0(und): Video: h264 (High), ..."
+    const videoStreamMatch = output.match(/Stream\s+#\d+:\d+[^:]*:\s*Video:\s*([^\s,]+)[^,]*,\s*[^,]+,\s*(\d+)x(\d+)/i)
+    if (videoStreamMatch) {
+      metadata.codec = videoStreamMatch[1]
+      metadata.width = parseInt(videoStreamMatch[2], 10)
+      metadata.height = parseInt(videoStreamMatch[3], 10)
+    }
+
+    // Parse fps: "30 fps" or "29.97 fps" or "30 tbr"
+    const fpsMatch = output.match(/(\d+(?:\.\d+)?)\s*(?:fps|tbr)/i)
+    if (fpsMatch) {
+      metadata.fps = parseFloat(fpsMatch[1])
+    }
+
+    // Try to get file size from filesystem
+    try {
+      const stats = statSync(filePath)
+      metadata.size = stats.size
+    } catch {
+      // Ignore file size errors
+    }
+
+    return metadata
   }
 }

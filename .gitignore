@@ -91,14 +91,35 @@ dist/
 
 # Electron-Forge
 out/
-/test-results/
-/playwright-report/
-/blob-report/
-/playwright/.cache/
+
+# Playwright
 /test-results/
 /playwright-report/
 /blob-report/
 /playwright/.cache/
 
+# IDE
+/.cursor/
+.idea/
+*.swp
+*.swo
 
-/.cursor/*
+# pnpm
+pnpm-debug.log*
+
+# Local env files
+.env.local
+.env.*.local
+
+# Electron
+*.asar
+
+# Claude Code
+.agents/
+.claude/
+
+# Binary resources (download separately or via release)
+resources/ffmpeg
+resources/ffmpeg.exe
+resources/yt-dlp
+resources/yt-dlp.exe

@@ -1,3 +1,8 @@
+/**
+ * Spanish Language Pack
+ * All UI strings for the Spanish locale.
+ */
+
 export const es = {
   translation: {
     appName: 'Clipy',
@@ -124,7 +129,13 @@ export const es = {
     settingsThumbnailCache: 'Caché de miniaturas',
     settingsItems: 'elementos',
     settingsClearCache: 'Limpiar caché',
+    settingsClearCacheDesc: 'Limpiar miniaturas y metadatos en caché',
     settingsClearThumbnails: 'Limpiar miniaturas de usuario de cache',
+    settingsClearTemp: 'Limpiar temp',
+    settingsCleanTempDesc: 'Limpiar archivos de descarga temporales',
+    settingsNotSet: 'No configurado',
+    settingsUnknown: 'Desconocido',
+    settingsSelectDownloadFolder: 'Seleccionar carpeta de descarga',
     settingsAutoCleanupTitle: 'Limpieza automática',
     settingsAutoCleanupDesc:
       'Los archivos de caché se limpian automáticamente cuando superan los 1 GB o tienen más de 30 días.',
@@ -275,6 +286,7 @@ export const es = {
     msgUnableToPlayVideoPreview:
       'No se puede reproducir el vídeo en la vista previa. El archivo puede estar dañado o faltar.',
     statusGettingInfo: 'Obteniendo información del vídeo...',
+    loading: 'Cargando...',
     quality4k: '4K',
     quality1440p: '1440p',
     quality1080p: '1080p',
@@ -288,8 +300,10 @@ export const es = {
     formatMKV: 'mkv',
     btnReset: 'Reiniciar',
     btnLoading: 'Cargando...',
-    actionOpenFile: 'Open File',
-    actionOpenFolder: 'Open Folder',
+    actionEdit: 'Editar',
+    actionPreview: 'Vista previa',
+    actionOpenFile: 'Abrir archivo',
+    actionOpenFolder: 'Abrir carpeta',
     actionDelete: 'Eliminar',
     actionRetry: 'Reintentar',
     confirmDeleteTitle: 'Eliminar descarga',

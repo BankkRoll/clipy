@@ -1,3 +1,8 @@
+/**
+ * AppNavigationMenu - Main navigation header
+ * Desktop nav links + mobile hamburger menu with theme toggle and settings.
+ */
+
 import { FolderOpen, Home, Menu, Settings } from 'lucide-react'
 import { Link, useLocation } from '@tanstack/react-router'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'

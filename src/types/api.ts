@@ -1,5 +1,9 @@
-import type { DownloadListData, DownloadProgress, VideoInfo } from './download'
+/**
+ * API Response Types
+ * Standardized response shapes for IPC communication between main and renderer.
+ */
 
+import type { DownloadListData, DownloadProgress, VideoInfo } from './download'
 import type { ThemeMode } from './system'
 
 export interface BaseResponse {

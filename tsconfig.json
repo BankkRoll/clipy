@@ -1,25 +1,36 @@
 {
   "compilerOptions": {
-    "jsx": "react-jsx",
+    // Language & Environment
     "target": "ESNext",
-    "module": "CommonJS",
-    "lib": ["dom", "ESNext"],
-    "experimentalDecorators": true,
-    "composite": true,
-    "declaration": true,
-    "forceConsistentCasingInFileNames": true,
-    "allowJs": false,
-    "esModuleInterop": true,
-    "noImplicitAny": true,
-    "sourceMap": true,
-    "strict": true,
-    "baseUrl": ".",
+    "lib": ["DOM", "DOM.Iterable", "ESNext"],
+    "jsx": "react-jsx",
+    "useDefineForClassFields": true,
+
+    // Modules
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
     "paths": {
       "@/*": ["./src/*"]
     },
-    "outDir": "dist",
-    "moduleResolution": "node",
-    "resolveJsonModule": true
+
+    // Emit (Vite handles transpilation)
+    "noEmit": true,
+
+    // Interop
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+
+    // Type Checking (strict mode)
+    "strict": true,
+    "noFallthroughCasesInSwitch": true,
+
+    // Performance
+    "skipLibCheck": true
   },
-  "include": ["src/**/*", "./package.json", "./forge.config.ts"]
+  "include": ["src/**/*", "forge.config.ts"],
+  "exclude": ["node_modules", "dist", ".vite"]
 }
