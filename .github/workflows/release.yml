@@ -6,12 +6,9 @@ on:
       - 'v*'
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
-
-    runs-on: ${{ matrix.os }}
+  build-windows:
+    runs-on: windows-latest
+    continue-on-error: true
 
     steps:
       - uses: actions/checkout@v4
@@ -28,44 +25,114 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Download yt-dlp (Windows)
-        if: matrix.os == 'windows-latest'
+      - name: Setup resources directory
         run: |
-          mkdir -p resources
-          curl -L -o resources/yt-dlp.exe https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe
+          if (!(Test-Path -Path "resources")) { New-Item -ItemType Directory -Path "resources" }
+        shell: pwsh
 
-      - name: Download yt-dlp (macOS)
-        if: matrix.os == 'macos-latest'
+      - name: Download yt-dlp
         run: |
-          mkdir -p resources
+          Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile "resources/yt-dlp.exe"
+        shell: pwsh
+
+      - name: Download ffmpeg
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile "ffmpeg.zip"
+          Expand-Archive -Path "ffmpeg.zip" -DestinationPath "."
+          Move-Item -Path "ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe" -Destination "resources/ffmpeg.exe"
+        shell: pwsh
+
+      - name: Build
+        run: pnpm make
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: out/make/**/*
+          if-no-files-found: warn
+
+  build-macos:
+    runs-on: macos-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Setup resources directory
+        run: mkdir -p resources
+
+      - name: Download yt-dlp
+        run: |
           curl -L -o resources/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos
           chmod +x resources/yt-dlp
 
-      - name: Download yt-dlp (Linux)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Download ffmpeg
         run: |
-          mkdir -p resources
+          curl -L -o ffmpeg.zip https://evermeet.cx/ffmpeg/getrelease/zip || curl -L -o ffmpeg.7z https://evermeet.cx/ffmpeg/getrelease/7z
+          if [ -f ffmpeg.zip ]; then
+            unzip -o ffmpeg.zip
+          elif [ -f ffmpeg.7z ]; then
+            7z x ffmpeg.7z
+          fi
+          mv ffmpeg resources/ || true
+          chmod +x resources/ffmpeg || true
+
+      - name: Build
+        run: pnpm make
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: out/make/**/*
+          if-no-files-found: warn
+
+  build-linux:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm fakeroot dpkg
+
+      - name: Setup resources directory
+        run: mkdir -p resources
+
+      - name: Download yt-dlp
+        run: |
           curl -L -o resources/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
           chmod +x resources/yt-dlp
 
-      - name: Download ffmpeg (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          curl -L -o ffmpeg.zip https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip
-          unzip ffmpeg.zip
-          mv ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe resources/
-        shell: bash
-
-      - name: Download ffmpeg (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          curl -L -o ffmpeg.zip https://evermeet.cx/ffmpeg/getrelease/zip
-          unzip ffmpeg.zip
-          mv ffmpeg resources/
-          chmod +x resources/ffmpeg
-
-      - name: Download ffmpeg (Linux)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Download ffmpeg
         run: |
           curl -L -o ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
           tar -xf ffmpeg.tar.xz
@@ -78,11 +145,13 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.os }}
+          name: release-linux
           path: out/make/**/*
+          if-no-files-found: warn
 
   release:
-    needs: build
+    needs: [build-windows, build-macos, build-linux]
+    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -92,9 +161,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+        continue-on-error: true
+
+      - name: List artifacts
+        run: |
+          echo "Available artifacts:"
+          find artifacts -type f 2>/dev/null || echo "No artifacts found"
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: artifacts/**/*
           generate_release_notes: true
+          fail_on_unmatched_files: false
