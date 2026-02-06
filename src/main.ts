@@ -290,13 +290,8 @@ function createWindow() {
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL)
   } else {
-    const indexPath = path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`)
-    logger.info('Loading production index.html', { indexPath, __dirname, MAIN_WINDOW_VITE_NAME })
-    mainWindow.loadFile(indexPath)
+    mainWindow.loadFile(path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`))
   }
-
-  // Open devTools for debugging (remove in final release)
-  mainWindow.webContents.openDevTools()
 
   mainWindow.show()
 
