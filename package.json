@@ -58,12 +58,7 @@
     "publish": "electron-forge publish",
     "lint": "eslint .",
     "format": "prettier --check .",
-    "format:write": "prettier --write .",
-    "translate": "ts-node scripts/translate.ts",
-    "translate:all": "ts-node scripts/translate.ts all",
-    "translate:list": "ts-node scripts/translate.ts list",
-    "translate:status": "ts-node scripts/translate.ts status",
-    "translate:update": "ts-node scripts/update-i18n.ts"
+    "format:write": "prettier --write ."
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.8.1",
@@ -97,8 +92,11 @@
     "eslint-plugin-react-compiler": "^19.1.0-rc.1",
     "globals": "^16.2.0",
     "jsdom": "^26.0.0",
+    "png-to-ico": "^3.0.1",
+    "png2icons": "^2.0.1",
     "prettier": "^3.5.3",
     "prettier-plugin-tailwindcss": "^0.6.13",
+    "sharp": "^0.34.5",
     "tailwindcss": "^4.1.7",
     "tailwindcss-animate": "^1.0.7",
     "ts-node": "^10.9.2",

@@ -175,7 +175,7 @@ function setupYouTubeCORSBypass(win: BrowserWindow): void {
     callback({ responseHeaders })
   })
 
-  logger.info('YouTube CORS bypass configured', { filters: youtubeFilter.urls })
+  logger.info('CORS proxy running', { filters: youtubeFilter.urls })
 }
 
 /**
@@ -186,6 +186,11 @@ function createWindow() {
   const preload = path.join(__dirname, 'preload.js')
   const windowState = getWindowState()
 
+  // Get icon path - different for dev vs packaged
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar', '.vite', 'renderer', 'main_window', 'assets', 'icon.ico')
+    : path.join(__dirname, '..', 'src', 'assets', 'icon.ico')
+
   const mainWindow = new BrowserWindow({
     width: windowState.width,
     height: windowState.height,
@@ -193,6 +198,7 @@ function createWindow() {
     y: windowState.y,
     minWidth: 800,
     minHeight: 600,
+    icon: iconPath,
     webPreferences: {
       devTools: inDevelopment,
       contextIsolation: true,

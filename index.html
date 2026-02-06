@@ -1,12 +1,13 @@
 <!doctype html>
 <html>
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/src/assets/logo-dark.svg" media="(prefers-color-scheme: dark)" />
-    <link rel="icon" type="image/svg+xml" href="/src/assets/logo-light.svg" media="(prefers-color-scheme: light)" />
-    <link rel="icon" type="image/x-icon" href="/src/assets/icon.ico" />
-    <title>Clipy</title>
-    <!--
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/src/assets/logo-dark.svg" media="(prefers-color-scheme: dark)" />
+  <link rel="icon" type="image/svg+xml" href="/src/assets/logo-light.svg" media="(prefers-color-scheme: light)" />
+  <link rel="icon" type="image/x-icon" href="/src/assets/icon.ico" />
+  <title>Clipy</title>
+  <!--
       Content Security Policy (CSP)
       - default-src 'self': Only allow resources from same origin by default
       - script-src 'self': Only allow scripts from same origin (no inline, no eval)
@@ -20,14 +21,14 @@
       - form-action 'self': Restrict form submissions to same origin
       - frame-ancestors 'none': Prevent embedding in iframes (clickjacking protection)
     -->
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: clipy-file:; media-src 'self' file: blob: https: clipy-file: http://127.0.0.1:*; connect-src 'self' https: http://127.0.0.1:* clipy-file:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';"
-    />
-    <link rel="stylesheet" href="/src/styles/global.css" />
-  </head>
-  <body>
-    <div id="app" />
-    <script type="module" src="/src/renderer.ts"></script>
-  </body>
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: clipy-file:; media-src 'self' file: blob: https: clipy-file: http://127.0.0.1:*; connect-src 'self' https: http://127.0.0.1:* clipy-file:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';" />
+  <link rel="stylesheet" href="/src/styles/global.css" />
+</head>
+
+<body>
+  <div id="app" />
+  <script type="module" src="/src/renderer.ts"></script>
+</body>
+
 </html>
