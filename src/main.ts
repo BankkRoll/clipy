@@ -194,7 +194,7 @@ function createWindow() {
     minWidth: 800,
     minHeight: 600,
     webPreferences: {
-      devTools: true, // Temporarily enabled for debugging
+      devTools: inDevelopment,
       contextIsolation: true,
       nodeIntegration: false,
       nodeIntegrationInSubFrames: false,
