@@ -186,11 +186,6 @@ function createWindow() {
   const preload = path.join(__dirname, 'preload.js')
   const windowState = getWindowState()
 
-  // Get icon path - different for dev vs packaged
-  const iconPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'app.asar', '.vite', 'renderer', 'main_window', 'assets', 'icon.ico')
-    : path.join(__dirname, '..', 'src', 'assets', 'icon.ico')
-
   const mainWindow = new BrowserWindow({
     width: windowState.width,
     height: windowState.height,
@@ -198,9 +193,8 @@ function createWindow() {
     y: windowState.y,
     minWidth: 800,
     minHeight: 600,
-    icon: iconPath,
     webPreferences: {
-      devTools: inDevelopment,
+      devTools: true, // Temporarily enabled for debugging
       contextIsolation: true,
       nodeIntegration: false,
       nodeIntegrationInSubFrames: false,
@@ -296,8 +290,13 @@ function createWindow() {
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL)
   } else {
-    mainWindow.loadFile(path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`))
+    const indexPath = path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`)
+    logger.info('Loading production index.html', { indexPath, __dirname, MAIN_WINDOW_VITE_NAME })
+    mainWindow.loadFile(indexPath)
   }
+
+  // Open devTools for debugging (remove in final release)
+  mainWindow.webContents.openDevTools()
 
   mainWindow.show()
 

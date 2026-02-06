@@ -81,7 +81,7 @@ const config: ForgeConfig = {
       [FuseV1Options.OnlyLoadAppFromAsar]: true,
       // Security: Encryption and protocol restrictions
       [FuseV1Options.EnableCookieEncryption]: true,
-      [FuseV1Options.GrantFileProtocolExtraPrivileges]: false,
+      [FuseV1Options.GrantFileProtocolExtraPrivileges]: true, // Required to load app from asar
     }),
   ],
 }
