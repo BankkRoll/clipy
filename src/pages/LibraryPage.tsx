@@ -134,10 +134,12 @@ export default function LibraryPage() {
   const handleDeleteDownload = async (downloadId: string) => {
     try {
       const response = await window.electronAPI.downloadManager.delete(downloadId)
-      if (!isSuccessResponse(response)) {
+      if (isSuccessResponse(response)) {
+        toast.success(t('msgDownloadDeleted'))
+        loadDownloads()
+      } else {
         toast.error(response.error || t('msgDownloadDeleteFailed'))
       }
-      // Real-time event will handle UI update
     } catch (error) {
       console.error('Failed to delete download:', error)
       toast.error(t('msgDownloadDeleteFailed'))

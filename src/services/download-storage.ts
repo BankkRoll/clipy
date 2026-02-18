@@ -109,9 +109,19 @@ export function updateDownloadInStorage(downloadId: string, updates: Partial<Dow
     storage.downloads[downloadIndex] = { ...storage.downloads[downloadIndex], ...updates }
     downloadStorage = storage
     saveDownloadStorage()
+
+    // Log status changes for debugging
+    if (updates.status) {
+      logger.debug('Download status updated in storage', {
+        downloadId,
+        newStatus: updates.status,
+        title: storage.downloads[downloadIndex].title
+      })
+    }
     return true
   }
 
+  logger.warn('Download not found in storage for update', { downloadId, updates })
   return false
 }
 

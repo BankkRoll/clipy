@@ -13,7 +13,6 @@ import { existsSync, mkdirSync } from 'node:fs'
 import type { DownloadConfig, DownloadFilter, DownloadOptions, DownloadProgress, VideoInfo } from '../../types/download'
 import { DownloadErrorCode, createDownloadError, isDownloadError } from '../../types/download'
 import {
-  addDownloadToStorage,
   clearOldDownloads,
   loadDownloadStorage,
   removeDownloadFromStorage,
@@ -66,16 +65,9 @@ export async function initializeDownloadManager(config?: Partial<DownloadConfig>
 
   const eventEmitter = new EventEmitter()
 
-  // Wrap the emit method to automatically persist progress updates
-  const originalEmit = eventEmitter.emit.bind(eventEmitter)
-  eventEmitter.emit = (event: string, ...args: unknown[]) => {
-    // Automatically persist progress updates to storage
-    if (event === 'progress') {
-      const progress = args[0] as DownloadProgress
-      updateDownloadInStorage(progress.downloadId, progress)
-    }
-    return originalEmit(event, ...args)
-  }
+  // NOTE: Storage persistence is handled by download-manager.ts, NOT here.
+  // This layer only handles download execution and event emission.
+  // download-manager.ts listens to these events and saves with correct job IDs.
 
   globalState = {
     config: { ...defaultConfig, ...config },
@@ -253,14 +245,14 @@ export async function startDownload(url: string, options: DownloadOptions = {}):
         provider: options.provider || 'auto',
       }
       state.downloadHistory.set(downloadId, progress)
-      addDownloadToStorage(progress)
+      // NOTE: Storage is handled by download-manager.ts, not here
       state.eventEmitter.emit('progress', progress)
 
       // Fetch video info first
       videoInfo = await getVideoInfo(url)
       progress.title = videoInfo.title
       progress.status = 'initializing'
-      updateDownloadInStorage(downloadId, { title: videoInfo.title, status: 'initializing' })
+      // NOTE: Storage is handled by download-manager.ts, not here
       state.eventEmitter.emit('progress', progress)
 
       const selectedProvider = options.provider || 'auto'
@@ -281,7 +273,7 @@ export async function startDownload(url: string, options: DownloadOptions = {}):
             throw ytdlpError
           }
           progress.status = 'retrying'
-          updateDownloadInStorage(downloadId, { status: 'retrying' })
+          // NOTE: Storage is handled by download-manager.ts
           state.eventEmitter.emit('progress', progress)
         }
       }
@@ -294,7 +286,7 @@ export async function startDownload(url: string, options: DownloadOptions = {}):
       if (progress) {
         progress.status = 'failed'
         progress.error = finalError
-        updateDownloadInStorage(downloadId, { status: 'failed', error: finalError })
+        // NOTE: Storage is handled by download-manager.ts
         state.eventEmitter.emit('progress', progress)
         state.eventEmitter.emit('failed', {
           ...progress,

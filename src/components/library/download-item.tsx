@@ -26,7 +26,6 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { Card, CardContent } from '@/components/ui/card'
 import {
@@ -41,7 +40,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import type { DownloadProgress } from '@/types/download'
 import { Progress } from '@/components/ui/progress'
-import React from 'react'
+import React, { useState } from 'react'
 import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
 
@@ -114,6 +113,7 @@ export function DownloadItem({
   statusBadge,
 }: DownloadItemProps) {
   const { t } = useTranslation()
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
 
   const handleOpenFile = async (filePath: string) => {
     try {
@@ -144,11 +144,11 @@ export function DownloadItem({
   }
 
   const handleDelete = async () => {
+    setShowDeleteDialog(false)
     try {
       await onDelete(download.downloadId)
-      toast.success(t('msgDownloadDeleted'))
     } catch (error) {
-      toast.error(t('msgDownloadDeleteFailed'))
+      console.error('Delete failed:', error)
     }
   }
 
@@ -157,8 +157,13 @@ export function DownloadItem({
       await onRetry(download.downloadId)
       toast.success(t('msgDownloadRetried'))
     } catch (error) {
+      console.error('Retry failed:', error)
       toast.error(t('msgDownloadRetryFailed'))
     }
+  }
+
+  const handleCancel = () => {
+    onCancel(download.downloadId)
   }
 
   return (
@@ -242,7 +247,7 @@ export function DownloadItem({
 
               <div className="flex shrink-0 items-center gap-2">
                 {download.status === 'downloading' && (
-                  <Button variant="outline" size="sm" onClick={() => onCancel(download.downloadId)}>
+                  <Button variant="outline" size="sm" onClick={handleCancel}>
                     <X className="h-4 w-4" />
                   </Button>
                 )}
@@ -304,34 +309,13 @@ export function DownloadItem({
                         <DropdownMenuSeparator />
                       </>
                     )}
-                    <AlertDialog>
-                      <AlertDialogTrigger asChild>
-                        <DropdownMenuItem
-                          onSelect={e => e.preventDefault()}
-                          className="text-destructive focus:text-destructive"
-                        >
-                          <Trash2 className="mr-2 h-4 w-4" />
-                          {t('actionDelete')}
-                        </DropdownMenuItem>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>{t('confirmDeleteTitle')}</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            {t('confirmDeleteDescription', { title: download.title })}
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
-                          <AlertDialogAction
-                            onClick={handleDelete}
-                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                          >
-                            {t('delete')}
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
+                    <DropdownMenuItem
+                      onClick={() => setShowDeleteDialog(true)}
+                      className="text-destructive focus:text-destructive"
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      {t('actionDelete')}
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
@@ -339,6 +323,27 @@ export function DownloadItem({
           </div>
         </div>
       </CardContent>
+
+      {/* Delete confirmation dialog - moved outside DropdownMenu to fix Radix UI issue */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('confirmDeleteTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('confirmDeleteDescription', { title: download.title })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {t('delete')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   )
 }

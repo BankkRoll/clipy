@@ -10,6 +10,7 @@
 
 import { BrowserWindow, app, net, protocol, screen, session } from 'electron'
 import { startStreamingProxy, stopStreamingProxy } from './services/streaming-proxy'
+import { saveDownloadStorage } from './services/download-storage'
 
 import { ConfigManager } from './utils/config'
 import { Logger } from './utils/logger'
@@ -320,6 +321,10 @@ app.whenReady().then(() => {
         if (/^[a-zA-Z]:(?![/\\])/.test(filePath)) {
           filePath = filePath.replace(/^([a-zA-Z]:)/, '$1/') // ensure C:/ not C:
         }
+        // If path doesn't start with drive letter, assume C: (common case for Windows)
+        if (!/^[a-zA-Z]:/.test(filePath)) {
+          filePath = 'C:/' + filePath
+        }
       } else {
         filePath = '/' + filePath.replace(/^\/+/, '') // normalize to single leading slash
       }
@@ -390,6 +395,18 @@ app.whenReady().then(() => {
 
   configManager.getAll()
   createWindow()
+})
+
+// Ensure download storage is saved before quit
+app.on('before-quit', () => {
+  logger.info('App quitting - ensuring download storage is saved')
+  // Force a final save of download storage to ensure all completed downloads are persisted
+  try {
+    saveDownloadStorage()
+    logger.info('Download storage saved on quit')
+  } catch (error) {
+    logger.error('Failed to save download storage on quit', error as Error)
+  }
 })
 
 // Clean up resources when all windows are closed

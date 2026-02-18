@@ -23,6 +23,7 @@ import { Logger } from '../../utils/logger'
 import { get } from 'https'
 import { homedir } from 'os'
 import { spawn } from 'child_process'
+// NOTE: Storage operations are handled by download-manager.ts, not here
 
 const logger = Logger.getInstance()
 
@@ -456,6 +457,8 @@ export async function downloadWithYtdlp(
         const timeout = setTimeout(() => {
           logger.warn('Download timeout reached, killing process')
           progress.status = 'failed'
+          progress.error = createDownloadError('Download timeout reached', DownloadErrorCode.TIMEOUT)
+          // NOTE: Storage is handled by download-manager.ts
           eventEmitter.emit('failed', progress)
           ytdlpProcess.kill('SIGTERM')
         }, DOWNLOAD_TIMEOUT)
@@ -467,6 +470,8 @@ export async function downloadWithYtdlp(
             logger.warn('Download stalled, killing process', { inactiveSeconds: Math.round(timeSinceActivity / 1000) })
             clearInterval(stallCheck)
             progress.status = 'failed'
+            progress.error = createDownloadError('Download stalled - no activity', DownloadErrorCode.TIMEOUT)
+            // NOTE: Storage is handled by download-manager.ts
             eventEmitter.emit('failed', progress)
             ytdlpProcess.kill('SIGTERM')
           }
@@ -518,6 +523,10 @@ export async function downloadWithYtdlp(
 
             progress.status = 'completed'
             progress.progress = 100
+
+            // NOTE: Storage is handled by download-manager.ts
+            // Emit events so download-manager can save with correct job.id
+            eventEmitter.emit('progress', progress)
             eventEmitter.emit('completed', progress)
 
             logger.info('Download completed', { filePath: actualFile })
@@ -534,8 +543,12 @@ export async function downloadWithYtdlp(
           clearInterval(stallCheck)
           logger.error('yt-dlp process error', error)
           progress.status = 'failed'
+          const downloadError = createDownloadError(`Process error: ${error.message}`, DownloadErrorCode.UNKNOWN_ERROR)
+          progress.error = downloadError
+
+          // NOTE: Storage is handled by download-manager.ts
           eventEmitter.emit('failed', progress)
-          reject(createDownloadError(`Process error: ${error.message}`, DownloadErrorCode.UNKNOWN_ERROR))
+          reject(downloadError)
         })
       } catch (error) {
         logger.error('Download failed', error instanceof Error ? error : new Error(String(error)))

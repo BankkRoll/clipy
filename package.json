@@ -1,7 +1,7 @@
 {
   "name": "clipy",
   "productName": "Clipy",
-  "version": "1.0.0-beta.1",
+  "version": "1.0.0",
   "description": "Professional YouTube video downloader. Download videos in original quality, edit with timeline-based tools, and manage your media library - all with a beautiful, modern interface for FREE.",
   "main": ".vite/build/main.js",
   "private": true,
@@ -17,8 +17,7 @@
   },
   "homepage": "https://github.com/BankkRoll/clipy#readme",
   "bugs": {
-    "url": "https://github.com/BankkRoll/clipy/issues",
-    "email": "luan.roger.2003@gmail.com"
+    "url": "https://github.com/BankkRoll/clipy/issues"
   },
   "funding": {
     "type": "github",

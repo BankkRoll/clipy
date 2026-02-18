@@ -25,16 +25,18 @@ import { ConfigManager } from '../utils/config'
 import { Logger } from '../utils/logger'
 import { VideoCache } from './video-cache'
 import { VideoProcessor } from './video-processor'
+import { removeDownloadFromStorage, getStoredDownloads, addDownloadToStorage } from './download-storage'
 
 /** Represents a download task in the queue */
 export interface DownloadJob {
-  id: string // Internal job ID (different from yt-dlp's downloadId)
+  id: string // Internal job ID - THIS is the public downloadId exposed to UI
   url: string // Source URL
   options: DownloadOptions // User-specified options (quality, format, etc.)
   progress: DownloadProgress // Current download state and progress
   createdAt: number // Timestamp when job was created
   startedAt?: number // Timestamp when download actually started
   completedAt?: number // Timestamp when download finished
+  ytDlpDownloadId?: string // Internal yt-dlp ID, used only for event mapping
 }
 
 export class DownloadManager extends EventEmitter {
@@ -92,52 +94,67 @@ export class DownloadManager extends EventEmitter {
   private setupEventForwarding(): void {
     // Forward events from the yt-dlp manager
     addEventListener('progress', (...args: unknown[]) => {
-      const progress = args[0] as DownloadProgress
-      // Update the job's progress in activeJobs
-      const jobId = this.downloadIdToJobId.get(progress.downloadId)
+      const ytDlpProgress = args[0] as DownloadProgress
+      // Look up our job.id using the yt-dlp downloadId
+      const jobId = this.downloadIdToJobId.get(ytDlpProgress.downloadId)
       if (jobId) {
         const job = this.activeJobs.get(jobId)
         if (job) {
-          job.progress = progress
+          // Update job progress but preserve OUR job.id as the public downloadId
+          job.progress = { ...ytDlpProgress, downloadId: job.id }
+          // Emit with our consistent job.id
+          this.emit('progress', job.progress)
         }
       }
-      this.emit('progress', progress)
     })
 
     addEventListener('completed', (...args: unknown[]) => {
-      const progress = args[0] as DownloadProgress
-      // Look up job using the downloadId -> jobId map
-      const jobId = this.downloadIdToJobId.get(progress.downloadId)
+      const ytDlpProgress = args[0] as DownloadProgress
+      // Look up job using the yt-dlp downloadId -> jobId map
+      const jobId = this.downloadIdToJobId.get(ytDlpProgress.downloadId)
       const job = jobId ? this.activeJobs.get(jobId) : null
       if (job) {
-        job.progress = progress
+        // Update job progress but preserve OUR job.id as the public downloadId
+        job.progress = { ...ytDlpProgress, downloadId: job.id }
         job.completedAt = Date.now()
         this.completedJobs.set(job.id, job)
         this.activeJobs.delete(job.id)
-        this.downloadIdToJobId.delete(progress.downloadId)
-        this.logger.info('Download completed', { jobId: job.id, downloadId: progress.downloadId })
-        this.emit('completed', progress)
+        this.downloadIdToJobId.delete(ytDlpProgress.downloadId)
+
+        // Save to storage with OUR job.id so delete/retry works correctly
+        // This overwrites any entry saved by yt-dlp-provider with the correct ID
+        addDownloadToStorage(job.progress)
+
+        this.logger.info('Download completed', { jobId: job.id, ytDlpId: ytDlpProgress.downloadId })
+        // Emit with our consistent job.id
+        this.emit('completed', job.progress)
         this.processQueue()
       } else {
-        this.logger.warn('Received completion for unknown download', { downloadId: progress.downloadId })
+        this.logger.warn('Received completion for unknown download', { ytDlpId: ytDlpProgress.downloadId })
       }
     })
 
     addEventListener('failed', (...args: unknown[]) => {
-      const progress = args[0] as DownloadProgress
-      // Look up job using the downloadId -> jobId map
-      const jobId = this.downloadIdToJobId.get(progress.downloadId)
+      const ytDlpProgress = args[0] as DownloadProgress
+      // Look up job using the yt-dlp downloadId -> jobId map
+      const jobId = this.downloadIdToJobId.get(ytDlpProgress.downloadId)
       const job = jobId ? this.activeJobs.get(jobId) : null
       if (job) {
-        job.progress = progress
+        // Update job progress but preserve OUR job.id as the public downloadId
+        job.progress = { ...ytDlpProgress, downloadId: job.id }
         this.failedJobs.set(job.id, job)
         this.activeJobs.delete(job.id)
-        this.downloadIdToJobId.delete(progress.downloadId)
-        this.logger.info('Download failed', { jobId: job.id, downloadId: progress.downloadId })
-        this.emit('failed', progress)
+        this.downloadIdToJobId.delete(ytDlpProgress.downloadId)
+
+        // Save to storage with OUR job.id so retry works correctly
+        addDownloadToStorage(job.progress)
+
+        this.logger.info('Download failed', { jobId: job.id, ytDlpId: ytDlpProgress.downloadId })
+        // Emit with our consistent job.id
+        this.emit('failed', job.progress)
         this.processQueue()
       } else {
-        this.logger.warn('Received failure for unknown download', { downloadId: progress.downloadId })
+        this.logger.warn('Received failure for unknown download', { ytDlpId: ytDlpProgress.downloadId })
       }
     })
   }
@@ -182,8 +199,9 @@ export class DownloadManager extends EventEmitter {
       const videoInfo = await this.getVideoInfo(url)
 
       // Create download job
+      const jobId = this.generateJobId()
       const job: DownloadJob = {
-        id: this.generateJobId(),
+        id: jobId,
         url,
         options: {
           ...options,
@@ -192,7 +210,7 @@ export class DownloadManager extends EventEmitter {
           endTime: undefined,
         },
         progress: {
-          downloadId: '', // Will be set by legacy manager
+          downloadId: jobId, // Use our job.id as the public downloadId for UI consistency
           url,
           title: videoInfo.title,
           progress: 0,
@@ -239,16 +257,19 @@ export class DownloadManager extends EventEmitter {
     try {
       job.startedAt = Date.now()
       job.progress.status = 'initializing'
+      job.progress.downloadId = job.id // Ensure our job.id is the public downloadId
       this.activeJobs.set(job.id, job)
 
       // Use yt-dlp manager for actual download
-      const downloadId = await startDownload(job.url, job.options)
-      job.progress.downloadId = downloadId
+      const ytDlpId = await startDownload(job.url, job.options)
+
+      // Store yt-dlp ID separately for internal event mapping (NOT in progress.downloadId!)
+      job.ytDlpDownloadId = ytDlpId
 
       // Create mapping from yt-dlp downloadId to our job.id for event lookup
-      this.downloadIdToJobId.set(downloadId, job.id)
+      this.downloadIdToJobId.set(ytDlpId, job.id)
 
-      this.logger.info('Download job started', { jobId: job.id, downloadId })
+      this.logger.info('Download job started', { jobId: job.id, ytDlpId })
     } catch (error) {
       this.logger.error('Failed to start job', error as Error, { jobId: job.id })
       job.progress.status = 'failed'
@@ -268,14 +289,16 @@ export class DownloadManager extends EventEmitter {
         return false
       }
 
-      const cancelled = cancelDownload(job.progress.downloadId)
+      // Use the stored yt-dlp ID for cancellation
+      const ytDlpId = job.ytDlpDownloadId
+      const cancelled = ytDlpId ? cancelDownload(ytDlpId) : false
 
       if (cancelled) {
         job.progress.status = 'cancelled'
         this.activeJobs.delete(downloadId)
-        // Clean up downloadId mapping
-        if (job.progress.downloadId) {
-          this.downloadIdToJobId.delete(job.progress.downloadId)
+        // Clean up yt-dlp ID mapping
+        if (ytDlpId) {
+          this.downloadIdToJobId.delete(ytDlpId)
         }
         this.emit('cancelled', job.progress)
         this.processQueue() // Process next in queue
@@ -293,28 +316,41 @@ export class DownloadManager extends EventEmitter {
    */
   async deleteDownload(downloadId: string): Promise<boolean> {
     try {
+      let deletedFromMemory = false
+
       // Check active jobs
-      let job = this.activeJobs.get(downloadId)
-      if (job) {
+      if (this.activeJobs.has(downloadId)) {
         await this.cancelDownload(downloadId)
+        this.activeJobs.delete(downloadId)
+        deletedFromMemory = true
       }
 
       // Check completed jobs
-      job = this.completedJobs.get(downloadId)
-      if (job) {
+      if (this.completedJobs.has(downloadId)) {
         this.completedJobs.delete(downloadId)
-        // TODO: Clean up files
-        return true
+        deletedFromMemory = true
       }
 
       // Check failed jobs
-      job = this.failedJobs.get(downloadId)
-      if (job) {
+      if (this.failedJobs.has(downloadId)) {
         this.failedJobs.delete(downloadId)
-        return true
+        deletedFromMemory = true
       }
 
-      return false
+      // Remove from persistent storage
+      const deletedFromStorage = removeDownloadFromStorage(downloadId)
+
+      const deleted = deletedFromMemory || deletedFromStorage
+
+      if (deleted) {
+        this.logger.info('Download deleted', { downloadId, fromMemory: deletedFromMemory, fromStorage: deletedFromStorage })
+        // Emit deleted event so UI gets updated
+        this.emit('deleted', downloadId)
+      } else {
+        this.logger.warn('Download not found for deletion', { downloadId })
+      }
+
+      return deleted
     } catch (error) {
       this.logger.error('Failed to delete download', error as Error, { downloadId })
       return false
@@ -326,25 +362,39 @@ export class DownloadManager extends EventEmitter {
    */
   async retryDownload(downloadId: string): Promise<{ downloadId: string }> {
     try {
-      const failedJob = this.failedJobs.get(downloadId)
-      if (!failedJob) {
+      // Check in-memory failed jobs first
+      let failedJob = this.failedJobs.get(downloadId)
+      let failedProgress: DownloadProgress | undefined
+
+      if (failedJob) {
+        failedProgress = failedJob.progress
+        this.failedJobs.delete(downloadId)
+      } else {
+        // Check persistent storage for failed downloads
+        const storedDownloads = getStoredDownloads()
+        failedProgress = storedDownloads.find(d => d.downloadId === downloadId && d.status === 'failed')
+      }
+
+      if (!failedProgress) {
         throw new Error('Download not found or not failed')
       }
 
-      // Remove from failed jobs
-      this.failedJobs.delete(downloadId)
+      // Remove from storage
+      removeDownloadFromStorage(downloadId)
 
-      // Create new job with same parameters
+      // Create new job with same parameters (use defaults for options since DownloadProgress doesn't store them)
+      const newJobId = this.generateJobId()
       const newJob: DownloadJob = {
-        ...failedJob,
-        id: this.generateJobId(),
+        id: newJobId,
+        url: failedProgress.url,
+        options: {}, // Use defaults - original options are not stored in DownloadProgress
         createdAt: Date.now(),
         progress: {
-          ...failedJob.progress,
-          downloadId: '',
+          ...failedProgress,
+          downloadId: newJobId, // Use our new job.id as the public downloadId
           status: 'retrying',
           startTime: Date.now(),
-          retryCount: failedJob.progress.retryCount + 1,
+          retryCount: (failedProgress.retryCount || 0) + 1,
         },
       }
 
@@ -400,30 +450,57 @@ export class DownloadManager extends EventEmitter {
    * Get downloads by filter
    */
   async getDownloadsByFilter(filter: DownloadFilter): Promise<DownloadProgress[]> {
-    let jobs: DownloadJob[]
+    // Get in-memory jobs
+    const activeProgress = Array.from(this.activeJobs.values()).map(job => job.progress)
+    const completedProgress = Array.from(this.completedJobs.values()).map(job => job.progress)
+    const failedProgress = Array.from(this.failedJobs.values()).map(job => job.progress)
+    const queuedProgress = this.jobQueue.map(job => job.progress)
+
+    // Get persisted downloads from storage (includes downloads from previous sessions)
+    const storedDownloads = getStoredDownloads()
+
+    // Merge in-memory and stored, avoiding duplicates (in-memory takes precedence)
+    const inMemoryIds = new Set([
+      ...activeProgress.map(p => p.downloadId),
+      ...completedProgress.map(p => p.downloadId),
+      ...failedProgress.map(p => p.downloadId),
+      ...queuedProgress.map(p => p.downloadId),
+    ])
+
+    // Only include stored downloads that aren't already in memory
+    const persistedOnly = storedDownloads.filter(d => !inMemoryIds.has(d.downloadId))
+
+    let downloads: DownloadProgress[]
 
     switch (filter) {
       case 'active':
-        jobs = Array.from(this.activeJobs.values())
+        downloads = activeProgress
         break
       case 'completed':
-        jobs = Array.from(this.completedJobs.values())
+        downloads = [
+          ...completedProgress,
+          ...persistedOnly.filter(d => d.status === 'completed'),
+        ]
         break
       case 'failed':
-        jobs = Array.from(this.failedJobs.values())
+        downloads = [
+          ...failedProgress,
+          ...persistedOnly.filter(d => d.status === 'failed'),
+        ]
         break
       case 'all':
       default:
-        jobs = [
-          ...Array.from(this.activeJobs.values()),
-          ...Array.from(this.completedJobs.values()),
-          ...Array.from(this.failedJobs.values()),
-          ...this.jobQueue,
+        downloads = [
+          ...activeProgress,
+          ...completedProgress,
+          ...failedProgress,
+          ...queuedProgress,
+          ...persistedOnly,
         ]
         break
     }
 
-    return jobs.map(job => job.progress).sort((a, b) => b.startTime - a.startTime)
+    return downloads.sort((a, b) => b.startTime - a.startTime)
   }
 
   /**
