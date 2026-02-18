@@ -13,6 +13,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Configure git
+        run: |
+          git config --global url."https://".insteadOf git://
+        shell: bash
+
       - uses: pnpm/action-setup@v2
         with:
           version: 10
@@ -59,6 +64,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Configure git
+        run: |
+          git config --global url."https://".insteadOf git://
+          git config --global advice.detachedHead false
+
       - uses: pnpm/action-setup@v2
         with:
           version: 10
@@ -69,7 +79,9 @@ jobs:
           cache: 'pnpm'
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --no-frozen-lockfile
+        env:
+          GIT_TERMINAL_PROMPT: 0
 
       - name: Setup resources directory
         run: mkdir -p resources
@@ -79,16 +91,11 @@ jobs:
           curl -L -o resources/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos
           chmod +x resources/yt-dlp
 
-      - name: Download ffmpeg
+      - name: Install ffmpeg via brew
         run: |
-          curl -L -o ffmpeg.zip https://evermeet.cx/ffmpeg/getrelease/zip || curl -L -o ffmpeg.7z https://evermeet.cx/ffmpeg/getrelease/7z
-          if [ -f ffmpeg.zip ]; then
-            unzip -o ffmpeg.zip
-          elif [ -f ffmpeg.7z ]; then
-            7z x ffmpeg.7z
-          fi
-          mv ffmpeg resources/ || true
-          chmod +x resources/ffmpeg || true
+          brew install ffmpeg
+          cp $(which ffmpeg) resources/ffmpeg
+          chmod +x resources/ffmpeg
 
       - name: Build
         run: pnpm make
@@ -106,6 +113,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Configure git
+        run: |
+          git config --global url."https://".insteadOf git://
 
       - uses: pnpm/action-setup@v2
         with:
