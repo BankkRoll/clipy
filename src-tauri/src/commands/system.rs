@@ -185,6 +185,14 @@ pub fn get_default_download_path() -> String {
     }
 }
 
+/// Build a `clipy-media://` URL for a local file so the webview can play it via
+/// our custom streaming protocol (the built-in asset protocol rejects many
+/// real-world filenames on Windows).
+#[tauri::command]
+pub fn media_url(path: String) -> String {
+    crate::media_protocol::to_media_url(&path)
+}
+
 /// Check if app is running as administrator (Windows)
 #[tauri::command]
 pub fn is_admin() -> bool {

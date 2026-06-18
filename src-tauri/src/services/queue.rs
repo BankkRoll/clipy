@@ -249,6 +249,9 @@ impl DownloadQueue {
                                 error!("Failed to add video to library: {}", e);
                             } else {
                                 info!("Video added to library: {}", t.title);
+                                // Notify the UI so the Library/Editor refresh immediately
+                                // instead of only on next mount/navigation.
+                                let _ = app_for_download.emit("library-updated", ());
                             }
                         }
                         Err(e) => {

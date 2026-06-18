@@ -13,7 +13,7 @@ import {
   type ViewMode,
   type SortOption,
 } from "@/components/library";
-import { useLibrary, useLibraryStats, useFileSystem } from "@/hooks";
+import { useLibrary, useLibraryStats, useFileSystem, useTauriEvent } from "@/hooks";
 import { toast } from "sonner";
 import { open, ask, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
@@ -33,6 +33,13 @@ export function Library() {
   const { videos, loading, refresh, deleteVideo, importVideo, renameVideo, bulkDelete } =
     useLibrary();
   const { stats, refresh: refreshStats } = useLibraryStats();
+
+  // Auto-refresh the library the instant a download completes (backend emits
+  // "library-updated" after adding the video to the DB).
+  useTauriEvent("library-updated", () => {
+    void refresh();
+    void refreshStats();
+  });
 
   // Memoized filtered and sorted videos
   const filteredVideos = useMemo(() => {

@@ -12,7 +12,7 @@
   "app": {
     "withGlobalTauri": false,
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: asset: https://asset.localhost https://i.ytimg.com https://*.ytimg.com blob:; media-src 'self' asset: https://asset.localhost blob:; connect-src 'self' ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'",
+      "csp": "default-src 'self'; img-src 'self' data: asset: http://asset.localhost https://asset.localhost clipy-media: http://clipy-media.localhost https://clipy-media.localhost https://i.ytimg.com https://*.ytimg.com https://pbs.twimg.com blob:; media-src 'self' asset: http://asset.localhost https://asset.localhost clipy-media: http://clipy-media.localhost https://clipy-media.localhost blob:; connect-src 'self' ipc: http://ipc.localhost asset: http://asset.localhost https://asset.localhost clipy-media: http://clipy-media.localhost https://clipy-media.localhost https://api.github.com; style-src 'self' 'unsafe-inline'",
       "assetProtocol": {
         "enable": true,
         "scope": [

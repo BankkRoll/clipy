@@ -11,7 +11,7 @@ use tauri::AppHandle;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Raw video info from yt-dlp JSON output
 #[derive(Debug, Deserialize)]
@@ -172,6 +172,23 @@ pub async fn download_video(
         output_template.clone(),
     ];
 
+    // Tell yt-dlp exactly where ffmpeg is. Merging bestvideo+bestaudio and any
+    // remux/extract step REQUIRES ffmpeg; relying on the child process's inherited
+    // PATH is unreliable (a GUI-launched app often has a narrower PATH than the
+    // user's shell). We resolve ffmpeg the same way the rest of the app does
+    // (app binaries dir, then system PATH) and pass its directory explicitly.
+    if let Ok(ffmpeg_path) = binary::get_ffmpeg_path(app) {
+        let ffmpeg_dir = ffmpeg_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or(ffmpeg_path);
+        debug!("Passing --ffmpeg-location {:?}", ffmpeg_dir);
+        args.push("--ffmpeg-location".to_string());
+        args.push(ffmpeg_dir.to_string_lossy().to_string());
+    } else {
+        warn!("ffmpeg not found; merge/convert steps may fail");
+    }
+
     // Playlist handling
     if options.no_playlist {
         args.push("--no-playlist".to_string());
@@ -204,9 +221,27 @@ pub async fn download_video(
         args.push(format!("vcodec:{}", options.video_codec));
     }
 
-    // Embed thumbnail if requested
+    // Embed thumbnail if requested.
+    //
+    // For mp4/mov containers, embedding adds the cover image as an mjpeg video
+    // stream. Browsers/WebView2 (the in-app HTML5 <video>) refuse to play a file
+    // that contains a second, undecodable video track unless it is explicitly
+    // flagged as an attached picture. We pass postprocessor args so the embedded
+    // thumbnail is marked `disposition:attached_pic`, which keeps the cover art
+    // embedded AND lets the file play in-app. External players were unaffected,
+    // but the in-app player was failing with "format not supported".
     if options.embed_thumbnail {
         args.push("--embed-thumbnail".to_string());
+        let is_mp4_like = matches!(
+            options.format.to_lowercase().as_str(),
+            "mp4" | "mov" | "m4v"
+        );
+        if is_mp4_like && !options.audio_only {
+            // Tell ffmpeg (the EmbedThumbnail postprocessor) to mark the last
+            // stream (the cover) as attached_pic rather than a default video track.
+            args.push("--ppa".to_string());
+            args.push("EmbedThumbnail+ffmpeg_o:-disposition:v:1 attached_pic".to_string());
+        }
     }
 
     // Embed metadata if requested
@@ -385,6 +420,9 @@ pub async fn download_video(
 
     // Track the actual downloaded file path from yt-dlp output
     let mut captured_file_path: Option<String> = None;
+    // Keep the last several stderr lines so a failure can report the REAL reason
+    // (yt-dlp prints the actual error here), not a generic "Download failed".
+    let mut stderr_tail: Vec<String> = Vec::new();
 
     info!("Starting to read yt-dlp output streams...");
 
@@ -423,6 +461,20 @@ pub async fn download_video(
 
         lines_received += 1;
         debug!("[{}] yt-dlp ({}): {}", lines_received, source, line);
+
+        // Remember yt-dlp's own error/warning lines for the failure message.
+        if source == "stderr" {
+            let t = line.trim();
+            if t.starts_with("ERROR")
+                || t.starts_with("WARNING")
+                || t.to_lowercase().contains("error")
+            {
+                stderr_tail.push(t.to_string());
+                if stderr_tail.len() > 10 {
+                    stderr_tail.remove(0);
+                }
+            }
+        }
 
         // The --print after_move:filepath option outputs the final filepath as a plain line
         // It's the last thing printed and doesn't have any prefix like [download]
@@ -510,8 +562,17 @@ pub async fn download_video(
     // Drain any remaining stderr output after stdout closes
     while let Ok(Some(line)) = stderr_reader.next_line().await {
         debug!("yt-dlp stderr (remaining): {}", line);
-        // Check for file path in remaining output
         let trimmed = line.trim();
+        if trimmed.starts_with("ERROR")
+            || trimmed.starts_with("WARNING")
+            || trimmed.to_lowercase().contains("error")
+        {
+            stderr_tail.push(trimmed.to_string());
+            if stderr_tail.len() > 10 {
+                stderr_tail.remove(0);
+            }
+        }
+        // Check for file path in remaining output
         if !trimmed.starts_with('[') && !trimmed.is_empty() {
             let has_extension = trimmed.contains('.')
                 && (trimmed.ends_with(".mp4")
@@ -543,7 +604,19 @@ pub async fn download_video(
     }
 
     if !status.success() {
-        return Err(ClipyError::Ytdlp("Download failed".into()));
+        let reason = if stderr_tail.is_empty() {
+            format!(
+                "yt-dlp exited with status {}",
+                status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "unknown".into())
+            )
+        } else {
+            stderr_tail.join("; ")
+        };
+        error!("yt-dlp download failed: {}", reason);
+        return Err(ClipyError::Ytdlp(reason));
     }
 
     // Send completion (file_path will be set by queue.rs after this)
@@ -590,7 +663,20 @@ fn build_output_template(options: &DownloadOptions) -> String {
         t
     };
 
-    format!("{}/{}", options.output_path, name_part)
+    // CRITICAL: never let the base be empty. An empty output_path made the
+    // template "/%(title)s..." which on Windows resolves to the drive root
+    // (C:\) -> "[Errno 13] Permission denied". Fall back to the OS default
+    // downloads dir (creating it if needed) so a missing/blank setting still works.
+    let base = options.output_path.trim();
+    let base_dir = if base.is_empty() {
+        let dir = crate::utils::paths::get_default_downloads_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        dir.to_string_lossy().to_string()
+    } else {
+        base.to_string()
+    };
+
+    format!("{}/{}", base_dir, name_part)
 }
 
 /// Build format selector string for yt-dlp

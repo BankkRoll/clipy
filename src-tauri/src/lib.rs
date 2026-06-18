@@ -15,6 +15,7 @@
 
 pub mod commands;
 pub mod error;
+pub mod media_protocol;
 pub mod models;
 pub mod services;
 pub mod utils;
@@ -37,6 +38,7 @@ pub fn run() {
     info!("Starting Clipy v{}", env!("CARGO_PKG_VERSION"));
 
     tauri::Builder::default()
+        .register_uri_scheme_protocol(media_protocol::SCHEME, media_protocol::handle)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
@@ -129,6 +131,7 @@ pub fn run() {
             commands::system::open_file,
             commands::system::show_in_folder,
             commands::system::get_default_download_path,
+            commands::system::media_url,
             commands::system::is_admin,
             // Download commands
             commands::download::fetch_video_info,

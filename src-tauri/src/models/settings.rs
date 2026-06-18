@@ -31,8 +31,10 @@ impl Default for GeneralSettings {
         Self {
             language: "en".to_string(),
             launch_on_startup: false,
-            minimize_to_tray: true,
-            close_to_tray: true,
+            // Start visible by default — "start minimized" is opt-in. Defaulting
+            // this on makes a fresh launch look like the app failed to open.
+            minimize_to_tray: false,
+            close_to_tray: false,
             check_for_updates: true,
             auto_update_binaries: true,
         }
@@ -173,10 +175,19 @@ fn default_encoding_preset() -> String {
     "medium".to_string()
 }
 
+/// Default download directory as a string (OS Videos/Clipy or Downloads/Clipy),
+/// created if missing. Never empty — an empty path breaks yt-dlp's output
+/// template (resolves to drive root -> "permission denied").
+fn default_download_path() -> String {
+    let dir = crate::utils::paths::get_default_downloads_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    dir.to_string_lossy().to_string()
+}
+
 impl Default for DownloadSettings {
     fn default() -> Self {
         Self {
-            download_path: String::new(),
+            download_path: default_download_path(),
             default_quality: "1080".to_string(),
             default_format: "mp4".to_string(),
             max_concurrent_downloads: 3,

@@ -71,9 +71,9 @@ import {
 import { useEditorStore } from "@/stores/editorStore";
 import { useVideoMetadata, useProject, useExport, useExportOptions } from "@/hooks/useEditor";
 import { useLibrary, type LibraryVideo } from "@/hooks/useLibrary";
-import { formatDuration, cn, generateId } from "@/lib/utils";
+import { formatDuration, cn, generateId, mediaSrc } from "@/lib/utils";
 import { open, save, ask } from "@tauri-apps/plugin-dialog";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { logger } from "@/lib/logger";
 import type { FilterType, Clip, EditorProject } from "@/types/editor";
@@ -339,7 +339,7 @@ export function Editor() {
       return;
     }
 
-    const videoSrc = convertFileSrc(currentClip.sourcePath);
+    const videoSrc = mediaSrc(currentClip.sourcePath);
     const targetTime = getVideoTimeForClip(currentClip, currentTime);
 
     // Only update source if it actually changed (prevents memory leak)
@@ -376,7 +376,7 @@ export function Editor() {
       return;
     }
 
-    const audioSrc = convertFileSrc(currentAudioClip.sourcePath);
+    const audioSrc = mediaSrc(currentAudioClip.sourcePath);
     if (audio.getAttribute("src") !== audioSrc) {
       audio.src = audioSrc;
       audio.load();

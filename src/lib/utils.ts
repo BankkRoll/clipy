@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 /**
  * Merge Tailwind CSS classes with clsx
@@ -214,4 +215,19 @@ export function isNewerVersion(candidate: string, current: string): boolean {
     if (x < y) return false;
   }
   return false;
+}
+
+/**
+ * Build a webview-safe URL for a local media file via our custom
+ * `clipy-media` URI scheme (registered in src-tauri/src/media_protocol.rs).
+ *
+ * We delegate to Tauri's `convertFileSrc(path, "clipy-media")` rather than
+ * hand-building the URL: Tauri's internal builder produces the correct,
+ * WebView2-safe form (e.g. `http://clipy-media.localhost/...` on Windows) and
+ * registers it so it passes the webview's URL safety check. The default
+ * `asset` protocol rejects many real download filenames on Windows
+ * ("Media load rejected by URL safety check"), which is why we use our own.
+ */
+export function mediaSrc(path: string): string {
+  return convertFileSrc(path, "clipy-media");
 }

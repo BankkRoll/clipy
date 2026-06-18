@@ -24,7 +24,7 @@ import {
   DropdownMenuLabel,
 } from "@/components/ui/dropdown-menu";
 import { cn, formatDuration } from "@/lib/utils";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { mediaSrc } from "@/lib/utils";
 import { logger } from "@/lib/logger";
 
 interface VideoPlayerProps {
@@ -75,11 +75,12 @@ export function VideoPlayer({
     return path.startsWith("http") || path.startsWith("blob:") || path.startsWith("data:");
   };
 
-  // Convert file path to asset URL for Tauri
-  const videoSrc = isUrl(src) ? src : convertFileSrc(src);
+  // Convert file path to our custom media protocol URL (asset:// rejects many
+  // real filenames on Windows). Remote URLs (http/blob/data) pass through.
+  const videoSrc = isUrl(src) ? src : mediaSrc(src);
 
-  // Convert poster if it's a local file
-  const posterSrc = poster && !isUrl(poster) ? convertFileSrc(poster) : poster;
+  // Poster may be a local file or a remote thumbnail URL.
+  const posterSrc = poster && !isUrl(poster) ? mediaSrc(poster) : poster;
 
   // Debug logging
   useEffect(() => {
@@ -283,6 +284,8 @@ export function VideoPlayer({
           errorMessage = "Video format not supported or file not found";
           break;
       }
+      // Include the code + any detail so the cause is visible, not guessed.
+      errorMessage = `${errorMessage} (code ${mediaError.code}${mediaError.message ? `: ${mediaError.message}` : ""})`;
     }
 
     logger.error("VideoPlayer", "Error loading video:", errorMessage, "URL:", videoSrc);
