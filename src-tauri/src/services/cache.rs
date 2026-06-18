@@ -170,11 +170,10 @@ async fn cleanup_old_files(path: &PathBuf, max_age: Duration) -> Result<u64> {
             if metadata.is_file() {
                 if let Ok(modified) = metadata.modified() {
                     if let Ok(age) = now.duration_since(modified) {
-                        if age > max_age
-                            && fs::remove_file(&entry_path).await.is_ok() {
-                                deleted += 1;
-                                debug!("Deleted old cache file: {:?}", entry_path);
-                            }
+                        if age > max_age && fs::remove_file(&entry_path).await.is_ok() {
+                            deleted += 1;
+                            debug!("Deleted old cache file: {:?}", entry_path);
+                        }
                     }
                 }
             } else if metadata.is_dir() {
@@ -194,7 +193,12 @@ pub async fn enforce_cache_limit(app: &AppHandle, max_size_mb: u64) -> Result<u6
     let cache_path = paths::get_cache_dir(app)?;
 
     let (file_count, current_size) = calculate_dir_stats(&cache_path).await;
-    debug!("Current cache: {} files, {} bytes ({} MB)", file_count, current_size, current_size / (1024 * 1024));
+    debug!(
+        "Current cache: {} files, {} bytes ({} MB)",
+        file_count,
+        current_size,
+        current_size / (1024 * 1024)
+    );
 
     if current_size <= max_size_bytes {
         debug!("Cache size within limit, no cleanup needed");
@@ -281,7 +285,12 @@ pub fn get_thumbnail_cache_path(app: &AppHandle, video_id: &str) -> Result<PathB
 pub fn is_thumbnail_cached(app: &AppHandle, video_id: &str) -> bool {
     if let Ok(path) = get_thumbnail_cache_path(app, video_id) {
         let cached = path.exists();
-        debug!("Thumbnail cache check for {}: {} (path: {:?})", video_id, if cached { "HIT" } else { "MISS" }, path);
+        debug!(
+            "Thumbnail cache check for {}: {} (path: {:?})",
+            video_id,
+            if cached { "HIT" } else { "MISS" },
+            path
+        );
         cached
     } else {
         debug!("Thumbnail cache check for {}: MISS (path error)", video_id);
@@ -300,7 +309,8 @@ pub fn get_temp_file_path(app: &AppHandle, filename: &str) -> Result<PathBuf> {
 /// Create a unique temp file path
 pub fn get_unique_temp_path(app: &AppHandle, extension: &str) -> Result<PathBuf> {
     let temp_path = paths::get_temp_dir(app)?;
-    let filename = format!("{}_{}.{}",
+    let filename = format!(
+        "{}_{}.{}",
         chrono::Utc::now().timestamp_millis(),
         uuid::Uuid::new_v4(),
         extension

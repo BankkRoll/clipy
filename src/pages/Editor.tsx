@@ -242,12 +242,12 @@ export function Editor() {
     if (!project && !projectId) {
       createProject("Untitled Project");
     }
-    loadExportOptions();
+    void loadExportOptions();
   }, [project, projectId, createProject, loadExportOptions]);
 
   // Refresh library on mount
   useEffect(() => {
-    refreshLibrary();
+    void refreshLibrary();
   }, [refreshLibrary]);
 
   // Reset import ref when import ID changes
@@ -426,7 +426,7 @@ export function Editor() {
       try {
         const clipDuration = video.duration || 60;
 
-        let videoTrack = project.tracks.find((t) => t.type === "video");
+        const videoTrack = project.tracks.find((t) => t.type === "video");
         let trackId = videoTrack?.id;
 
         if (!trackId) {
@@ -531,7 +531,7 @@ export function Editor() {
           }
 
           const trackType = isVideo ? "video" : isAudio ? "audio" : "video";
-          let track = project.tracks.find((t) => t.type === trackType);
+          const track = project.tracks.find((t) => t.type === trackType);
           let trackId = track?.id;
 
           if (!trackId) {
@@ -619,7 +619,7 @@ export function Editor() {
               clips: t.clips.map((c) => ({
                 id: c.id,
                 trackId: c.trackId,
-                type: c.clipType as "video" | "audio" | "text" | "image",
+                type: c.clipType,
                 name: c.name,
                 startTime: c.startTime,
                 endTime: c.endTime,
@@ -1069,10 +1069,10 @@ export function Editor() {
         togglePlay();
       } else if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
-        handleDeleteSelected();
+        void handleDeleteSelected();
       } else if (e.key === "s" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        handleSaveProject();
+        void handleSaveProject();
       } else if (e.key === "z" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         if (e.shiftKey) {
@@ -2503,7 +2503,7 @@ export function Editor() {
                             <ContextMenuItem
                               onClick={() => {
                                 selectClip(clip.id, false);
-                                handleDeleteSelected();
+                                void handleDeleteSelected();
                               }}
                               disabled={track.locked}
                               className="text-destructive focus:text-destructive"

@@ -131,7 +131,7 @@ export function VideoPlayer({
       if (isPlaying) {
         videoRef.current.pause();
       } else {
-        videoRef.current.play();
+        void videoRef.current.play();
       }
     }
   }, [isPlaying]);
@@ -322,7 +322,7 @@ export function VideoPlayer({
           break;
         case "f":
           e.preventDefault();
-          toggleFullscreen();
+          void toggleFullscreen();
           break;
         case "Escape":
           if (onClose && !document.fullscreenElement) {

@@ -30,7 +30,10 @@ pub async fn start_download(
 ) -> Result<String> {
     info!("Starting download: {}", video_info.title);
     debug!("Download URL: {}", url);
-    debug!("Download options: quality={}, format={}, output={}", options.quality, options.format, options.output_path);
+    debug!(
+        "Download options: quality={}, format={}, output={}",
+        options.quality, options.format, options.output_path
+    );
 
     let download_id = uuid::Uuid::new_v4().to_string();
     debug!("Generated download ID: {}", download_id);
@@ -125,7 +128,9 @@ pub async fn retry_download(id: String) -> Result<()> {
         .ok_or_else(|| ClipyError::Download("Download not found".into()))?;
 
     if task.status != DownloadStatus::Failed {
-        return Err(ClipyError::Download("Download is not in failed state".into()));
+        return Err(ClipyError::Download(
+            "Download is not in failed state".into(),
+        ));
     }
 
     // Create new task with same info

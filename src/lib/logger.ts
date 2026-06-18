@@ -1,3 +1,4 @@
+/* eslint-disable no-console -- This module is the sanctioned logging wrapper; it is the one place console is intended to be used. */
 /**
  * Logger utility that respects debugMode setting
  *

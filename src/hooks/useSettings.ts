@@ -145,7 +145,7 @@ export function useSettings() {
 
   // Initial load
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
   // Update all settings

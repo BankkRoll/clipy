@@ -14,7 +14,6 @@ pub struct AppSettings {
     pub advanced: AdvancedSettings,
 }
 
-
 /// General settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -330,4 +329,3 @@ pub struct BinaryStatus {
     pub ytdlp_version: Option<String>,
     pub ytdlp_path: Option<String>,
 }
-

@@ -118,7 +118,7 @@ export function Settings() {
         toast.info(`Update available: v${latest}`, {
           description: `You have ${APP_VERSION}. Click to view the release.`,
           action: data.html_url
-            ? { label: "View", onClick: () => openUrl(data.html_url as string) }
+            ? { label: "View", onClick: () => { void openUrl(data.html_url as string); } }
             : undefined,
           duration: 10000,
         });
@@ -230,7 +230,7 @@ export function Settings() {
   }, [resetToDefaults, clearCache]);
 
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
   // Theme is applied globally in App.tsx - no need for duplicate effect here

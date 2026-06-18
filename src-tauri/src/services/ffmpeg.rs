@@ -51,14 +51,29 @@ pub struct VideoMetadata {
 /// Get video metadata using FFprobe
 pub async fn get_video_metadata(app: &AppHandle, path: &str) -> Result<VideoMetadata> {
     let ffmpeg_path = binary::get_ffmpeg_path(app)?;
-    let ffprobe_path = ffmpeg_path.parent()
-        .map(|p| p.join(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" }))
-        .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" }));
+    let ffprobe_path = ffmpeg_path
+        .parent()
+        .map(|p| {
+            p.join(if cfg!(windows) {
+                "ffprobe.exe"
+            } else {
+                "ffprobe"
+            })
+        })
+        .unwrap_or_else(|| {
+            PathBuf::from(if cfg!(windows) {
+                "ffprobe.exe"
+            } else {
+                "ffprobe"
+            })
+        });
 
     let output = Command::new(&ffprobe_path)
         .args([
-            "-v", "quiet",
-            "-print_format", "json",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
             "-show_format",
             "-show_streams",
             path,
@@ -81,7 +96,8 @@ fn parse_ffprobe_output(output: &str) -> Result<VideoMetadata> {
     let json: serde_json::Value = serde_json::from_str(output)
         .map_err(|e| ClipyError::FFmpeg(format!("Failed to parse ffprobe output: {}", e)))?;
 
-    let streams = json["streams"].as_array()
+    let streams = json["streams"]
+        .as_array()
         .ok_or_else(|| ClipyError::FFmpeg("No streams found".into()))?;
 
     let mut metadata = VideoMetadata {
@@ -145,10 +161,14 @@ pub async fn generate_thumbnail(
     let output = Command::new(&ffmpeg_path)
         .args([
             "-y",
-            "-ss", &time_offset.to_string(),
-            "-i", video_path,
-            "-vframes", "1",
-            "-q:v", "2",
+            "-ss",
+            &time_offset.to_string(),
+            "-i",
+            video_path,
+            "-vframes",
+            "1",
+            "-q:v",
+            "2",
             output_path,
         ])
         .output()
@@ -157,7 +177,10 @@ pub async fn generate_thumbnail(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ClipyError::FFmpeg(format!("Thumbnail generation failed: {}", stderr)));
+        return Err(ClipyError::FFmpeg(format!(
+            "Thumbnail generation failed: {}",
+            stderr
+        )));
     }
 
     Ok(())
@@ -202,11 +225,16 @@ async fn generate_thumbnail_at_time(
     let output = Command::new(&ffmpeg_path)
         .args([
             "-y",
-            "-ss", &time.to_string(),
-            "-i", video_path,
-            "-vframes", "1",
-            "-vf", &scale_filter,
-            "-q:v", "3",
+            "-ss",
+            &time.to_string(),
+            "-i",
+            video_path,
+            "-vframes",
+            "1",
+            "-vf",
+            &scale_filter,
+            "-q:v",
+            "3",
             output_path,
         ])
         .output()
@@ -215,29 +243,34 @@ async fn generate_thumbnail_at_time(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ClipyError::FFmpeg(format!("Thumbnail generation failed: {}", stderr)));
+        return Err(ClipyError::FFmpeg(format!(
+            "Thumbnail generation failed: {}",
+            stderr
+        )));
     }
 
     Ok(())
 }
 
 /// Extract audio waveform data
-pub async fn extract_waveform(
-    app: &AppHandle,
-    video_path: &str,
-    samples: u32,
-) -> Result<Vec<f32>> {
+pub async fn extract_waveform(app: &AppHandle, video_path: &str, samples: u32) -> Result<Vec<f32>> {
     let ffmpeg_path = binary::get_ffmpeg_path(app)?;
 
     // Extract raw audio samples
     let output = Command::new(&ffmpeg_path)
         .args([
-            "-i", video_path,
-            "-ac", "1",
-            "-filter:a", &format!("aresample={}", samples),
-            "-map", "0:a",
-            "-c:a", "pcm_f32le",
-            "-f", "f32le",
+            "-i",
+            video_path,
+            "-ac",
+            "1",
+            "-filter:a",
+            &format!("aresample={}", samples),
+            "-map",
+            "0:a",
+            "-c:a",
+            "pcm_f32le",
+            "-f",
+            "f32le",
             "-",
         ])
         .output()
@@ -249,7 +282,8 @@ pub async fn extract_waveform(
     }
 
     // Parse raw f32 samples
-    let samples: Vec<f32> = output.stdout
+    let samples: Vec<f32> = output
+        .stdout
         .chunks_exact(4)
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect();
@@ -287,18 +321,36 @@ fn resolve_canvas(project: &Project, settings: &ExportSettings) -> Canvas {
     if let Some((w, h)) = res.split_once('x') {
         if let (Ok(w), Ok(h)) = (w.trim().parse::<u32>(), h.trim().parse::<u32>()) {
             if w >= 2 && h >= 2 {
-                return Canvas { width: w, height: h };
+                return Canvas {
+                    width: w,
+                    height: h,
+                };
             }
         }
     }
 
     // Named presets
     match res.as_str() {
-        "2160p" | "4k" => Canvas { width: 3840, height: 2160 },
-        "1440p" | "2k" => Canvas { width: 2560, height: 1440 },
-        "1080p" | "fhd" => Canvas { width: 1920, height: 1080 },
-        "720p" | "hd" => Canvas { width: 1280, height: 720 },
-        "480p" | "sd" => Canvas { width: 854, height: 480 },
+        "2160p" | "4k" => Canvas {
+            width: 3840,
+            height: 2160,
+        },
+        "1440p" | "2k" => Canvas {
+            width: 2560,
+            height: 1440,
+        },
+        "1080p" | "fhd" => Canvas {
+            width: 1920,
+            height: 1080,
+        },
+        "720p" | "hd" => Canvas {
+            width: 1280,
+            height: 720,
+        },
+        "480p" | "sd" => Canvas {
+            width: 854,
+            height: 480,
+        },
         _ => from_project,
     }
 }
@@ -337,15 +389,22 @@ pub async fn export_project(
     let total_frames = ((project.duration.max(0.0)) * settings.fps as f64).ceil() as u64;
 
     let _ = progress_tx
-        .send(make_progress(project, 0.0, 0, total_frames, 0, 0, ExportStatus::Preparing))
+        .send(make_progress(
+            project,
+            0.0,
+            0,
+            total_frames,
+            0,
+            0,
+            ExportStatus::Preparing,
+        ))
         .await;
 
     // Plan inputs in deterministic order: tracks top-to-bottom, clips in order.
     let mut planned: Vec<PlannedClip> = Vec::new();
     let mut input_idx = 0usize;
     for track in &project.tracks {
-        let is_video_track =
-            matches!(track.track_type, TrackType::Video | TrackType::Effect);
+        let is_video_track = matches!(track.track_type, TrackType::Video | TrackType::Effect);
         let is_audio_track = matches!(track.track_type, TrackType::Audio);
         for clip in &track.clips {
             // Text clips have no source file; they are overlays, not inputs.
@@ -447,7 +506,15 @@ pub async fn export_project(
 
     let start_time = std::time::Instant::now();
     let _ = progress_tx
-        .send(make_progress(project, 0.0, 0, total_frames, 0, 0, ExportStatus::Exporting))
+        .send(make_progress(
+            project,
+            0.0,
+            0,
+            total_frames,
+            0,
+            0,
+            ExportStatus::Exporting,
+        ))
         .await;
 
     let mut reader = BufReader::new(stdout).lines();
@@ -555,7 +622,11 @@ pub async fn export_project(
             .await;
         return Err(ClipyError::FFmpeg(format!(
             "Export failed: {}",
-            if stderr_tail.is_empty() { "unknown error" } else { &stderr_tail }
+            if stderr_tail.is_empty() {
+                "unknown error"
+            } else {
+                &stderr_tail
+            }
         )));
     }
 
@@ -613,7 +684,11 @@ fn build_filter_graph(project: &Project, planned: &[PlannedClip], canvas: Canvas
 
     for p in planned {
         let clip = p.clip;
-        let speed = if clip.properties.speed > 0.0 { clip.properties.speed } else { 1.0 };
+        let speed = if clip.properties.speed > 0.0 {
+            clip.properties.speed
+        } else {
+            1.0
+        };
 
         // Video / image clips on a visual track -> trim, scale, pad, opacity.
         if p.is_video_track && matches!(clip.clip_type, ClipType::Video | ClipType::Image) {
@@ -768,7 +843,10 @@ fn build_drawtext(
     // Background box when a non-transparent background color is provided.
     let bg = text.background_color.trim();
     if !bg.is_empty() && bg.to_lowercase() != "transparent" && bg.to_lowercase() != "none" {
-        d.push_str(&format!(":box=1:boxcolor={}:boxborderw=10", normalize_color(bg)));
+        d.push_str(&format!(
+            ":box=1:boxcolor={}:boxborderw=10",
+            normalize_color(bg)
+        ));
     }
     d.push_str(&format!(":enable='between(t,{},{})'", start, end));
     d
@@ -796,7 +874,10 @@ struct EncoderChoice {
 /// to libx264 (software) so export never hard-fails on machines without NVENC.
 async fn select_video_encoder(app: &AppHandle, want_hw: bool) -> EncoderChoice {
     if !want_hw {
-        return EncoderChoice { name: "libx264".to_string(), hardware: false };
+        return EncoderChoice {
+            name: "libx264".to_string(),
+            hardware: false,
+        };
     }
 
     let available = list_ffmpeg_encoders(app).await.unwrap_or_default();
@@ -812,12 +893,18 @@ async fn select_video_encoder(app: &AppHandle, want_hw: bool) -> EncoderChoice {
     for cand in candidates {
         if available.iter().any(|e| e == cand) {
             debug!("Selected hardware encoder: {}", cand);
-            return EncoderChoice { name: (*cand).to_string(), hardware: true };
+            return EncoderChoice {
+                name: (*cand).to_string(),
+                hardware: true,
+            };
         }
     }
 
     warn!("No hardware H.264 encoder available; falling back to libx264");
-    EncoderChoice { name: "libx264".to_string(), hardware: false }
+    EncoderChoice {
+        name: "libx264".to_string(),
+        hardware: false,
+    }
 }
 
 /// Cache of ffmpeg-reported encoder names (probing is relatively expensive).
@@ -922,11 +1009,7 @@ pub async fn transcode_video(
 ) -> Result<()> {
     let ffmpeg_path = binary::get_ffmpeg_path(app)?;
 
-    let mut args = vec![
-        "-y".to_string(),
-        "-i".to_string(),
-        input_path.to_string(),
-    ];
+    let mut args = vec!["-y".to_string(), "-i".to_string(), input_path.to_string()];
 
     // Transcode preserves both streams; detect encoder with software fallback.
     let encoder = select_video_encoder(app, settings.use_hardware_acceleration).await;
@@ -1012,7 +1095,13 @@ mod tests {
         let p = base_project();
         let mut s = base_settings();
         s.resolution = "640x480".into();
-        assert_eq!(resolve_canvas(&p, &s), Canvas { width: 640, height: 480 });
+        assert_eq!(
+            resolve_canvas(&p, &s),
+            Canvas {
+                width: 640,
+                height: 480
+            }
+        );
     }
 
     #[test]
@@ -1035,7 +1124,10 @@ mod tests {
             s.resolution = res.into();
             assert_eq!(
                 resolve_canvas(&p, &s),
-                Canvas { width: w, height: h },
+                Canvas {
+                    width: w,
+                    height: h
+                },
                 "preset {res}"
             );
         }
@@ -1046,7 +1138,13 @@ mod tests {
         let p = base_project();
         let mut s = base_settings();
         s.resolution = "1080P".into();
-        assert_eq!(resolve_canvas(&p, &s), Canvas { width: 1920, height: 1080 });
+        assert_eq!(
+            resolve_canvas(&p, &s),
+            Canvas {
+                width: 1920,
+                height: 1080
+            }
+        );
     }
 
     #[test]
@@ -1057,7 +1155,10 @@ mod tests {
             s.resolution = res.into();
             assert_eq!(
                 resolve_canvas(&p, &s),
-                Canvas { width: 1280, height: 720 },
+                Canvas {
+                    width: 1280,
+                    height: 720
+                },
                 "res {res:?}"
             );
         }
@@ -1068,7 +1169,13 @@ mod tests {
         let p = base_project();
         let mut s = base_settings();
         s.resolution = "garbage".into();
-        assert_eq!(resolve_canvas(&p, &s), Canvas { width: 1280, height: 720 });
+        assert_eq!(
+            resolve_canvas(&p, &s),
+            Canvas {
+                width: 1280,
+                height: 720
+            }
+        );
     }
 
     #[test]
@@ -1077,7 +1184,13 @@ mod tests {
         // Too-small dims (< 2) are rejected and fall through to preset match -> project.
         let mut s = base_settings();
         s.resolution = "1x1".into();
-        assert_eq!(resolve_canvas(&p, &s), Canvas { width: 1280, height: 720 });
+        assert_eq!(
+            resolve_canvas(&p, &s),
+            Canvas {
+                width: 1280,
+                height: 720
+            }
+        );
     }
 
     // ---- parse_ffprobe_output ----
@@ -1169,7 +1282,10 @@ mod tests {
     // ---- build_output_args ----
 
     fn enc(name: &str, hardware: bool) -> EncoderChoice {
-        EncoderChoice { name: name.into(), hardware }
+        EncoderChoice {
+            name: name.into(),
+            hardware,
+        }
     }
 
     #[test]
@@ -1259,9 +1375,15 @@ mod tests {
     #[test]
     fn filter_graph_single_video_clip_not_concatenated() {
         let mut p = base_project();
-        p.tracks = vec![track(TrackType::Video, vec![clip(ClipType::Video, "a.mp4")])];
+        p.tracks = vec![track(
+            TrackType::Video,
+            vec![clip(ClipType::Video, "a.mp4")],
+        )];
         let planned = plan(&p);
-        let canvas = Canvas { width: 1280, height: 720 };
+        let canvas = Canvas {
+            width: 1280,
+            height: 720,
+        };
         let g = build_filter_graph(&p, &planned, canvas);
         assert!(!g.filter.contains("concat"), "single clip must not concat");
         assert_eq!(g.video_label.as_deref(), Some("v0"));
@@ -1276,10 +1398,16 @@ mod tests {
         let mut p = base_project();
         p.tracks = vec![track(
             TrackType::Video,
-            vec![clip(ClipType::Video, "a.mp4"), clip(ClipType::Video, "b.mp4")],
+            vec![
+                clip(ClipType::Video, "a.mp4"),
+                clip(ClipType::Video, "b.mp4"),
+            ],
         )];
         let planned = plan(&p);
-        let canvas = Canvas { width: 1280, height: 720 };
+        let canvas = Canvas {
+            width: 1280,
+            height: 720,
+        };
         let g = build_filter_graph(&p, &planned, canvas);
         assert!(g.filter.contains("concat=n=2:v=1:a=0[vcat]"));
         assert_eq!(g.video_label.as_deref(), Some("vcat"));
@@ -1297,7 +1425,14 @@ mod tests {
         tr.volume = 0.5;
         p.tracks = vec![tr];
         let planned = plan(&p);
-        let g = build_filter_graph(&p, &planned, Canvas { width: 1280, height: 720 });
+        let g = build_filter_graph(
+            &p,
+            &planned,
+            Canvas {
+                width: 1280,
+                height: 720,
+            },
+        );
         assert!(g.filter.contains("atrim=start=1:end=4"));
         // 0.5 (clip) * 0.5 (track) = 0.25
         assert!(g.filter.contains("volume=0.25"));
@@ -1312,7 +1447,14 @@ mod tests {
         tr.muted = true;
         p.tracks = vec![tr];
         let planned = plan(&p);
-        let g = build_filter_graph(&p, &planned, Canvas { width: 1280, height: 720 });
+        let g = build_filter_graph(
+            &p,
+            &planned,
+            Canvas {
+                width: 1280,
+                height: 720,
+            },
+        );
         assert!(g.audio_label.is_none());
     }
 
@@ -1337,7 +1479,14 @@ mod tests {
             track(TrackType::Text, vec![text_clip]),
         ];
         let planned = plan(&p);
-        let g = build_filter_graph(&p, &planned, Canvas { width: 1280, height: 720 });
+        let g = build_filter_graph(
+            &p,
+            &planned,
+            Canvas {
+                width: 1280,
+                height: 720,
+            },
+        );
         assert!(g.filter.contains("drawtext=text='Hello'"));
         assert!(g.filter.contains("fontcolor=0xffffff"));
         assert!(g.filter.contains("enable='between(t,1,3)'"));
@@ -1348,9 +1497,19 @@ mod tests {
     #[test]
     fn filter_graph_image_clip_not_trimmed() {
         let mut p = base_project();
-        p.tracks = vec![track(TrackType::Video, vec![clip(ClipType::Image, "a.png")])];
+        p.tracks = vec![track(
+            TrackType::Video,
+            vec![clip(ClipType::Image, "a.png")],
+        )];
         let planned = plan(&p);
-        let g = build_filter_graph(&p, &planned, Canvas { width: 1280, height: 720 });
+        let g = build_filter_graph(
+            &p,
+            &planned,
+            Canvas {
+                width: 1280,
+                height: 720,
+            },
+        );
         // Images are not trimmed (no timeline).
         assert!(!g.filter.contains("trim="));
         assert!(g.filter.contains("scale=1280:720"));
@@ -1365,7 +1524,14 @@ mod tests {
         c.properties.opacity = 0.5;
         p.tracks = vec![track(TrackType::Video, vec![c])];
         let planned = plan(&p);
-        let g = build_filter_graph(&p, &planned, Canvas { width: 1280, height: 720 });
+        let g = build_filter_graph(
+            &p,
+            &planned,
+            Canvas {
+                width: 1280,
+                height: 720,
+            },
+        );
         assert!(g.filter.contains("colorchannelmixer=aa=0.5"));
     }
 

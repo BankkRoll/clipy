@@ -29,7 +29,7 @@ export function Library() {
   const { stats } = useLibraryStats();
 
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
   // Memoized filtered and sorted videos

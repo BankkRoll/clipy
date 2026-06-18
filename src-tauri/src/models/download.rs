@@ -18,7 +18,6 @@ pub enum DownloadStatus {
     Paused,
 }
 
-
 /// Download task information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -26,7 +26,8 @@ describe("cn", () => {
   });
 
   it("handles conditional/falsy values", () => {
-    expect(cn("a", false && "b", null, undefined, "c")).toBe("a c");
+    const cond = false as boolean;
+    expect(cn("a", cond && "b", null, undefined, "c")).toBe("a c");
   });
 });
 

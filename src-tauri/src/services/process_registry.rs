@@ -99,7 +99,7 @@ fn kill_process(pid: u32) -> bool {
 
     // Use kill on Unix - kill the process group
     let result = Command::new("kill")
-        .args(["-TERM", &format!("-{}", pid)])  // Negative PID kills process group
+        .args(["-TERM", &format!("-{}", pid)]) // Negative PID kills process group
         .output();
 
     // If that fails, try just the process

@@ -174,7 +174,7 @@ export function useDownloadQueue() {
 
   // Initial fetch
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
   // Listen for progress updates

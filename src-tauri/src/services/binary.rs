@@ -17,11 +17,17 @@ pub fn check_binaries(app: &AppHandle) -> Result<BinaryStatus> {
 
     debug!("Checking FFmpeg installation...");
     let ffmpeg_status = check_ffmpeg(&binaries_dir);
-    debug!("FFmpeg status: installed={}, version={:?}", ffmpeg_status.0, ffmpeg_status.1);
+    debug!(
+        "FFmpeg status: installed={}, version={:?}",
+        ffmpeg_status.0, ffmpeg_status.1
+    );
 
     debug!("Checking yt-dlp installation...");
     let ytdlp_status = check_ytdlp(&binaries_dir);
-    debug!("yt-dlp status: installed={}, version={:?}", ytdlp_status.0, ytdlp_status.1);
+    debug!(
+        "yt-dlp status: installed={}, version={:?}",
+        ytdlp_status.0, ytdlp_status.1
+    );
 
     let status = BinaryStatus {
         ffmpeg_installed: ffmpeg_status.0,
@@ -39,7 +45,11 @@ pub fn check_binaries(app: &AppHandle) -> Result<BinaryStatus> {
 /// Check FFmpeg installation
 fn check_ffmpeg(binaries_dir: &PathBuf) -> (bool, Option<String>, Option<PathBuf>) {
     // Check in binaries directory first
-    let local_path = binaries_dir.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });
+    let local_path = binaries_dir.join(if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    });
     debug!("Checking local FFmpeg path: {:?}", local_path);
 
     if local_path.exists() {
@@ -54,7 +64,11 @@ fn check_ffmpeg(binaries_dir: &PathBuf) -> (bool, Option<String>, Option<PathBuf
     }
 
     // Check system PATH
-    let system_cmd = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    let system_cmd = if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
     debug!("Checking system PATH for: {}", system_cmd);
     if let Some(version) = get_ffmpeg_version_from_path(system_cmd) {
         debug!("Found FFmpeg in PATH, version: {}", version);
@@ -80,7 +94,11 @@ fn check_ffmpeg(binaries_dir: &PathBuf) -> (bool, Option<String>, Option<PathBuf
 /// Check yt-dlp installation
 fn check_ytdlp(binaries_dir: &PathBuf) -> (bool, Option<String>, Option<PathBuf>) {
     // Check in binaries directory first
-    let local_path = binaries_dir.join(if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" });
+    let local_path = binaries_dir.join(if cfg!(windows) {
+        "yt-dlp.exe"
+    } else {
+        "yt-dlp"
+    });
     debug!("Checking local yt-dlp path: {:?}", local_path);
 
     if local_path.exists() {
@@ -95,7 +113,11 @@ fn check_ytdlp(binaries_dir: &PathBuf) -> (bool, Option<String>, Option<PathBuf>
     }
 
     // Check system PATH
-    let system_cmd = if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" };
+    let system_cmd = if cfg!(windows) {
+        "yt-dlp.exe"
+    } else {
+        "yt-dlp"
+    };
     debug!("Checking system PATH for: {}", system_cmd);
     if let Some(version) = get_ytdlp_version_from_path(system_cmd) {
         debug!("Found yt-dlp in PATH, version: {}", version);
@@ -119,10 +141,7 @@ fn check_ytdlp(binaries_dir: &PathBuf) -> (bool, Option<String>, Option<PathBuf>
 
 /// Get FFmpeg version from a specific path
 fn get_ffmpeg_version(path: &PathBuf) -> Option<String> {
-    let output = Command::new(path)
-        .arg("-version")
-        .output()
-        .ok()?;
+    let output = Command::new(path).arg("-version").output().ok()?;
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -134,10 +153,7 @@ fn get_ffmpeg_version(path: &PathBuf) -> Option<String> {
 
 /// Get FFmpeg version from system PATH
 fn get_ffmpeg_version_from_path(cmd: &str) -> Option<String> {
-    let output = Command::new(cmd)
-        .arg("-version")
-        .output()
-        .ok()?;
+    let output = Command::new(cmd).arg("-version").output().ok()?;
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -162,10 +178,7 @@ fn parse_ffmpeg_version(output: &str) -> Option<String> {
 
 /// Get yt-dlp version from a specific path
 fn get_ytdlp_version(path: &PathBuf) -> Option<String> {
-    let output = Command::new(path)
-        .arg("--version")
-        .output()
-        .ok()?;
+    let output = Command::new(path).arg("--version").output().ok()?;
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -177,10 +190,7 @@ fn get_ytdlp_version(path: &PathBuf) -> Option<String> {
 
 /// Get yt-dlp version from system PATH
 fn get_ytdlp_version_from_path(cmd: &str) -> Option<String> {
-    let output = Command::new(cmd)
-        .arg("--version")
-        .output()
-        .ok()?;
+    let output = Command::new(cmd).arg("--version").output().ok()?;
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -194,7 +204,11 @@ fn get_ytdlp_version_from_path(cmd: &str) -> Option<String> {
 pub fn get_ffmpeg_path(app: &AppHandle) -> Result<PathBuf> {
     debug!("Getting FFmpeg path");
     let binaries_dir = paths::get_binaries_dir(app)?;
-    let local_path = binaries_dir.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });
+    let local_path = binaries_dir.join(if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    });
 
     if local_path.exists() {
         debug!("Using local FFmpeg: {:?}", local_path);
@@ -202,7 +216,11 @@ pub fn get_ffmpeg_path(app: &AppHandle) -> Result<PathBuf> {
     }
 
     // Try system PATH
-    let system_cmd = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    let system_cmd = if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
     debug!("Local FFmpeg not found, checking system PATH");
     if let Ok(output) = Command::new(if cfg!(windows) { "where" } else { "which" })
         .arg(system_cmd)
@@ -226,7 +244,11 @@ pub fn get_ffmpeg_path(app: &AppHandle) -> Result<PathBuf> {
 pub fn get_ytdlp_path(app: &AppHandle) -> Result<PathBuf> {
     debug!("Getting yt-dlp path");
     let binaries_dir = paths::get_binaries_dir(app)?;
-    let local_path = binaries_dir.join(if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" });
+    let local_path = binaries_dir.join(if cfg!(windows) {
+        "yt-dlp.exe"
+    } else {
+        "yt-dlp"
+    });
 
     if local_path.exists() {
         debug!("Using local yt-dlp: {:?}", local_path);
@@ -234,7 +256,11 @@ pub fn get_ytdlp_path(app: &AppHandle) -> Result<PathBuf> {
     }
 
     // Try system PATH
-    let system_cmd = if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" };
+    let system_cmd = if cfg!(windows) {
+        "yt-dlp.exe"
+    } else {
+        "yt-dlp"
+    };
     debug!("Local yt-dlp not found, checking system PATH");
     if let Ok(output) = Command::new(if cfg!(windows) { "where" } else { "which" })
         .arg(system_cmd)
@@ -258,7 +284,11 @@ pub fn get_ytdlp_path(app: &AppHandle) -> Result<PathBuf> {
 pub fn get_ffprobe_path(app: &AppHandle) -> Result<PathBuf> {
     debug!("Getting FFprobe path");
     let binaries_dir = paths::get_binaries_dir(app)?;
-    let local_path = binaries_dir.join(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" });
+    let local_path = binaries_dir.join(if cfg!(windows) {
+        "ffprobe.exe"
+    } else {
+        "ffprobe"
+    });
 
     if local_path.exists() {
         debug!("Using local FFprobe: {:?}", local_path);
@@ -266,7 +296,11 @@ pub fn get_ffprobe_path(app: &AppHandle) -> Result<PathBuf> {
     }
 
     // Try system PATH
-    let system_cmd = if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" };
+    let system_cmd = if cfg!(windows) {
+        "ffprobe.exe"
+    } else {
+        "ffprobe"
+    };
     debug!("Local FFprobe not found, checking system PATH");
     if let Ok(output) = Command::new(if cfg!(windows) { "where" } else { "which" })
         .arg(system_cmd)
@@ -286,7 +320,11 @@ pub fn get_ffprobe_path(app: &AppHandle) -> Result<PathBuf> {
     debug!("FFprobe not in PATH, checking alongside FFmpeg");
     if let Ok(ffmpeg_path) = get_ffmpeg_path(app) {
         if let Some(parent) = ffmpeg_path.parent() {
-            let ffprobe_path = parent.join(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" });
+            let ffprobe_path = parent.join(if cfg!(windows) {
+                "ffprobe.exe"
+            } else {
+                "ffprobe"
+            });
             debug!("Checking FFprobe next to FFmpeg: {:?}", ffprobe_path);
             if ffprobe_path.exists() {
                 debug!("Found FFprobe next to FFmpeg: {:?}", ffprobe_path);
@@ -304,7 +342,11 @@ pub async fn install_ffmpeg(app: &AppHandle) -> Result<PathBuf> {
     info!("Installing FFmpeg");
 
     let binaries_dir = paths::get_binaries_dir(app)?;
-    let target_path = binaries_dir.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });
+    let target_path = binaries_dir.join(if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    });
     debug!("FFmpeg target path: {:?}", target_path);
 
     #[cfg(target_os = "windows")]
@@ -321,7 +363,8 @@ pub async fn install_ffmpeg(app: &AppHandle) -> Result<PathBuf> {
 
     #[cfg(target_os = "linux")]
     {
-        let download_url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz";
+        let download_url =
+            "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz";
         download_and_extract_ffmpeg(download_url, &binaries_dir, &target_path).await?;
     }
 
@@ -334,7 +377,11 @@ pub async fn install_ytdlp(app: &AppHandle) -> Result<PathBuf> {
     info!("Installing yt-dlp");
 
     let binaries_dir = paths::get_binaries_dir(app)?;
-    let target_path = binaries_dir.join(if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" });
+    let target_path = binaries_dir.join(if cfg!(windows) {
+        "yt-dlp.exe"
+    } else {
+        "yt-dlp"
+    });
     debug!("yt-dlp target path: {:?}", target_path);
 
     #[cfg(target_os = "windows")]
@@ -370,10 +417,14 @@ async fn download_binary(url: &str, target_path: &PathBuf) -> Result<()> {
         .map_err(|e| ClipyError::Other(format!("Failed to download: {}", e)))?;
 
     if !response.status().is_success() {
-        return Err(ClipyError::Other(format!("Download failed with status: {}", response.status())));
+        return Err(ClipyError::Other(format!(
+            "Download failed with status: {}",
+            response.status()
+        )));
     }
 
-    let bytes = response.bytes()
+    let bytes = response
+        .bytes()
         .await
         .map_err(|e| ClipyError::Other(format!("Failed to read response: {}", e)))?;
 
@@ -392,7 +443,11 @@ async fn download_binary(url: &str, target_path: &PathBuf) -> Result<()> {
 ///
 /// - Windows/macOS: `.zip` archives, extracted via the `zip` crate.
 /// - Linux: `.tar.xz` archive, decompressed with `xz2` then untarred with `tar`.
-async fn download_and_extract_ffmpeg(url: &str, binaries_dir: &PathBuf, target_path: &PathBuf) -> Result<()> {
+async fn download_and_extract_ffmpeg(
+    url: &str,
+    binaries_dir: &PathBuf,
+    target_path: &PathBuf,
+) -> Result<()> {
     // Download the archive
     debug!("Downloading FFmpeg from {}", url);
 
@@ -401,15 +456,23 @@ async fn download_and_extract_ffmpeg(url: &str, binaries_dir: &PathBuf, target_p
         .map_err(|e| ClipyError::Other(format!("Failed to download: {}", e)))?;
 
     if !response.status().is_success() {
-        return Err(ClipyError::Other(format!("Download failed with status: {}", response.status())));
+        return Err(ClipyError::Other(format!(
+            "Download failed with status: {}",
+            response.status()
+        )));
     }
 
-    let bytes = response.bytes()
+    let bytes = response
+        .bytes()
         .await
         .map_err(|e| ClipyError::Other(format!("Failed to read response: {}", e)))?;
 
     // Write to temp file (memory-friendly: extraction streams from this file)
-    let ext = if cfg!(target_os = "linux") { "tar.xz" } else { "zip" };
+    let ext = if cfg!(target_os = "linux") {
+        "tar.xz"
+    } else {
+        "zip"
+    };
     let temp_archive = binaries_dir.join(format!("ffmpeg_temp.{}", ext));
     std::fs::write(&temp_archive, &bytes)
         .map_err(|e| ClipyError::Other(format!("Failed to write archive: {}", e)))?;
@@ -420,7 +483,11 @@ async fn download_and_extract_ffmpeg(url: &str, binaries_dir: &PathBuf, target_p
     let binaries_dir_extract = binaries_dir.clone();
     let target_path_extract = target_path.clone();
     let extract_result = tokio::task::spawn_blocking(move || {
-        extract_ffmpeg_archive(&temp_archive_extract, &binaries_dir_extract, &target_path_extract)
+        extract_ffmpeg_archive(
+            &temp_archive_extract,
+            &binaries_dir_extract,
+            &target_path_extract,
+        )
     })
     .await
     .map_err(|e| ClipyError::Other(format!("Extraction task failed: {}", e)))?;
@@ -442,13 +509,21 @@ async fn download_and_extract_ffmpeg(url: &str, binaries_dir: &PathBuf, target_p
 
 /// Synchronous extraction of the ffmpeg/ffprobe binaries from a downloaded archive.
 #[cfg(not(target_os = "linux"))]
-fn extract_ffmpeg_archive(archive: &PathBuf, binaries_dir: &PathBuf, target_path: &PathBuf) -> Result<()> {
+fn extract_ffmpeg_archive(
+    archive: &PathBuf,
+    binaries_dir: &PathBuf,
+    target_path: &PathBuf,
+) -> Result<()> {
     extract_ffmpeg_zip(archive, binaries_dir, target_path)
 }
 
 /// Synchronous extraction of the ffmpeg/ffprobe binaries from a downloaded archive.
 #[cfg(target_os = "linux")]
-fn extract_ffmpeg_archive(archive: &PathBuf, binaries_dir: &PathBuf, target_path: &PathBuf) -> Result<()> {
+fn extract_ffmpeg_archive(
+    archive: &PathBuf,
+    binaries_dir: &PathBuf,
+    target_path: &PathBuf,
+) -> Result<()> {
     extract_ffmpeg_tar_xz(archive, binaries_dir, target_path)
 }
 
@@ -457,8 +532,16 @@ fn extract_ffmpeg_archive(archive: &PathBuf, binaries_dir: &PathBuf, target_path
 fn ffmpeg_entry_dest(name: &str) -> Option<&'static str> {
     let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
     match base {
-        "ffmpeg" | "ffmpeg.exe" => Some(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }),
-        "ffprobe" | "ffprobe.exe" => Some(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" }),
+        "ffmpeg" | "ffmpeg.exe" => Some(if cfg!(windows) {
+            "ffmpeg.exe"
+        } else {
+            "ffmpeg"
+        }),
+        "ffprobe" | "ffprobe.exe" => Some(if cfg!(windows) {
+            "ffprobe.exe"
+        } else {
+            "ffprobe"
+        }),
         _ => None,
     }
 }
@@ -480,7 +563,11 @@ fn set_executable(_path: &PathBuf) -> Result<()> {
 
 /// Extract ffmpeg/ffprobe from a `.zip` archive (Windows/macOS).
 #[cfg(not(target_os = "linux"))]
-fn extract_ffmpeg_zip(archive: &PathBuf, binaries_dir: &PathBuf, target_path: &PathBuf) -> Result<()> {
+fn extract_ffmpeg_zip(
+    archive: &PathBuf,
+    binaries_dir: &PathBuf,
+    target_path: &PathBuf,
+) -> Result<()> {
     let file = std::fs::File::open(archive)
         .map_err(|e| ClipyError::Other(format!("Failed to open archive: {}", e)))?;
     let mut zip = zip::ZipArchive::new(file)
@@ -502,7 +589,12 @@ fn extract_ffmpeg_zip(archive: &PathBuf, binaries_dir: &PathBuf, target_path: &P
             None => continue,
         };
 
-        let dest_path = if dest_name == target_path.file_name().and_then(|n| n.to_str()).unwrap_or("") {
+        let dest_path = if dest_name
+            == target_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+        {
             target_path.clone()
         } else {
             binaries_dir.join(dest_name)
@@ -533,7 +625,11 @@ fn extract_ffmpeg_zip(archive: &PathBuf, binaries_dir: &PathBuf, target_path: &P
 
 /// Extract ffmpeg/ffprobe from a `.tar.xz` archive (Linux).
 #[cfg(target_os = "linux")]
-fn extract_ffmpeg_tar_xz(archive: &PathBuf, binaries_dir: &PathBuf, target_path: &PathBuf) -> Result<()> {
+fn extract_ffmpeg_tar_xz(
+    archive: &PathBuf,
+    binaries_dir: &PathBuf,
+    target_path: &PathBuf,
+) -> Result<()> {
     let file = std::fs::File::open(archive)
         .map_err(|e| ClipyError::Other(format!("Failed to open archive: {}", e)))?;
     let decompressor = xz2::read::XzDecoder::new(std::io::BufReader::new(file));
@@ -558,7 +654,12 @@ fn extract_ffmpeg_tar_xz(archive: &PathBuf, binaries_dir: &PathBuf, target_path:
             None => continue,
         };
 
-        let dest_path = if dest_name == target_path.file_name().and_then(|n| n.to_str()).unwrap_or("") {
+        let dest_path = if dest_name
+            == target_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+        {
             target_path.clone()
         } else {
             binaries_dir.join(dest_name)
@@ -593,10 +694,9 @@ pub async fn update_ytdlp(app: &AppHandle) -> Result<String> {
     let ytdlp_path = get_ytdlp_path(app)?;
     debug!("Running yt-dlp update from: {:?}", ytdlp_path);
 
-    let output = Command::new(&ytdlp_path)
-        .arg("-U")
-        .output()
-        .map_err(|e| ClipyError::BinaryExecutionFailed(format!("Failed to update yt-dlp: {}", e)))?;
+    let output = Command::new(&ytdlp_path).arg("-U").output().map_err(|e| {
+        ClipyError::BinaryExecutionFailed(format!("Failed to update yt-dlp: {}", e))
+    })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -610,6 +710,9 @@ pub async fn update_ytdlp(app: &AppHandle) -> Result<String> {
         Ok(stdout.to_string())
     } else {
         debug!("yt-dlp update failed");
-        Err(ClipyError::BinaryExecutionFailed(format!("Update failed: {}", stderr)))
+        Err(ClipyError::BinaryExecutionFailed(format!(
+            "Update failed: {}",
+            stderr
+        )))
     }
 }

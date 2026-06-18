@@ -95,7 +95,9 @@ pub async fn open_folder(path: String) -> Result<()> {
         std::process::Command::new("explorer")
             .arg(&path)
             .spawn()
-            .map_err(|e| crate::error::ClipyError::Other(format!("Failed to open folder: {}", e)))?;
+            .map_err(|e| {
+                crate::error::ClipyError::Other(format!("Failed to open folder: {}", e))
+            })?;
     }
 
     #[cfg(target_os = "macos")]
@@ -103,7 +105,9 @@ pub async fn open_folder(path: String) -> Result<()> {
         std::process::Command::new("open")
             .arg(&path)
             .spawn()
-            .map_err(|e| crate::error::ClipyError::Other(format!("Failed to open folder: {}", e)))?;
+            .map_err(|e| {
+                crate::error::ClipyError::Other(format!("Failed to open folder: {}", e))
+            })?;
     }
 
     #[cfg(target_os = "linux")]
@@ -111,7 +115,9 @@ pub async fn open_folder(path: String) -> Result<()> {
         std::process::Command::new("xdg-open")
             .arg(&path)
             .spawn()
-            .map_err(|e| crate::error::ClipyError::Other(format!("Failed to open folder: {}", e)))?;
+            .map_err(|e| {
+                crate::error::ClipyError::Other(format!("Failed to open folder: {}", e))
+            })?;
     }
 
     Ok(())
@@ -133,7 +139,9 @@ pub async fn show_in_folder(path: String) -> Result<()> {
         std::process::Command::new("explorer")
             .args(["/select,", &path])
             .spawn()
-            .map_err(|e| crate::error::ClipyError::Other(format!("Failed to show in folder: {}", e)))?;
+            .map_err(|e| {
+                crate::error::ClipyError::Other(format!("Failed to show in folder: {}", e))
+            })?;
     }
 
     #[cfg(target_os = "macos")]
@@ -141,7 +149,9 @@ pub async fn show_in_folder(path: String) -> Result<()> {
         std::process::Command::new("open")
             .args(["-R", &path])
             .spawn()
-            .map_err(|e| crate::error::ClipyError::Other(format!("Failed to show in folder: {}", e)))?;
+            .map_err(|e| {
+                crate::error::ClipyError::Other(format!("Failed to show in folder: {}", e))
+            })?;
     }
 
     #[cfg(target_os = "linux")]
@@ -151,7 +161,9 @@ pub async fn show_in_folder(path: String) -> Result<()> {
             std::process::Command::new("xdg-open")
                 .arg(parent)
                 .spawn()
-                .map_err(|e| crate::error::ClipyError::Other(format!("Failed to show in folder: {}", e)))?;
+                .map_err(|e| {
+                    crate::error::ClipyError::Other(format!("Failed to show in folder: {}", e))
+                })?;
         }
     }
 
@@ -164,7 +176,10 @@ pub fn get_default_download_path() -> String {
     if let Some(dir) = dirs::download_dir() {
         dir.join("Clipy").to_string_lossy().to_string()
     } else if let Some(dir) = dirs::home_dir() {
-        dir.join("Downloads").join("Clipy").to_string_lossy().to_string()
+        dir.join("Downloads")
+            .join("Clipy")
+            .to_string_lossy()
+            .to_string()
     } else {
         "Downloads/Clipy".to_string()
     }

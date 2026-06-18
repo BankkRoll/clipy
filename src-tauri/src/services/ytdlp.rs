@@ -58,12 +58,7 @@ pub async fn fetch_video_info(app: &AppHandle, url: &str) -> Result<VideoInfo> {
     debug!("yt-dlp fetch args: {:?}", args);
 
     let output = Command::new(&ytdlp_path)
-        .args([
-            "--dump-json",
-            "--no-playlist",
-            "--no-warnings",
-            url,
-        ])
+        .args(["--dump-json", "--no-playlist", "--no-warnings", url])
         .output()
         .await
         .map_err(|e| ClipyError::Ytdlp(format!("Failed to run yt-dlp: {}", e)))?;
@@ -79,15 +74,21 @@ pub async fn fetch_video_info(app: &AppHandle, url: &str) -> Result<VideoInfo> {
         .map_err(|e| ClipyError::Ytdlp(format!("Failed to parse video info: {}", e)))?;
 
     let video_info = convert_video_info(raw_info);
-    debug!("Fetched video info: {} (duration: {}s, {} formats)",
-           video_info.title, video_info.duration, video_info.formats.len());
+    debug!(
+        "Fetched video info: {} (duration: {}s, {} formats)",
+        video_info.title,
+        video_info.duration,
+        video_info.formats.len()
+    );
 
     Ok(video_info)
 }
 
 /// Convert raw yt-dlp info to our VideoInfo model
 fn convert_video_info(raw: YtdlpVideoInfo) -> VideoInfo {
-    let formats = raw.formats.unwrap_or_default()
+    let formats = raw
+        .formats
+        .unwrap_or_default()
         .into_iter()
         .filter(|f| {
             // Filter to only include useful formats
@@ -101,11 +102,9 @@ fn convert_video_info(raw: YtdlpVideoInfo) -> VideoInfo {
             VideoFormat {
                 format_id: f.format_id,
                 extension: f.ext.unwrap_or_else(|| "mp4".to_string()),
-                resolution: f.resolution.unwrap_or_else(|| {
-                    match (f.width, f.height) {
-                        (Some(w), Some(h)) => format!("{}x{}", w, h),
-                        _ => "unknown".to_string(),
-                    }
+                resolution: f.resolution.unwrap_or_else(|| match (f.width, f.height) {
+                    (Some(w), Some(h)) => format!("{}x{}", w, h),
+                    _ => "unknown".to_string(),
                 }),
                 width: f.width.unwrap_or(0),
                 height: f.height.unwrap_or(0),
@@ -134,7 +133,11 @@ fn convert_video_info(raw: YtdlpVideoInfo) -> VideoInfo {
         like_count: raw.like_count.unwrap_or(0),
         formats,
         is_live: raw.is_live.unwrap_or(false),
-        is_private: raw.availability.as_ref().map(|a| a == "private").unwrap_or(false),
+        is_private: raw
+            .availability
+            .as_ref()
+            .map(|a| a == "private")
+            .unwrap_or(false),
     }
 }
 
@@ -166,7 +169,7 @@ pub async fn download_video(
         "--newline".to_string(),
         "--progress".to_string(),
         "--print".to_string(),
-        "after_move:filepath".to_string(),  // Print the final filepath after all processing
+        "after_move:filepath".to_string(), // Print the final filepath after all processing
         "-f".to_string(),
         format_selector,
         "-o".to_string(),
@@ -350,25 +353,31 @@ pub async fn download_video(
         }
     }
 
-    let stdout = child.stdout.take()
+    let stdout = child
+        .stdout
+        .take()
         .ok_or_else(|| ClipyError::Ytdlp("Failed to capture stdout".into()))?;
-    let stderr = child.stderr.take()
+    let stderr = child
+        .stderr
+        .take()
         .ok_or_else(|| ClipyError::Ytdlp("Failed to capture stderr".into()))?;
 
     let mut stdout_reader = BufReader::new(stdout).lines();
     let mut stderr_reader = BufReader::new(stderr).lines();
 
     // Send initial progress
-    let _ = progress_tx.send(DownloadProgress {
-        download_id: download_id.clone(),
-        status: DownloadStatus::Downloading,
-        progress: 0.0,
-        downloaded_bytes: 0,
-        total_bytes: 0,
-        speed: 0,
-        eta: 0,
-        file_path: None,
-    }).await;
+    let _ = progress_tx
+        .send(DownloadProgress {
+            download_id: download_id.clone(),
+            status: DownloadStatus::Downloading,
+            progress: 0.0,
+            downloaded_bytes: 0,
+            total_bytes: 0,
+            speed: 0,
+            eta: 0,
+            file_path: None,
+        })
+        .await;
 
     // Track the actual downloaded file path from yt-dlp output
     let mut captured_file_path: Option<String> = None;
@@ -417,12 +426,17 @@ pub async fn download_video(
         let trimmed = line.trim();
         if !trimmed.starts_with('[') && !trimmed.is_empty() {
             // Check if it looks like a valid file path
-            let has_extension = trimmed.contains('.') &&
-                (trimmed.ends_with(".mp4") || trimmed.ends_with(".mkv") ||
-                 trimmed.ends_with(".webm") || trimmed.ends_with(".m4a") ||
-                 trimmed.ends_with(".mp3") || trimmed.ends_with(".opus") ||
-                 trimmed.ends_with(".flac") || trimmed.ends_with(".wav") ||
-                 trimmed.ends_with(".avi") || trimmed.ends_with(".mov"));
+            let has_extension = trimmed.contains('.')
+                && (trimmed.ends_with(".mp4")
+                    || trimmed.ends_with(".mkv")
+                    || trimmed.ends_with(".webm")
+                    || trimmed.ends_with(".m4a")
+                    || trimmed.ends_with(".mp3")
+                    || trimmed.ends_with(".opus")
+                    || trimmed.ends_with(".flac")
+                    || trimmed.ends_with(".wav")
+                    || trimmed.ends_with(".avi")
+                    || trimmed.ends_with(".mov"));
             let has_path_sep = trimmed.contains('/') || trimmed.contains('\\');
 
             if has_extension && has_path_sep {
@@ -457,18 +471,23 @@ pub async fn download_video(
         }
 
         if let Some(progress) = parse_progress_line(&line) {
-            info!("Sending progress to channel: {}% - {} bytes of {} bytes, speed: {}, eta: {}",
-                  progress.0, progress.1, progress.2, progress.3, progress.4);
-            match progress_tx.send(DownloadProgress {
-                download_id: download_id.clone(),
-                status: DownloadStatus::Downloading,
-                progress: progress.0,
-                downloaded_bytes: progress.1,
-                total_bytes: progress.2,
-                speed: progress.3,
-                eta: progress.4,
-                file_path: None,
-            }).await {
+            info!(
+                "Sending progress to channel: {}% - {} bytes of {} bytes, speed: {}, eta: {}",
+                progress.0, progress.1, progress.2, progress.3, progress.4
+            );
+            match progress_tx
+                .send(DownloadProgress {
+                    download_id: download_id.clone(),
+                    status: DownloadStatus::Downloading,
+                    progress: progress.0,
+                    downloaded_bytes: progress.1,
+                    total_bytes: progress.2,
+                    speed: progress.3,
+                    eta: progress.4,
+                    file_path: None,
+                })
+                .await
+            {
                 Ok(()) => {
                     debug!("Progress sent successfully to channel");
                 }
@@ -479,7 +498,10 @@ pub async fn download_video(
         }
     }
 
-    info!("Finished reading yt-dlp output. Total lines received: {}", lines_received);
+    info!(
+        "Finished reading yt-dlp output. Total lines received: {}",
+        lines_received
+    );
 
     // Drain any remaining stderr output after stdout closes
     while let Ok(Some(line)) = stderr_reader.next_line().await {
@@ -487,12 +509,17 @@ pub async fn download_video(
         // Check for file path in remaining output
         let trimmed = line.trim();
         if !trimmed.starts_with('[') && !trimmed.is_empty() {
-            let has_extension = trimmed.contains('.') &&
-                (trimmed.ends_with(".mp4") || trimmed.ends_with(".mkv") ||
-                 trimmed.ends_with(".webm") || trimmed.ends_with(".m4a") ||
-                 trimmed.ends_with(".mp3") || trimmed.ends_with(".opus") ||
-                 trimmed.ends_with(".flac") || trimmed.ends_with(".wav") ||
-                 trimmed.ends_with(".avi") || trimmed.ends_with(".mov"));
+            let has_extension = trimmed.contains('.')
+                && (trimmed.ends_with(".mp4")
+                    || trimmed.ends_with(".mkv")
+                    || trimmed.ends_with(".webm")
+                    || trimmed.ends_with(".m4a")
+                    || trimmed.ends_with(".mp3")
+                    || trimmed.ends_with(".opus")
+                    || trimmed.ends_with(".flac")
+                    || trimmed.ends_with(".wav")
+                    || trimmed.ends_with(".avi")
+                    || trimmed.ends_with(".mov"));
             let has_path_sep = trimmed.contains('/') || trimmed.contains('\\');
             if has_extension && has_path_sep && captured_file_path.is_none() {
                 info!("Captured filepath from remaining stderr: {}", trimmed);
@@ -501,7 +528,8 @@ pub async fn download_video(
         }
     }
 
-    let status = child.wait()
+    let status = child
+        .wait()
         .await
         .map_err(|e| ClipyError::Ytdlp(format!("Failed to wait for yt-dlp: {}", e)))?;
 
@@ -515,16 +543,18 @@ pub async fn download_video(
     }
 
     // Send completion (file_path will be set by queue.rs after this)
-    let _ = progress_tx.send(DownloadProgress {
-        download_id: download_id.clone(),
-        status: DownloadStatus::Completed,
-        progress: 100.0,
-        downloaded_bytes: 0,
-        total_bytes: 0,
-        speed: 0,
-        eta: 0,
-        file_path: None,
-    }).await;
+    let _ = progress_tx
+        .send(DownloadProgress {
+            download_id: download_id.clone(),
+            status: DownloadStatus::Completed,
+            progress: 100.0,
+            downloaded_bytes: 0,
+            total_bytes: 0,
+            speed: 0,
+            eta: 0,
+            file_path: None,
+        })
+        .await;
 
     // Find the downloaded file
     let output_path = find_downloaded_file(&options.output_path, captured_file_path.as_deref())?;
@@ -558,14 +588,38 @@ fn build_format_selector(options: &DownloadOptions) -> String {
     };
 
     match quality.as_str() {
-        "2160" | "4k" => format!("bestvideo[height<=2160]{}+bestaudio/best[height<=2160]", vcodec_pref),
-        "1440" | "2k" => format!("bestvideo[height<=1440]{}+bestaudio/best[height<=1440]", vcodec_pref),
-        "1080" => format!("bestvideo[height<=1080]{}+bestaudio/best[height<=1080]", vcodec_pref),
-        "720" => format!("bestvideo[height<=720]{}+bestaudio/best[height<=720]", vcodec_pref),
-        "480" => format!("bestvideo[height<=480]{}+bestaudio/best[height<=480]", vcodec_pref),
-        "360" => format!("bestvideo[height<=360]{}+bestaudio/best[height<=360]", vcodec_pref),
-        "240" => format!("bestvideo[height<=240]{}+bestaudio/best[height<=240]", vcodec_pref),
-        "144" => format!("bestvideo[height<=144]{}+bestaudio/best[height<=144]", vcodec_pref),
+        "2160" | "4k" => format!(
+            "bestvideo[height<=2160]{}+bestaudio/best[height<=2160]",
+            vcodec_pref
+        ),
+        "1440" | "2k" => format!(
+            "bestvideo[height<=1440]{}+bestaudio/best[height<=1440]",
+            vcodec_pref
+        ),
+        "1080" => format!(
+            "bestvideo[height<=1080]{}+bestaudio/best[height<=1080]",
+            vcodec_pref
+        ),
+        "720" => format!(
+            "bestvideo[height<=720]{}+bestaudio/best[height<=720]",
+            vcodec_pref
+        ),
+        "480" => format!(
+            "bestvideo[height<=480]{}+bestaudio/best[height<=480]",
+            vcodec_pref
+        ),
+        "360" => format!(
+            "bestvideo[height<=360]{}+bestaudio/best[height<=360]",
+            vcodec_pref
+        ),
+        "240" => format!(
+            "bestvideo[height<=240]{}+bestaudio/best[height<=240]",
+            vcodec_pref
+        ),
+        "144" => format!(
+            "bestvideo[height<=144]{}+bestaudio/best[height<=144]",
+            vcodec_pref
+        ),
         _ => format!("bestvideo{}+bestaudio/best", vcodec_pref),
     }
 }
@@ -596,7 +650,10 @@ fn parse_progress_line(line: &str) -> Option<(f64, u64, u64, u64, u64)> {
 
     // Extract percentage
     if let Some(pct_idx) = line.find('%') {
-        let start = line[..pct_idx].rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
+        let start = line[..pct_idx]
+            .rfind(char::is_whitespace)
+            .map(|i| i + 1)
+            .unwrap_or(0);
         let pct_str = line[start..pct_idx].trim();
         match pct_str.parse::<f64>() {
             Ok(pct) => {
@@ -616,7 +673,10 @@ fn parse_progress_line(line: &str) -> Option<(f64, u64, u64, u64, u64)> {
             let size_str = &after_of[..space_idx];
             total = parse_size(size_str);
             downloaded = ((progress / 100.0) * total as f64) as u64;
-            debug!("Parsed size: {} bytes total, {} bytes downloaded", total, downloaded);
+            debug!(
+                "Parsed size: {} bytes total, {} bytes downloaded",
+                total, downloaded
+            );
         }
     }
 
@@ -639,8 +699,10 @@ fn parse_progress_line(line: &str) -> Option<(f64, u64, u64, u64, u64)> {
 
     // Only return Some if we got a valid progress percentage
     if progress > 0.0 || line.contains("100%") {
-        info!("Progress update: {}% ({}/{} bytes) @ {} B/s, ETA {} s",
-              progress, downloaded, total, speed, eta);
+        info!(
+            "Progress update: {}% ({}/{} bytes) @ {} B/s, ETA {} s",
+            progress, downloaded, total, speed, eta
+        );
         Some((progress, downloaded, total, speed, eta))
     } else {
         debug!("No valid progress found in line");
@@ -712,10 +774,15 @@ fn find_downloaded_file(output_dir: &str, captured_path: Option<&str>) -> Result
     // Fallback: scan directory for newest video/audio file
     let dir = std::path::Path::new(output_dir);
     if !dir.exists() {
-        return Err(ClipyError::Ytdlp(format!("Output directory does not exist: {}", output_dir)));
+        return Err(ClipyError::Ytdlp(format!(
+            "Output directory does not exist: {}",
+            output_dir
+        )));
     }
 
-    let video_extensions = ["mp4", "mkv", "webm", "avi", "mov", "m4a", "mp3", "opus", "flac", "wav"];
+    let video_extensions = [
+        "mp4", "mkv", "webm", "avi", "mov", "m4a", "mp3", "opus", "flac", "wav",
+    ];
 
     let mut newest_file: Option<(PathBuf, std::time::SystemTime)> = None;
 
@@ -750,7 +817,8 @@ fn find_downloaded_file(output_dir: &str, captured_path: Option<&str>) -> Result
 
 /// Get available qualities for a video
 pub fn get_available_qualities(video_info: &VideoInfo) -> Vec<String> {
-    let mut heights: Vec<u32> = video_info.formats
+    let mut heights: Vec<u32> = video_info
+        .formats
         .iter()
         .filter(|f| f.has_video && f.height > 0)
         .map(|f| f.height)
@@ -891,7 +959,10 @@ mod tests {
         let mut o = opts();
         o.audio_only = true;
         o.audio_format = "mp3".into();
-        assert_eq!(build_format_selector(&o), "bestaudio[ext=mp3]/bestaudio/best");
+        assert_eq!(
+            build_format_selector(&o),
+            "bestaudio[ext=mp3]/bestaudio/best"
+        );
     }
 
     #[test]
@@ -899,7 +970,10 @@ mod tests {
         let mut o = opts();
         o.audio_only = true;
         o.audio_format = "best".into();
-        assert_eq!(build_format_selector(&o), "bestaudio[ext=m4a]/bestaudio/best");
+        assert_eq!(
+            build_format_selector(&o),
+            "bestaudio[ext=m4a]/bestaudio/best"
+        );
     }
 
     // ---- get_available_qualities ----

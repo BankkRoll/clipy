@@ -157,7 +157,8 @@ impl Serialize for ClipyError {
                 ClipyError::Download(_) => "DOWNLOAD_ERROR",
                 ClipyError::Library(_) => "LIBRARY_ERROR",
                 ClipyError::Config(_) => "CONFIG_ERROR",
-            }.to_string(),
+            }
+            .to_string(),
             message: self.to_string(),
         };
         response.serialize(serializer)

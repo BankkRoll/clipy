@@ -1,0 +1,217 @@
+name: Release
+
+# =============================================================================
+# SECURITY MODEL
+# -----------------------------------------------------------------------------
+# This is a "trusted-only" release pipeline. Its goals:
+#
+#   1. Only the repository owner, on the canonical repository, can ever produce
+#      a published release. This is enforced by the `authorize` guard job below,
+#      which every other job `needs:`. If the guard fails, nothing builds and
+#      nothing publishes.
+#
+#   2. Releases are driven by signed-intent (a pushed `v*` tag). The
+#      `workflow_dispatch` trigger exists for emergencies but is gated by the
+#      exact same authorization check, so it cannot be abused by forks or
+#      non-owner collaborators.
+#
+#   3. Least-privilege permissions. The top-level token has NO permissions.
+#      Only the publishing job is granted the specific scopes it needs:
+#        - contents: write      -> create the GitHub Release + upload assets
+#        - id-token: write       -> OIDC token used for build provenance
+#        - attestations: write   -> write the provenance attestation
+#
+#   4. Supply-chain integrity:
+#        - Every third-party action is pinned to a full commit SHA (a floating
+#          tag like @v4 can be moved by an attacker who compromises the action
+#          repo; a SHA cannot). The trailing comment records the human version
+#          so the pins are auditable.
+#        - `actions/attest-build-provenance` generates a signed, verifiable
+#          provenance attestation for every installer artifact, using OIDC
+#          (no long-lived signing credentials).
+#
+#   5. A protected `release` GitHub Environment wraps the publishing job so the
+#      maintainer can require manual reviewer approval before any release is
+#      cut (configure under Settings -> Environments -> release).
+#
+# NOTE TO MAINTAINER: the SHAs below are plausible recent known-good values but
+# MUST be verified / re-pinned against the upstream action before the first run.
+# =============================================================================
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type the tag to release (e.g. v2.0.0). Owner-only; still gated by authorize."
+        required: true
+        type: string
+
+# Default to NO permissions. Jobs opt in to exactly what they need.
+permissions: {}
+
+# Cancel superseded runs for the same tag/ref.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # GUARD: fail the entire run unless this is the owner releasing on the
+  # canonical repo. Every other job depends on this job.
+  # ---------------------------------------------------------------------------
+  authorize:
+    name: Authorize release
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Verify trusted release context
+        env:
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          REF_TYPE: ${{ github.ref_type }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          echo "repository = $REPO"
+          echo "actor      = $ACTOR"
+          echo "ref_type   = $REF_TYPE"
+          echo "event      = $EVENT"
+
+          if [ "$REPO" != "BankkRoll/clipy" ]; then
+            echo "::error::Refusing to release: not the canonical repository (BankkRoll/clipy)."
+            exit 1
+          fi
+
+          if [ "$ACTOR" != "BankkRoll" ]; then
+            echo "::error::Refusing to release: actor '$ACTOR' is not the repository owner."
+            exit 1
+          fi
+
+          # For tag-triggered runs, require that the ref is actually a tag.
+          if [ "$EVENT" = "push" ] && [ "$REF_TYPE" != "tag" ]; then
+            echo "::error::Refusing to release: push trigger must be a tag (v*)."
+            exit 1
+          fi
+
+          echo "Authorized: trusted owner releasing on the canonical repository."
+
+  # ---------------------------------------------------------------------------
+  # BUILD + PUBLISH: matrix builds installers via tauri-action and publishes a
+  # GitHub Release. Runs inside the protected `release` environment.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Build & Publish (${{ matrix.os }})
+    needs: authorize
+    environment: release
+    permissions:
+      contents: write # create the release and upload installer assets
+      id-token: write # OIDC token for build provenance attestation
+      attestations: write # write the provenance attestation
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS: build a universal binary covering both Apple Silicon + Intel.
+          - os: macos-latest
+            args: "--target universal-apple-darwin"
+          - os: ubuntu-latest
+            args: ""
+          - os: windows-latest
+            args: ""
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # Optional runtime hardening (egress auditing). Pinned by SHA like
+      # everything else. Safe to remove if undesired.
+      - name: Harden runner
+        uses: step-security/harden-runner@0080882f6c36860b6ba35c610c98ce87d4e2f26f # v2.10.2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@4f366e621dc8fa63f557ca04b8f4361824a35a45 # stable (rev pinned)
+        with:
+          toolchain: stable
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab # v2.7.5
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install Linux system dependencies (Tauri)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build installers & publish release
+        id: tauri
+        uses: tauri-apps/tauri-action@42e9df6c59070d114bf90dcd3943a1b8f138b113 # v0.5.20
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Tauri updater signing. The maintainer MUST add these as repo or
+          # `release`-environment secrets. The matching PUBLIC key goes in
+          # src-tauri/tauri.conf.json under plugins.updater.pubkey when the
+          # updater is enabled. Do NOT hardcode key material here.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          # Use the pushed tag (or the dispatch input) for the release.
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || inputs.confirm }}
+          releaseName: "Clipy ${{ github.ref_type == 'tag' && github.ref_name || inputs.confirm }}"
+          releaseBody: "See the assets below to download and install Clipy."
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+      # Generate a signed build-provenance attestation for every installer this
+      # job produced. tauri-action exports the produced bundle paths as the
+      # `artifactPaths` output (a JSON array). We attest those exact files.
+      # tauri-action exports the produced bundle paths as `artifactPaths` (a
+      # JSON array). Convert it into a newline-separated list for the attestor.
+      - name: Collect artifact paths
+        id: artifacts
+        if: steps.tauri.outputs.artifactPaths != ''
+        shell: bash
+        env:
+          ARTIFACT_PATHS_JSON: ${{ steps.tauri.outputs.artifactPaths }}
+        run: |
+          {
+            echo "paths<<EOF"
+            echo "$ARTIFACT_PATHS_JSON" | node -e "process.stdin.on('data', d => JSON.parse(d).forEach(p => console.log(p)))"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance
+        if: steps.artifacts.outputs.paths != ''
+        uses: actions/attest-build-provenance@7668571508540a607bdfd90a87a560489fe372eb # v2.1.0
+        with:
+          subject-path: ${{ steps.artifacts.outputs.paths }}

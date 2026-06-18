@@ -82,7 +82,7 @@ export function Home() {
 
     try {
       const info = await tauriFetchVideoInfo(url);
-      setVideoInfo(info as VideoInfo);
+      setVideoInfo(info);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch video info");
       setVideoInfo(null);

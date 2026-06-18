@@ -40,4 +40,3 @@ pub struct VideoFormat {
     pub has_video: bool,
     pub has_audio: bool,
 }
-

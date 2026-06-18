@@ -244,7 +244,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
           </div>
         );
 
-      case "binaries":
+      case "binaries": {
         const allInstalled = binaryStatus?.ffmpegInstalled && binaryStatus?.ytdlpInstalled;
         return (
           <div className="space-y-6">
@@ -337,6 +337,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
             </div>
           </div>
         );
+      }
 
       case "basics":
         return (

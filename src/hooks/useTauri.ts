@@ -3,7 +3,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import { listen, UnlistenFn } from '@tauri-apps/api/event';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 // ============================================================================
@@ -71,7 +71,7 @@ export function useBinaryStatus() {
   }, []);
 
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
   const installFfmpeg = useCallback(async () => {
@@ -131,7 +131,7 @@ export function useCacheStats() {
   }, []);
 
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
   const clearCache = useCallback(async () => {
@@ -186,7 +186,7 @@ export function useTauriEvent<T>(
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
 
-    listen<T>(eventName, (event) => {
+    void listen<T>(eventName, (event) => {
       handlerRef.current(event.payload);
     }).then((fn) => {
       unlisten = fn;

@@ -87,7 +87,7 @@ export function useDownloadOptions(settings: AppSettings | null) {
       splitByChapters,
       writeDescription,
       writeThumbnail,
-    } as DownloadOptions,
+    },
     setters: {
       setDownloadMode,
       setQuality,

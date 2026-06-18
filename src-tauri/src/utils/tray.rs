@@ -2,7 +2,7 @@
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
-    tray::{TrayIcon, TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState},
+    tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, Runtime,
 };
 use tracing::info;
@@ -49,15 +49,18 @@ fn build_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>, tauri::Err
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Clipy", true, None::<&str>)?;
 
-    Menu::with_items(app, &[
-        &show,
-        &separator,
-        &downloads,
-        &library,
-        &settings,
-        &PredefinedMenuItem::separator(app)?,
-        &quit,
-    ])
+    Menu::with_items(
+        app,
+        &[
+            &show,
+            &separator,
+            &downloads,
+            &library,
+            &settings,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ],
+    )
 }
 
 /// Handle tray menu events
@@ -101,10 +104,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
 }
 
 /// Update tray icon for download progress
-pub fn update_tray_download_progress<R: Runtime>(
-    app: &AppHandle<R>,
-    active_downloads: u32,
-) {
+pub fn update_tray_download_progress<R: Runtime>(app: &AppHandle<R>, active_downloads: u32) {
     // Update tooltip to show download count
     if let Some(tray) = app.tray_by_id("main") {
         let tooltip = if active_downloads > 0 {

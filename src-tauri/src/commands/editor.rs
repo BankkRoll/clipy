@@ -16,7 +16,10 @@ pub async fn get_video_metadata(app: AppHandle, path: String) -> Result<VideoMet
     debug!("Getting video metadata for: {}", path);
     let result = ffmpeg::get_video_metadata(&app, &path).await;
     if let Ok(ref metadata) = result {
-        debug!("Video metadata: {}x{}, {} fps, duration: {}s", metadata.width, metadata.height, metadata.fps, metadata.duration);
+        debug!(
+            "Video metadata: {}x{}, {} fps, duration: {}s",
+            metadata.width, metadata.height, metadata.fps, metadata.duration
+        );
     }
     result
 }
@@ -29,7 +32,10 @@ pub async fn generate_thumbnail(
     output_path: String,
     time_offset: f64,
 ) -> Result<()> {
-    debug!("Generating thumbnail: video={}, output={}, time={}s", video_path, output_path, time_offset);
+    debug!(
+        "Generating thumbnail: video={}, output={}, time={}s",
+        video_path, output_path, time_offset
+    );
     let result = ffmpeg::generate_thumbnail(&app, &video_path, &output_path, time_offset).await;
     debug!("Thumbnail generation result: {:?}", result.is_ok());
     result
@@ -44,8 +50,12 @@ pub async fn generate_timeline_thumbnails(
     count: u32,
     width: u32,
 ) -> Result<Vec<String>> {
-    debug!("Generating {} timeline thumbnails for {} (width: {}px, output: {})", count, video_path, width, output_dir);
-    let result = ffmpeg::generate_timeline_thumbnails(&app, &video_path, &output_dir, count, width).await;
+    debug!(
+        "Generating {} timeline thumbnails for {} (width: {}px, output: {})",
+        count, video_path, width, output_dir
+    );
+    let result =
+        ffmpeg::generate_timeline_thumbnails(&app, &video_path, &output_dir, count, width).await;
     if let Ok(ref paths) = result {
         debug!("Generated {} timeline thumbnails", paths.len());
     }
@@ -59,7 +69,10 @@ pub async fn extract_waveform(
     video_path: String,
     samples: u32,
 ) -> Result<Vec<f32>> {
-    debug!("Extracting waveform from {} ({} samples)", video_path, samples);
+    debug!(
+        "Extracting waveform from {} ({} samples)",
+        video_path, samples
+    );
     let result = ffmpeg::extract_waveform(&app, &video_path, samples).await;
     if let Ok(ref data) = result {
         debug!("Extracted {} waveform samples", data.len());
@@ -75,17 +88,25 @@ pub async fn export_project(
     settings: ExportSettings,
 ) -> Result<String> {
     info!("Starting export for project: {}", project.name);
-    debug!("Export settings: format={}, quality={}, resolution={}, fps={}",
-        settings.format, settings.quality, settings.resolution, settings.fps);
+    debug!(
+        "Export settings: format={}, quality={}, resolution={}, fps={}",
+        settings.format, settings.quality, settings.resolution, settings.fps
+    );
     debug!("Export output path: {}", settings.output_path);
-    debug!("Project has {} tracks, duration: {}s", project.tracks.len(), project.duration);
+    debug!(
+        "Project has {} tracks, duration: {}s",
+        project.tracks.len(),
+        project.duration
+    );
 
     // Check if an export is already running
     {
         let active = ACTIVE_EXPORT.lock().await;
         if active.is_some() {
             debug!("Export already in progress, rejecting request");
-            return Err(ClipyError::ExportFailed("An export is already in progress".into()));
+            return Err(ClipyError::ExportFailed(
+                "An export is already in progress".into(),
+            ));
         }
     }
 
@@ -147,16 +168,19 @@ pub async fn cancel_export(app: AppHandle) -> Result<()> {
 
     if let Some(id) = project_id {
         // Emit cancelled status
-        let _ = app.emit("export-progress", ExportProgress {
-            project_id: id,
-            progress: 0.0,
-            current_frame: 0,
-            total_frames: 0,
-            elapsed_time: 0,
-            estimated_time: 0,
-            status: ExportStatus::Cancelled,
-            error: None,
-        });
+        let _ = app.emit(
+            "export-progress",
+            ExportProgress {
+                project_id: id,
+                progress: 0.0,
+                current_frame: 0,
+                total_frames: 0,
+                elapsed_time: 0,
+                estimated_time: 0,
+                status: ExportStatus::Cancelled,
+                error: None,
+            },
+        );
     }
 
     Ok(())
@@ -174,7 +198,12 @@ pub async fn get_export_status() -> Option<String> {
 #[tauri::command]
 pub async fn save_project(project: Project, path: String) -> Result<()> {
     info!("Saving project to: {}", path);
-    debug!("Project: {} ({} tracks, duration: {}s)", project.name, project.tracks.len(), project.duration);
+    debug!(
+        "Project: {} ({} tracks, duration: {}s)",
+        project.name,
+        project.tracks.len(),
+        project.duration
+    );
 
     let json = serde_json::to_string_pretty(&project)
         .map_err(|e| ClipyError::Other(format!("Failed to serialize project: {}", e)))?;
@@ -201,7 +230,12 @@ pub async fn load_project(path: String) -> Result<Project> {
     let project: Project = serde_json::from_str(&content)
         .map_err(|e| ClipyError::Other(format!("Failed to parse project: {}", e)))?;
 
-    debug!("Loaded project: {} ({} tracks, duration: {}s)", project.name, project.tracks.len(), project.duration);
+    debug!(
+        "Loaded project: {} ({} tracks, duration: {}s)",
+        project.name,
+        project.tracks.len(),
+        project.duration
+    );
     Ok(project)
 }
 
@@ -210,7 +244,10 @@ pub async fn load_project(path: String) -> Result<Project> {
 pub fn create_project(name: String, width: u32, height: u32, fps: u32) -> Project {
     use crate::models::project::{ProjectSettings, Track, TrackType};
 
-    debug!("Creating new project: {} ({}x{} @ {} fps)", name, width, height, fps);
+    debug!(
+        "Creating new project: {} ({}x{} @ {} fps)",
+        name, width, height, fps
+    );
 
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -273,7 +310,10 @@ pub async fn transcode_for_editing(
         output_path: output_path.clone(),
     };
 
-    debug!("Transcode settings: format={}, quality={}, hw_accel={}", settings.format, settings.quality, settings.use_hardware_acceleration);
+    debug!(
+        "Transcode settings: format={}, quality={}, hw_accel={}",
+        settings.format, settings.quality, settings.use_hardware_acceleration
+    );
     let result = ffmpeg::transcode_video(&app, &input_path, &output_path, &settings).await;
     debug!("Transcode result: {:?}", result.is_ok());
     result

@@ -41,9 +41,8 @@ pub fn is_valid_path(path: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
         let reserved_names = [
-            "CON", "PRN", "AUX", "NUL",
-            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+            "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+            "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
         ];
 
         // Check if the path contains any reserved names
@@ -74,9 +73,13 @@ mod tests {
 
     #[test]
     fn test_youtube_url_validation() {
-        assert!(is_valid_youtube_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ"));
+        assert!(is_valid_youtube_url(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        ));
         assert!(is_valid_youtube_url("https://youtu.be/dQw4w9WgXcQ"));
-        assert!(is_valid_youtube_url("https://www.youtube.com/shorts/dQw4w9WgXcQ"));
+        assert!(is_valid_youtube_url(
+            "https://www.youtube.com/shorts/dQw4w9WgXcQ"
+        ));
         assert!(is_valid_youtube_url("youtube.com/watch?v=dQw4w9WgXcQ"));
         assert!(!is_valid_youtube_url("https://example.com/video"));
         assert!(!is_valid_youtube_url("not a url"));

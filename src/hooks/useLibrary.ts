@@ -56,7 +56,7 @@ export function useLibrary() {
 
   // Initial fetch
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
   // Add video
@@ -174,7 +174,7 @@ export function useLibraryStats() {
   }, []);
 
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
   return { stats, loading, error, refresh };

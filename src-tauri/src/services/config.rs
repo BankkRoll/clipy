@@ -33,7 +33,9 @@ pub fn init_config(app: &AppHandle) -> Result<()> {
         settings
     };
 
-    let mut config = CONFIG.write().map_err(|_| ClipyError::Config("Config lock poisoned".into()))?;
+    let mut config = CONFIG
+        .write()
+        .map_err(|_| ClipyError::Config("Config lock poisoned".into()))?;
     *config = Some(settings);
 
     info!("Configuration initialized successfully");
@@ -42,15 +44,21 @@ pub fn init_config(app: &AppHandle) -> Result<()> {
 
 /// Get current settings
 pub fn get_settings() -> Result<AppSettings> {
-    let config = CONFIG.read().map_err(|_| ClipyError::Config("Config lock poisoned".into()))?;
-    config.clone().ok_or_else(|| ClipyError::Config("Config not initialized".into()))
+    let config = CONFIG
+        .read()
+        .map_err(|_| ClipyError::Config("Config lock poisoned".into()))?;
+    config
+        .clone()
+        .ok_or_else(|| ClipyError::Config("Config not initialized".into()))
 }
 
 /// Update settings
 pub fn update_settings(app: &AppHandle, settings: AppSettings) -> Result<()> {
     save_config_internal(app, &settings)?;
 
-    let mut config = CONFIG.write().map_err(|_| ClipyError::Config("Config lock poisoned".into()))?;
+    let mut config = CONFIG
+        .write()
+        .map_err(|_| ClipyError::Config("Config lock poisoned".into()))?;
     *config = Some(settings);
 
     Ok(())

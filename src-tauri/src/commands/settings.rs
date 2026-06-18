@@ -21,7 +21,10 @@ pub fn get_settings() -> Result<AppSettings> {
 #[tauri::command]
 pub fn update_settings(app: AppHandle, settings: AppSettings) -> Result<()> {
     info!("Updating application settings");
-    debug!("Settings: debugMode={}, downloadPath={}", settings.advanced.debug_mode, settings.download.download_path);
+    debug!(
+        "Settings: debugMode={}, downloadPath={}",
+        settings.advanced.debug_mode, settings.download.download_path
+    );
     config::update_settings(&app, settings)
 }
 
@@ -40,7 +43,10 @@ pub fn reset_settings(app: AppHandle) -> Result<AppSettings> {
 #[tauri::command]
 pub fn update_setting(app: AppHandle, key: String, value: serde_json::Value) -> Result<()> {
     info!("Updating setting: {} = {:?}", key, value);
-    debug!("Setting key parts: {:?}", key.split('.').collect::<Vec<_>>());
+    debug!(
+        "Setting key parts: {:?}",
+        key.split('.').collect::<Vec<_>>()
+    );
 
     let mut settings = config::get_settings()?;
 
@@ -180,7 +186,8 @@ pub fn update_setting(app: AppHandle, key: String, value: serde_json::Value) -> 
 
         // Filename template
         ["download", "filenameTemplate"] => {
-            settings.download.filename_template = value.as_str().unwrap_or("%(title)s.%(ext)s").to_string();
+            settings.download.filename_template =
+                value.as_str().unwrap_or("%(title)s.%(ext)s").to_string();
         }
 
         // CRF Quality and encoding preset
@@ -276,7 +283,8 @@ pub fn update_setting(app: AppHandle, key: String, value: serde_json::Value) -> 
             settings.advanced.hardware_acceleration = value.as_bool().unwrap_or(true);
         }
         ["advanced", "hardwareAccelerationType"] => {
-            settings.advanced.hardware_acceleration_type = value.as_str().unwrap_or("auto").to_string();
+            settings.advanced.hardware_acceleration_type =
+                value.as_str().unwrap_or("auto").to_string();
         }
         ["advanced", "debugMode"] => {
             settings.advanced.debug_mode = value.as_bool().unwrap_or(false);
@@ -287,7 +295,10 @@ pub fn update_setting(app: AppHandle, key: String, value: serde_json::Value) -> 
 
         _ => {
             debug!("Unknown setting key: {}", key);
-            return Err(crate::error::ClipyError::Config(format!("Unknown setting: {}", key)));
+            return Err(crate::error::ClipyError::Config(format!(
+                "Unknown setting: {}",
+                key
+            )));
         }
     }
 
@@ -309,15 +320,23 @@ pub fn get_setting(key: String) -> Result<serde_json::Value> {
         ["general", "minimizeToTray"] => serde_json::json!(settings.general.minimize_to_tray),
         ["general", "closeToTray"] => serde_json::json!(settings.general.close_to_tray),
         ["general", "checkForUpdates"] => serde_json::json!(settings.general.check_for_updates),
-        ["general", "autoUpdateBinaries"] => serde_json::json!(settings.general.auto_update_binaries),
+        ["general", "autoUpdateBinaries"] => {
+            serde_json::json!(settings.general.auto_update_binaries)
+        }
 
         // Download settings
         ["download", "downloadPath"] => serde_json::json!(settings.download.download_path),
         ["download", "defaultQuality"] => serde_json::json!(settings.download.default_quality),
         ["download", "defaultFormat"] => serde_json::json!(settings.download.default_format),
-        ["download", "maxConcurrentDownloads"] => serde_json::json!(settings.download.max_concurrent_downloads),
-        ["download", "createChannelSubfolder"] => serde_json::json!(settings.download.create_channel_subfolder),
-        ["download", "includeDateInFilename"] => serde_json::json!(settings.download.include_date_in_filename),
+        ["download", "maxConcurrentDownloads"] => {
+            serde_json::json!(settings.download.max_concurrent_downloads)
+        }
+        ["download", "createChannelSubfolder"] => {
+            serde_json::json!(settings.download.create_channel_subfolder)
+        }
+        ["download", "includeDateInFilename"] => {
+            serde_json::json!(settings.download.include_date_in_filename)
+        }
         ["download", "embedThumbnail"] => serde_json::json!(settings.download.embed_thumbnail),
         ["download", "embedMetadata"] => serde_json::json!(settings.download.embed_metadata),
         ["download", "autoRetry"] => serde_json::json!(settings.download.auto_retry),
@@ -332,7 +351,9 @@ pub fn get_setting(key: String) -> Result<serde_json::Value> {
         ["download", "videoCodec"] => serde_json::json!(settings.download.video_codec),
 
         // Subtitle settings
-        ["download", "downloadSubtitles"] => serde_json::json!(settings.download.download_subtitles),
+        ["download", "downloadSubtitles"] => {
+            serde_json::json!(settings.download.download_subtitles)
+        }
         ["download", "autoSubtitles"] => serde_json::json!(settings.download.auto_subtitles),
         ["download", "embedSubtitles"] => serde_json::json!(settings.download.embed_subtitles),
         ["download", "subtitleFormat"] => serde_json::json!(settings.download.subtitle_format),
@@ -340,7 +361,9 @@ pub fn get_setting(key: String) -> Result<serde_json::Value> {
 
         // SponsorBlock settings
         ["download", "sponsorBlock"] => serde_json::json!(settings.download.sponsor_block),
-        ["download", "sponsorBlockCategories"] => serde_json::json!(settings.download.sponsor_block_categories),
+        ["download", "sponsorBlockCategories"] => {
+            serde_json::json!(settings.download.sponsor_block_categories)
+        }
 
         // Chapter settings
         ["download", "downloadChapters"] => serde_json::json!(settings.download.download_chapters),
@@ -348,12 +371,20 @@ pub fn get_setting(key: String) -> Result<serde_json::Value> {
 
         // Network/Performance settings
         ["download", "rateLimit"] => serde_json::json!(settings.download.rate_limit),
-        ["download", "concurrentFragments"] => serde_json::json!(settings.download.concurrent_fragments),
-        ["download", "cookiesFromBrowser"] => serde_json::json!(settings.download.cookies_from_browser),
+        ["download", "concurrentFragments"] => {
+            serde_json::json!(settings.download.concurrent_fragments)
+        }
+        ["download", "cookiesFromBrowser"] => {
+            serde_json::json!(settings.download.cookies_from_browser)
+        }
 
         // File handling settings
-        ["download", "restrictFilenames"] => serde_json::json!(settings.download.restrict_filenames),
-        ["download", "useDownloadArchive"] => serde_json::json!(settings.download.use_download_archive),
+        ["download", "restrictFilenames"] => {
+            serde_json::json!(settings.download.restrict_filenames)
+        }
+        ["download", "useDownloadArchive"] => {
+            serde_json::json!(settings.download.use_download_archive)
+        }
 
         // Geo-bypass settings
         ["download", "geoBypass"] => serde_json::json!(settings.download.geo_bypass),
@@ -376,15 +407,21 @@ pub fn get_setting(key: String) -> Result<serde_json::Value> {
         ["download", "writeThumbnail"] => serde_json::json!(settings.download.write_thumbnail),
 
         // Editor settings
-        ["editor", "defaultProjectWidth"] => serde_json::json!(settings.editor.default_project_width),
-        ["editor", "defaultProjectHeight"] => serde_json::json!(settings.editor.default_project_height),
+        ["editor", "defaultProjectWidth"] => {
+            serde_json::json!(settings.editor.default_project_width)
+        }
+        ["editor", "defaultProjectHeight"] => {
+            serde_json::json!(settings.editor.default_project_height)
+        }
         ["editor", "defaultProjectFps"] => serde_json::json!(settings.editor.default_project_fps),
         ["editor", "autoSave"] => serde_json::json!(settings.editor.auto_save),
         ["editor", "autoSaveInterval"] => serde_json::json!(settings.editor.auto_save_interval),
         ["editor", "showWaveforms"] => serde_json::json!(settings.editor.show_waveforms),
         ["editor", "snapToClips"] => serde_json::json!(settings.editor.snap_to_clips),
         ["editor", "snapToPlayhead"] => serde_json::json!(settings.editor.snap_to_playhead),
-        ["editor", "defaultTransitionDuration"] => serde_json::json!(settings.editor.default_transition_duration),
+        ["editor", "defaultTransitionDuration"] => {
+            serde_json::json!(settings.editor.default_transition_duration)
+        }
 
         // Appearance settings
         ["appearance", "theme"] => serde_json::json!(settings.appearance.theme),
@@ -398,14 +435,21 @@ pub fn get_setting(key: String) -> Result<serde_json::Value> {
         ["advanced", "tempPath"] => serde_json::json!(settings.advanced.temp_path),
         ["advanced", "cachePath"] => serde_json::json!(settings.advanced.cache_path),
         ["advanced", "maxCacheSize"] => serde_json::json!(settings.advanced.max_cache_size),
-        ["advanced", "hardwareAcceleration"] => serde_json::json!(settings.advanced.hardware_acceleration),
-        ["advanced", "hardwareAccelerationType"] => serde_json::json!(settings.advanced.hardware_acceleration_type),
+        ["advanced", "hardwareAcceleration"] => {
+            serde_json::json!(settings.advanced.hardware_acceleration)
+        }
+        ["advanced", "hardwareAccelerationType"] => {
+            serde_json::json!(settings.advanced.hardware_acceleration_type)
+        }
         ["advanced", "debugMode"] => serde_json::json!(settings.advanced.debug_mode),
         ["advanced", "proxyUrl"] => serde_json::json!(settings.advanced.proxy_url),
 
         _ => {
             debug!("Unknown setting key: {}", key);
-            return Err(crate::error::ClipyError::Config(format!("Unknown setting: {}", key)));
+            return Err(crate::error::ClipyError::Config(format!(
+                "Unknown setting: {}",
+                key
+            )));
         }
     };
 
@@ -418,8 +462,9 @@ pub fn get_setting(key: String) -> Result<serde_json::Value> {
 pub fn export_settings() -> Result<String> {
     debug!("Exporting settings to JSON");
     let settings = config::get_settings()?;
-    let json = serde_json::to_string_pretty(&settings)
-        .map_err(|e| crate::error::ClipyError::Config(format!("Failed to serialize settings: {}", e)))?;
+    let json = serde_json::to_string_pretty(&settings).map_err(|e| {
+        crate::error::ClipyError::Config(format!("Failed to serialize settings: {}", e))
+    })?;
     debug!("Exported settings: {} bytes", json.len());
     Ok(json)
 }
@@ -430,8 +475,9 @@ pub fn import_settings(app: AppHandle, json: String) -> Result<()> {
     info!("Importing settings from JSON");
     debug!("JSON input: {} bytes", json.len());
 
-    let settings: AppSettings = serde_json::from_str(&json)
-        .map_err(|e| crate::error::ClipyError::Config(format!("Failed to parse settings: {}", e)))?;
+    let settings: AppSettings = serde_json::from_str(&json).map_err(|e| {
+        crate::error::ClipyError::Config(format!("Failed to parse settings: {}", e))
+    })?;
 
     debug!("Parsed settings successfully, saving");
     config::update_settings(&app, settings)

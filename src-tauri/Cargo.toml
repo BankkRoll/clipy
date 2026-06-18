@@ -6,7 +6,9 @@ authors = ["BankkRoll <https://github.com/BankkRoll>"]
 license = "MIT"
 repository = "https://github.com/BankkRoll/clipy"
 edition = "2021"
-rust-version = "1.70"
+# Uses std APIs stabilized in 1.80 (LazyLock, etc.). Tauri 2 itself requires a
+# recent toolchain, so 1.80 is a safe, accurate floor.
+rust-version = "1.80"
 
 [lib]
 name = "clipy_lib"

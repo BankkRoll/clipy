@@ -87,7 +87,7 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
               totalBytes: totalBytes ?? d.totalBytes,
               speed,
               eta,
-              status: "downloading" as DownloadStatus,
+              status: "downloading",
             }
           : d
       ),
@@ -128,7 +128,7 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
   pauseDownload: (id) => {
     set((state) => ({
       downloads: state.downloads.map((d) =>
-        d.id === id && d.status === "downloading" ? { ...d, status: "paused" as DownloadStatus } : d
+        d.id === id && d.status === "downloading" ? { ...d, status: "paused" } : d
       ),
     }));
   },
@@ -136,7 +136,7 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
   resumeDownload: (id) => {
     set((state) => ({
       downloads: state.downloads.map((d) =>
-        d.id === id && d.status === "paused" ? { ...d, status: "pending" as DownloadStatus } : d
+        d.id === id && d.status === "paused" ? { ...d, status: "pending" } : d
       ),
     }));
   },
@@ -144,7 +144,7 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
   cancelDownload: (id) => {
     set((state) => ({
       downloads: state.downloads.map((d) =>
-        d.id === id ? { ...d, status: "cancelled" as DownloadStatus } : d
+        d.id === id ? { ...d, status: "cancelled" } : d
       ),
     }));
   },
@@ -153,7 +153,7 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
     set((state) => ({
       downloads: state.downloads.map((d) =>
         d.id === id && (d.status === "failed" || d.status === "cancelled")
-          ? { ...d, status: "pending" as DownloadStatus, error: null, progress: 0 }
+          ? { ...d, status: "pending", error: null, progress: 0 }
           : d
       ),
     }));

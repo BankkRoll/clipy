@@ -35,13 +35,13 @@ pub fn init_logging(debug_mode: bool) {
 
     // Configure the filter based on debug mode
     let log_level = if debug_mode {
-        "debug,clipy_lib=trace"  // Verbose when debug enabled
+        "debug,clipy_lib=trace" // Verbose when debug enabled
     } else {
-        "info,clipy_lib=info"    // Minimal when debug disabled
+        "info,clipy_lib=info" // Minimal when debug disabled
     };
 
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(log_level));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
 
     // Build the subscriber with both console and file output
     let subscriber = tracing_subscriber::registry()

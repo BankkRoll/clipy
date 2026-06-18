@@ -21,15 +21,20 @@ pub fn get_library_videos() -> Result<Vec<LibraryVideo>> {
 #[tauri::command]
 pub fn add_library_video(video: LibraryVideo) -> Result<()> {
     info!("Adding video to library: {}", video.title);
-    debug!("Video details: id={}, channel={}, path={}, size={} bytes",
-        video.id, video.channel, video.file_path, video.file_size);
+    debug!(
+        "Video details: id={}, channel={}, path={}, size={} bytes",
+        video.id, video.channel, video.file_path, video.file_size
+    );
     database::add_library_video(&video)
 }
 
 /// Delete a video from the library
 #[tauri::command]
 pub fn delete_library_video(id: String, delete_file: bool) -> Result<()> {
-    info!("Deleting video from library: {} (delete_file: {})", id, delete_file);
+    info!(
+        "Deleting video from library: {} (delete_file: {})",
+        id, delete_file
+    );
 
     // Get video info first if we need to delete the file
     if delete_file {
@@ -112,16 +117,19 @@ pub async fn import_video(
         uuid::Uuid::new_v4().to_string(), // Use UUID as video_id for imports
         title.unwrap_or(file_name),
         String::new(), // No thumbnail for imports
-        0, // Duration will be 0 until we implement FFprobe
+        0,             // Duration will be 0 until we implement FFprobe
         channel.unwrap_or_else(|| "Local Import".to_string()),
         file_path,
         metadata.len(),
         extension,
         "unknown".to_string(), // Resolution unknown without FFprobe
-        String::new(), // No source URL for imports
+        String::new(),         // No source URL for imports
     );
 
-    debug!("Created library entry: id={}, title={}", video.id, video.title);
+    debug!(
+        "Created library entry: id={}, title={}",
+        video.id, video.title
+    );
     database::add_library_video(&video)?;
 
     info!("Video imported successfully: {}", video.title);
