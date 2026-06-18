@@ -77,6 +77,11 @@ jobs:
       - name: Test (vitest)
         run: pnpm test
 
+      # Build the frontend so dist/ exists before any cargo step:
+      # tauri::generate_context! validates frontendDist ("../dist") at compile time.
+      - name: Build frontend
+        run: pnpm build
+
       - name: Rust format check
         working-directory: src-tauri
         run: cargo fmt --all -- --check
