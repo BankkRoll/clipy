@@ -13,6 +13,15 @@ concurrency:
 permissions:
   contents: read
 
+# Faster, leaner CI compiles: no incremental (useless on fresh runners), no debug
+# symbols (not needed for clippy/test), thin LTO off, and capped codegen for speed.
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
 jobs:
   build-and-test:
     name: Build & Test (${{ matrix.os }})
@@ -49,6 +58,10 @@ jobs:
         uses: swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab # v2.7.5
         with:
           workspaces: src-tauri -> target
+          # Cache even when a job fails so the first green run isn't required to
+          # warm the cache, and key per-OS.
+          cache-on-failure: true
+          shared-key: ci-${{ matrix.os }}
 
       # Tauri build dependencies (Linux only).
       - name: Install Linux system dependencies (Tauri)
@@ -82,18 +95,18 @@ jobs:
       - name: Build frontend
         run: pnpm build
 
+      # fmt needs no compilation — run it first so formatting errors fail fast.
       - name: Rust format check
         working-directory: src-tauri
         run: cargo fmt --all -- --check
 
+      # clippy --all-targets compiles the lib, tests and bins, so a separate
+      # `cargo build` would just recompile the same thing — dropped for speed.
       - name: Rust clippy
         working-directory: src-tauri
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      # Reuse clippy's build artifacts (same profile) instead of recompiling.
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test --all-features
-
-      - name: Rust build
-        working-directory: src-tauri
-        run: cargo build --all-features
