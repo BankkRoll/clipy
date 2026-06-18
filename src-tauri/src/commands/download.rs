@@ -127,40 +127,29 @@ pub async fn retry_download(id: String) -> Result<()> {
         .find(|t| t.id == id)
         .ok_or_else(|| ClipyError::Download("Download not found".into()))?;
 
-    if task.status != DownloadStatus::Failed {
+    if task.status != DownloadStatus::Failed && task.status != DownloadStatus::Cancelled {
         return Err(ClipyError::Download(
-            "Download is not in failed state".into(),
+            "Download is not in a retryable state".into(),
         ));
     }
 
-    // Create new task with same info
-    let new_task = DownloadTask {
-        id: uuid::Uuid::new_v4().to_string(),
-        video_id: task.video_id.clone(),
-        title: task.title.clone(),
-        thumbnail: task.thumbnail.clone(),
-        url: task.url.clone(),
-        status: DownloadStatus::Pending,
-        progress: 0.0,
-        downloaded_bytes: 0,
-        total_bytes: 0,
-        speed: 0,
-        eta: 0,
-        quality: task.quality.clone(),
-        format: task.format.clone(),
-        output_path: task.output_path.clone(),
-        error: None,
-        created_at: chrono::Utc::now().to_rfc3339(),
-        completed_at: None,
-        duration: task.duration,
-        channel: task.channel.clone(),
-        options: task.options.clone(),
-    };
+    // Re-queue under the SAME id. The frontend keeps the original id when it
+    // flips the row to "pending", so reusing the id keeps both sides in sync —
+    // generating a new uuid here would orphan the UI row (progress events would
+    // arrive under an id the frontend never registered).
+    let mut new_task = task.clone();
+    new_task.status = DownloadStatus::Pending;
+    new_task.progress = 0.0;
+    new_task.downloaded_bytes = 0;
+    new_task.total_bytes = 0;
+    new_task.speed = 0;
+    new_task.eta = 0;
+    new_task.error = None;
+    new_task.created_at = chrono::Utc::now().to_rfc3339();
+    new_task.completed_at = None;
 
-    // Remove old task
+    // Remove the old (failed) task first, then re-add under the same id.
     download_queue.cancel_download(&id).await?;
-
-    // Add new task
     download_queue.add_download(new_task).await?;
 
     Ok(())

@@ -71,10 +71,10 @@ import { useVideoMetadata, useProject, useExport, useExportOptions } from "@/hoo
 import { useLibrary, type LibraryVideo } from "@/hooks/useLibrary";
 import { formatDuration, cn, generateId } from "@/lib/utils";
 import { open, save, ask } from "@tauri-apps/plugin-dialog";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { logger } from "@/lib/logger";
-import type { FilterType, Clip } from "@/types/editor";
+import type { FilterType, Clip, EditorProject } from "@/types/editor";
 import {
   Empty,
   EmptyHeader,
@@ -98,6 +98,58 @@ const FILTER_PRESETS = [
 const PIXELS_PER_SECOND = 50;
 // Snap threshold in pixels
 const SNAP_THRESHOLD = 10;
+
+/**
+ * Map the frontend (camelCase, `type`-keyed) editor project into the shape the
+ * Rust backend expects (`trackType`/`clipType`/`filterType`). Used for BOTH
+ * save_project and export_project so the two never drift.
+ */
+function toBackendProject(project: EditorProject) {
+  return {
+    id: project.id,
+    name: project.name,
+    createdAt: project.createdAt,
+    modifiedAt: project.modifiedAt,
+    duration: project.duration,
+    tracks: project.tracks.map((t) => ({
+      id: t.id,
+      trackType: t.type,
+      name: t.name,
+      clips: t.clips.map((c) => ({
+        id: c.id,
+        trackId: c.trackId,
+        clipType: c.type,
+        name: c.name,
+        startTime: c.startTime,
+        endTime: c.endTime,
+        sourceStart: c.sourceStart,
+        sourceEnd: c.sourceEnd,
+        sourcePath: c.sourcePath,
+        thumbnails: c.thumbnails,
+        properties: {
+          volume: c.properties.volume,
+          opacity: c.properties.opacity,
+          speed: c.properties.speed,
+          fadeIn: c.properties.fadeIn,
+          fadeOut: c.properties.fadeOut,
+          filters: c.properties.filters.map((f) => ({
+            id: f.id,
+            filterType: f.type,
+            enabled: f.enabled,
+            params: f.params,
+          })),
+          transform: c.properties.transform,
+          text: c.properties.text ?? null,
+        },
+      })),
+      muted: t.muted,
+      locked: t.locked,
+      volume: t.volume,
+      height: t.height,
+    })),
+    settings: project.settings,
+  };
+}
 
 export function Editor() {
   const { projectId } = useParams();
@@ -147,7 +199,7 @@ export function Editor() {
   // Hooks
   const { videos: libraryVideos, loading: libraryLoading, refresh: refreshLibrary } = useLibrary();
   const { getMetadata } = useVideoMetadata();
-  const { loadProject: loadProjectFile, saveProject: saveProjectFile } = useProject();
+  const { loadProject: loadProjectFile } = useProject();
   const { exporting, progress: exportProgress, startExport, cancelExport } = useExport();
   const { loadOptions: loadExportOptions } = useExportOptions();
 
@@ -188,6 +240,7 @@ export function Editor() {
     zoomOut,
     undo,
     redo,
+    commitHistory,
     clearSelection,
   } = useEditorStore();
 
@@ -578,7 +631,10 @@ export function Editor() {
   }, [project, getMetadata, addTrack, addClip]);
 
   const handleSaveProject = useCallback(async () => {
-    if (!project) return;
+    if (!project) {
+      toast.error("Nothing to save yet");
+      return;
+    }
 
     try {
       const path = await save({
@@ -587,15 +643,17 @@ export function Editor() {
       });
 
       if (path) {
-        saveProject();
-        await saveProjectFile(path);
+        // Serialize the LIVE store project (mapped to the backend shape), not the
+        // useProject hook's separate state which is only populated on load.
+        await invoke("save_project", { project: toBackendProject(project), path });
+        saveProject(); // mark the store project as clean (isDirty = false)
         toast.success("Project saved");
       }
     } catch (err) {
       logger.error("Editor", "Save failed:", err);
       toast.error("Failed to save project");
     }
-  }, [project, saveProject, saveProjectFile]);
+  }, [project, saveProject]);
 
   const handleOpenProject = useCallback(async () => {
     try {
@@ -666,50 +724,7 @@ export function Editor() {
     }
 
     try {
-      const backendProject = {
-        id: project.id,
-        name: project.name,
-        createdAt: project.createdAt,
-        modifiedAt: project.modifiedAt,
-        duration: project.duration,
-        tracks: project.tracks.map((t) => ({
-          id: t.id,
-          trackType: t.type,
-          name: t.name,
-          clips: t.clips.map((c) => ({
-            id: c.id,
-            trackId: c.trackId,
-            clipType: c.type,
-            name: c.name,
-            startTime: c.startTime,
-            endTime: c.endTime,
-            sourceStart: c.sourceStart,
-            sourceEnd: c.sourceEnd,
-            sourcePath: c.sourcePath,
-            thumbnails: c.thumbnails,
-            properties: {
-              volume: c.properties.volume,
-              opacity: c.properties.opacity,
-              speed: c.properties.speed,
-              fadeIn: c.properties.fadeIn,
-              fadeOut: c.properties.fadeOut,
-              filters: c.properties.filters.map((f) => ({
-                id: f.id,
-                filterType: f.type,
-                enabled: f.enabled,
-                params: f.params,
-              })),
-              transform: c.properties.transform,
-              text: c.properties.text || null,
-            },
-          })),
-          muted: t.muted,
-          locked: t.locked,
-          volume: t.volume,
-          height: t.height,
-        })),
-        settings: project.settings,
-      };
+      const backendProject = toBackendProject(project);
 
       // Map CRF to bitrate (lower CRF = higher quality = higher bitrate)
       const crfToBitrate = (crf: number) => {
@@ -1042,10 +1057,17 @@ export function Editor() {
   );
 
   const handleMouseUp = useCallback(() => {
+    // Commit a single undo step at the end of a trim/move interaction, so the
+    // many intermediate updateClip() calls during the drag collapse into one.
+    if (draggingClip) {
+      commitHistory("Move clip");
+    } else if (trimming) {
+      commitHistory("Trim clip");
+    }
     setDraggingClip(null);
     setTrimming(null);
     setDraggingPlayhead(false);
-  }, []);
+  }, [draggingClip, trimming, commitHistory]);
 
   // Add global mouse event listeners for drag operations
   useEffect(() => {

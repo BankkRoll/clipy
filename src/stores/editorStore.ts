@@ -83,6 +83,7 @@ interface EditorState {
   undo: () => void;
   redo: () => void;
   pushHistory: (description: string) => void;
+  commitHistory: (description: string) => void;
   clearHistory: () => void;
 
   // Export actions
@@ -548,9 +549,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (historyIndex > 0) {
       const entry = history[historyIndex - 1];
       if (entry) {
+        // Restore the top-level `duration` slice too — it is derived from clips
+        // and must stay in sync with the restored project, otherwise the ruler /
+        // playhead math reads a stale duration after undo.
         set({
           project: entry.state,
+          duration: entry.state.duration,
           historyIndex: historyIndex - 1,
+          isDirty: true,
         });
       }
     }
@@ -563,10 +569,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (entry) {
         set({
           project: entry.state,
+          duration: entry.state.duration,
           historyIndex: historyIndex + 1,
+          isDirty: true,
         });
       }
     }
+  },
+
+  // Commit the current project state as a single undoable history entry. Call
+  // this at the END of a continuous interaction (drag-trim, drag-move, slider
+  // release) so rapid intermediate updates collapse into one undo step instead
+  // of flooding the history stack.
+  commitHistory: (description) => {
+    get().pushHistory(description);
   },
 
   pushHistory: (description) => {

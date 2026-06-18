@@ -171,11 +171,9 @@ describe("undo / redo", () => {
     expect(JSON.stringify(useEditorStore.getState().project)).toBe(snapshot);
   });
 
-  // KNOWN BUG: undo()/redo() restore `project` (which carries project.duration)
-  // but never write the top-level `duration` slice of the store. So after an
-  // undo, store.duration is stale and disagrees with store.project.duration.
-  // This test DOCUMENTS the current (buggy) behavior so the suite stays green.
-  it("undo leaves the top-level store.duration stale (documents known bug)", () => {
+  // FIXED: undo()/redo() now restore the top-level `duration` slice in sync with
+  // the restored project (previously it stayed stale).
+  it("undo restores the top-level store.duration in sync with the project", () => {
     useEditorStore.getState().addClip(videoTrackId(), makeClipData({ endTime: 10 }));
     useEditorStore.getState().addClip(videoTrackId(), makeClipData({ endTime: 30 }));
 
@@ -183,21 +181,23 @@ describe("undo / redo", () => {
 
     useEditorStore.getState().undo();
 
-    // project.duration correctly reverts...
+    // Both project.duration and the top-level store.duration revert together.
     expect(useEditorStore.getState().project!.duration).toBe(10);
-    // ...but the top-level store.duration is NOT restored (still 30).
-    expect(useEditorStore.getState().duration).toBe(30);
+    expect(useEditorStore.getState().duration).toBe(10);
+    expect(useEditorStore.getState().duration).toBe(
+      useEditorStore.getState().project!.duration
+    );
   });
 
-  // KNOWN BUG (correct behavior, intentionally failing):
-  // undo() SHOULD also restore the top-level store.duration to match the
-  // restored project. When the bug is fixed, remove the `.fails` marker.
-  it.fails("undo should restore top-level store.duration (correct behavior)", () => {
+  it("redo restores the top-level store.duration too", () => {
     useEditorStore.getState().addClip(videoTrackId(), makeClipData({ endTime: 10 }));
     useEditorStore.getState().addClip(videoTrackId(), makeClipData({ endTime: 30 }));
 
     useEditorStore.getState().undo();
+    expect(useEditorStore.getState().duration).toBe(10);
 
+    useEditorStore.getState().redo();
+    expect(useEditorStore.getState().duration).toBe(30);
     expect(useEditorStore.getState().duration).toBe(
       useEditorStore.getState().project!.duration
     );
