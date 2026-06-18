@@ -20,6 +20,8 @@ import {
   Settings2,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   Undo,
   Redo,
   ZoomIn,
@@ -178,7 +180,13 @@ export function Editor() {
     clipId: string;
     startX: number;
     initialStart: number;
+    sourceTrackId: string;
   } | null>(null);
+  // Pending cross-track move resolved on drop: the target track + start time the
+  // dragged clip should land on. Computed during mousemove from the pointer Y.
+  const dragMoveTargetRef = useRef<{ trackId: string; startTime: number } | null>(null);
+  // Track lane DOM nodes, keyed by track id, used to hit-test the pointer Y.
+  const trackLaneRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const [trimming, setTrimming] = useState<{
     clipId: string;
     edge: "start" | "end";
@@ -225,6 +233,8 @@ export function Editor() {
     updateTrack,
     addClip,
     updateClip,
+    moveClip,
+    reorderTracks,
     splitClip,
     duplicateClip,
     selectClip,
@@ -353,6 +363,40 @@ export function Editor() {
     video.muted = isMuted;
     video.playbackRate = currentClip.properties.speed || 1;
   }, [currentClip, currentTime, isPlaying, isMuted, volume, getVideoTimeForClip]);
+
+  // Sync the hidden <audio> element for audio-only clips. Mirrors the <video>
+  // sync above: load the source when it changes, seek when paused, set volume,
+  // and play/pause in lockstep with the main playback loop.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (!currentAudioClip) {
+      audio.pause();
+      return;
+    }
+
+    const audioSrc = convertFileSrc(currentAudioClip.sourcePath);
+    if (audio.getAttribute("src") !== audioSrc) {
+      audio.src = audioSrc;
+      audio.load();
+    }
+
+    const targetTime = getVideoTimeForClip(currentAudioClip, currentTime);
+    if (!isPlaying && Math.abs(audio.currentTime - targetTime) > 0.1) {
+      audio.currentTime = targetTime;
+    }
+
+    audio.volume = isMuted ? 0 : volume * (currentAudioClip.properties.volume || 1);
+    audio.muted = isMuted;
+    audio.playbackRate = currentAudioClip.properties.speed || 1;
+
+    if (isPlaying) {
+      audio.play().catch(() => {});
+    } else {
+      audio.pause();
+    }
+  }, [currentAudioClip, currentTime, isPlaying, isMuted, volume, getVideoTimeForClip]);
 
   // Handle playback loop
   useEffect(() => {
@@ -910,8 +954,9 @@ export function Editor() {
           filters: [...selectedClip.properties.filters, newFilter],
         },
       });
+      commitHistory("Add filter");
     },
-    [selectedClip, updateClip]
+    [selectedClip, updateClip, commitHistory]
   );
 
   const handleRemoveFilter = useCallback(
@@ -924,8 +969,9 @@ export function Editor() {
           filters: selectedClip.properties.filters.filter((f) => f.id !== filterId),
         },
       });
+      commitHistory("Remove filter");
     },
-    [selectedClip, updateClip]
+    [selectedClip, updateClip, commitHistory]
   );
 
   const handleUpdateFilter = useCallback(
@@ -974,7 +1020,13 @@ export function Editor() {
       } else if (isRightEdge) {
         setTrimming({ clipId: clip.id, edge: "end", startX: x, initialTime: clip.endTime });
       } else {
-        setDraggingClip({ clipId: clip.id, startX: x, initialStart: clip.startTime });
+        dragMoveTargetRef.current = null;
+        setDraggingClip({
+          clipId: clip.id,
+          startX: x,
+          initialStart: clip.startTime,
+          sourceTrackId: track.id,
+        });
       }
 
       selectClip(clip.id, e.shiftKey || e.ctrlKey);
@@ -990,7 +1042,39 @@ export function Editor() {
         let newStartTime = Math.max(0, draggingClip.initialStart + deltaTime);
         newStartTime = snapTime(newStartTime, draggingClip.clipId);
 
-        // Find the clip and its duration
+        // Hit-test the pointer Y against the track lanes to find a drop target of
+        // a compatible type. Only a *different* track records a pending move.
+        let targetTrackId: string | null = null;
+        for (const [trackId, el] of trackLaneRefs.current) {
+          const rect = el.getBoundingClientRect();
+          if (e.clientY >= rect.top && e.clientY <= rect.bottom) {
+            targetTrackId = trackId;
+            break;
+          }
+        }
+
+        const draggedClip = project.tracks
+          .flatMap((t) => t.clips)
+          .find((c) => c.id === draggingClip.clipId);
+        const targetTrack = targetTrackId
+          ? project.tracks.find((t) => t.id === targetTrackId)
+          : null;
+        const compatible =
+          draggedClip &&
+          targetTrack &&
+          targetTrack.id !== draggingClip.sourceTrackId &&
+          !targetTrack.locked &&
+          // Allow video/image onto video/effect tracks; audio onto audio; text onto text.
+          ((["video", "image"].includes(draggedClip.type) &&
+            ["video", "effect"].includes(targetTrack.type)) ||
+            (draggedClip.type === "audio" && targetTrack.type === "audio") ||
+            (draggedClip.type === "text" && targetTrack.type === "text"));
+
+        dragMoveTargetRef.current = compatible
+          ? { trackId: targetTrack.id, startTime: newStartTime }
+          : null;
+
+        // Find the clip and its duration (live feedback stays on the source track).
         for (const track of project.tracks) {
           const clip = track.clips.find((c) => c.id === draggingClip.clipId);
           if (clip) {
@@ -1060,14 +1144,22 @@ export function Editor() {
     // Commit a single undo step at the end of a trim/move interaction, so the
     // many intermediate updateClip() calls during the drag collapse into one.
     if (draggingClip) {
-      commitHistory("Move clip");
+      const target = dragMoveTargetRef.current;
+      if (target) {
+        // Dropped on a different (compatible) track: relocate via moveClip, which
+        // pushes its own history entry.
+        moveClip(draggingClip.clipId, target.trackId, target.startTime);
+      } else {
+        commitHistory("Move clip");
+      }
     } else if (trimming) {
       commitHistory("Trim clip");
     }
+    dragMoveTargetRef.current = null;
     setDraggingClip(null);
     setTrimming(null);
     setDraggingPlayhead(false);
-  }, [draggingClip, trimming, commitHistory]);
+  }, [draggingClip, trimming, commitHistory, moveClip]);
 
   // Add global mouse event listeners for drag operations
   useEffect(() => {
@@ -1478,14 +1570,6 @@ export function Editor() {
                         </div>
                       </div>
                     )}
-                    {/* Hidden audio element for separate audio clips */}
-                    {currentAudioClip && (
-                      <audio
-                        ref={audioRef}
-                        src={convertFileSrc(currentAudioClip.sourcePath)}
-                        style={{ display: "none" }}
-                      />
-                    )}
                   </>
                 ) : (
                   <Empty className="h-full">
@@ -1498,6 +1582,9 @@ export function Editor() {
                     </EmptyHeader>
                   </Empty>
                 )}
+                {/* Hidden audio element for separate audio clips — always mounted so
+                    audio-only timelines (no video clip at playhead) still play. */}
+                <audio ref={audioRef} className="hidden" />
               </div>
             </div>
 
@@ -1619,6 +1706,7 @@ export function Editor() {
                         <Input
                           value={selectedClip.name}
                           onChange={(e) => updateClip(selectedClip.id, { name: e.target.value })}
+                          onBlur={() => commitHistory("Rename clip")}
                           className="h-8"
                         />
                       </div>
@@ -1633,6 +1721,7 @@ export function Editor() {
                             onValueChange={([v]) =>
                               v !== undefined && handleUpdateClipProperty("volume", v / 100)
                             }
+                            onValueCommit={() => commitHistory("Change volume")}
                             max={200}
                             step={1}
                           />
@@ -1650,6 +1739,7 @@ export function Editor() {
                             onValueChange={([v]) =>
                               v !== undefined && handleUpdateClipProperty("opacity", v / 100)
                             }
+                            onValueCommit={() => commitHistory("Change opacity")}
                             max={100}
                             step={1}
                           />
@@ -1667,6 +1757,7 @@ export function Editor() {
                             onValueChange={([v]) =>
                               v !== undefined && handleUpdateClipProperty("speed", v / 100)
                             }
+                            onValueCommit={() => commitHistory("Change speed")}
                             min={25}
                             max={400}
                             step={25}
@@ -1686,6 +1777,7 @@ export function Editor() {
                           onValueChange={([v]) =>
                             v !== undefined && handleUpdateClipProperty("fadeIn", v)
                           }
+                          onValueCommit={() => commitHistory("Change fade in")}
                           max={5}
                           step={0.1}
                         />
@@ -1698,6 +1790,7 @@ export function Editor() {
                           onValueChange={([v]) =>
                             v !== undefined && handleUpdateClipProperty("fadeOut", v)
                           }
+                          onValueCommit={() => commitHistory("Change fade out")}
                           max={5}
                           step={0.1}
                         />
@@ -1719,6 +1812,7 @@ export function Editor() {
                                   parseFloat(e.target.value) || 0
                                 )
                               }
+                              onBlur={() => commitHistory("Change transform")}
                               className="h-7 text-xs"
                             />
                           </div>
@@ -1733,6 +1827,7 @@ export function Editor() {
                                   parseFloat(e.target.value) || 0
                                 )
                               }
+                              onBlur={() => commitHistory("Change transform")}
                               className="h-7 text-xs"
                             />
                           </div>
@@ -1748,6 +1843,7 @@ export function Editor() {
                                   parseFloat(e.target.value) || 1
                                 )
                               }
+                              onBlur={() => commitHistory("Change transform")}
                               className="h-7 text-xs"
                             />
                           </div>
@@ -1763,6 +1859,7 @@ export function Editor() {
                                   parseFloat(e.target.value) || 1
                                 )
                               }
+                              onBlur={() => commitHistory("Change transform")}
                               className="h-7 text-xs"
                             />
                           </div>
@@ -1780,6 +1877,7 @@ export function Editor() {
                                 parseFloat(e.target.value) || 0
                               )
                             }
+                            onBlur={() => commitHistory("Change transform")}
                             className="h-7 text-xs"
                           />
                         </div>
@@ -1794,6 +1892,7 @@ export function Editor() {
                                 transform: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
                               },
                             });
+                            commitHistory("Reset transform");
                           }}
                         >
                           <RotateCcw className="mr-2 h-3 w-3" />
@@ -1852,6 +1951,7 @@ export function Editor() {
                                     onValueChange={([v]) =>
                                       v !== undefined && handleUpdateFilter(filter.id, v)
                                     }
+                                    onValueCommit={() => commitHistory("Adjust filter")}
                                     min={preset.min}
                                     max={preset.max}
                                     step={0.01}
@@ -1885,6 +1985,7 @@ export function Editor() {
                                 name: e.target.value.slice(0, 20) || "Text",
                               })
                             }
+                            onBlur={() => commitHistory("Edit text")}
                             className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                             placeholder="Enter your text..."
                           />
@@ -1943,6 +2044,7 @@ export function Editor() {
                                   },
                                 })
                               }
+                              onValueCommit={() => commitHistory("Change font size")}
                               min={12}
                               max={200}
                             />
@@ -1997,6 +2099,7 @@ export function Editor() {
                                   },
                                 })
                               }
+                              onBlur={() => commitHistory("Change text color")}
                               className="h-8 w-full"
                             />
                           </div>
@@ -2020,6 +2123,7 @@ export function Editor() {
                                   },
                                 })
                               }
+                              onBlur={() => commitHistory("Change text background")}
                               className="h-8 w-full"
                             />
                           </div>
@@ -2214,6 +2318,13 @@ export function Editor() {
               project.tracks.map((track, index) => (
                 <div
                   key={track.id}
+                  ref={(el) => {
+                    if (el) {
+                      trackLaneRefs.current.set(track.id, el);
+                    } else {
+                      trackLaneRefs.current.delete(track.id);
+                    }
+                  }}
                   className={cn(
                     "flex border-b border-border transition-colors duration-150",
                     index % 2 === 0 ? "bg-muted/30" : "bg-background",
@@ -2234,7 +2345,43 @@ export function Editor() {
                             : "border-border"
                         )}
                       >
-                        <GripVertical className="h-4 w-4 cursor-grab text-muted-foreground/50" />
+                        <div className="flex flex-col">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                type="button"
+                                className="flex h-2.5 w-4 items-center justify-center text-muted-foreground/60 hover:text-foreground disabled:opacity-30"
+                                disabled={index === 0}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  reorderTracks(index, index - 1);
+                                }}
+                                aria-label="Move track up"
+                              >
+                                <ChevronUp className="h-3 w-3" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>Move track up</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                type="button"
+                                className="flex h-2.5 w-4 items-center justify-center text-muted-foreground/60 hover:text-foreground disabled:opacity-30"
+                                disabled={index === project.tracks.length - 1}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  reorderTracks(index, index + 1);
+                                }}
+                                aria-label="Move track down"
+                              >
+                                <ChevronDown className="h-3 w-3" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>Move track down</TooltipContent>
+                          </Tooltip>
+                        </div>
+                        <GripVertical className="h-4 w-4 text-muted-foreground/50" />
                         <div
                           className={cn(
                             "h-2 w-2 rounded-full",

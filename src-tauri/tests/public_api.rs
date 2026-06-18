@@ -12,9 +12,7 @@ use clipy_lib::commands::download::{extract_video_id, validate_url};
 use clipy_lib::error::{ClipyError, ErrorResponse};
 use clipy_lib::models::download::{DownloadOptions, DownloadStatus, DownloadTask};
 use clipy_lib::models::library::LibraryVideo;
-use clipy_lib::models::project::{
-    ClipType, ExportSettings, Project, ProjectSettings, TrackType,
-};
+use clipy_lib::models::project::{ClipType, ExportSettings, Project, ProjectSettings, TrackType};
 use clipy_lib::models::settings::AppSettings;
 use clipy_lib::utils::paths::sanitize_filename;
 use clipy_lib::utils::validators;
@@ -25,7 +23,10 @@ use clipy_lib::utils::validators;
 
 #[test]
 fn sanitize_replaces_illegal_chars() {
-    assert_eq!(sanitize_filename("a<b>c:d\"e/f\\g|h?i*j"), "a_b_c_d_e_f_g_h_i_j");
+    assert_eq!(
+        sanitize_filename("a<b>c:d\"e/f\\g|h?i*j"),
+        "a_b_c_d_e_f_g_h_i_j"
+    );
 }
 
 #[test]
@@ -55,9 +56,15 @@ fn sanitize_limits_length_to_200() {
 
 #[test]
 fn validators_youtube_urls() {
-    assert!(validators::is_valid_youtube_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ"));
-    assert!(validators::is_valid_youtube_url("https://www.youtube.com/embed/dQw4w9WgXcQ"));
-    assert!(validators::is_valid_youtube_url("https://www.youtube.com/v/dQw4w9WgXcQ"));
+    assert!(validators::is_valid_youtube_url(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    ));
+    assert!(validators::is_valid_youtube_url(
+        "https://www.youtube.com/embed/dQw4w9WgXcQ"
+    ));
+    assert!(validators::is_valid_youtube_url(
+        "https://www.youtube.com/v/dQw4w9WgXcQ"
+    ));
     assert!(!validators::is_valid_youtube_url("https://vimeo.com/12345"));
 }
 
@@ -142,7 +149,10 @@ fn command_extract_video_id_invalid_returns_none() {
     assert_eq!(extract_video_id("https://example.com/foo".into()), None);
     assert_eq!(extract_video_id("not a url".into()), None);
     // Vimeo non-numeric path is rejected.
-    assert_eq!(extract_video_id("https://vimeo.com/channels/staffpicks".into()), None);
+    assert_eq!(
+        extract_video_id("https://vimeo.com/channels/staffpicks".into()),
+        None
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -152,16 +162,25 @@ fn command_extract_video_id_invalid_returns_none() {
 #[test]
 fn error_response_code_mapping() {
     let cases: Vec<(ClipyError, &str)> = vec![
-        (ClipyError::InvalidYouTubeUrl("x".into()), "INVALID_YOUTUBE_URL"),
+        (
+            ClipyError::InvalidYouTubeUrl("x".into()),
+            "INVALID_YOUTUBE_URL",
+        ),
         (ClipyError::VideoNotFound("x".into()), "VIDEO_NOT_FOUND"),
         (ClipyError::DownloadFailed("x".into()), "DOWNLOAD_FAILED"),
         (ClipyError::ExportFailed("x".into()), "EXPORT_FAILED"),
         (ClipyError::BinaryNotFound("x".into()), "BINARY_NOT_FOUND"),
-        (ClipyError::BinaryExecutionFailed("x".into()), "BINARY_EXECUTION_FAILED"),
+        (
+            ClipyError::BinaryExecutionFailed("x".into()),
+            "BINARY_EXECUTION_FAILED",
+        ),
         (ClipyError::ProcessError("x".into()), "PROCESS_ERROR"),
         (ClipyError::ProjectNotFound("x".into()), "PROJECT_NOT_FOUND"),
         (ClipyError::InvalidPath("x".into()), "INVALID_PATH"),
-        (ClipyError::PermissionDenied("x".into()), "PERMISSION_DENIED"),
+        (
+            ClipyError::PermissionDenied("x".into()),
+            "PERMISSION_DENIED",
+        ),
         (ClipyError::Cancelled, "CANCELLED"),
         (ClipyError::Other("x".into()), "UNKNOWN_ERROR"),
         (ClipyError::FFmpeg("x".into()), "FFMPEG_ERROR"),
@@ -213,7 +232,10 @@ fn error_serializes_to_code_and_message() {
 #[test]
 fn project_settings_default() {
     let s = ProjectSettings::default();
-    assert_eq!((s.width, s.height, s.fps, s.sample_rate), (1920, 1080, 30, 48000));
+    assert_eq!(
+        (s.width, s.height, s.fps, s.sample_rate),
+        (1920, 1080, 30, 48000)
+    );
 }
 
 #[test]
@@ -313,7 +335,10 @@ fn project_serde_round_trip() {
 fn project_json_uses_camelcase_keys() {
     let p = sample_project();
     let json = serde_json::to_string(&p).unwrap();
-    assert!(json.contains("\"trackType\""), "expected trackType in {json}");
+    assert!(
+        json.contains("\"trackType\""),
+        "expected trackType in {json}"
+    );
     assert!(json.contains("\"clipType\""));
     assert!(json.contains("\"sourceStart\""));
     assert!(json.contains("\"sourceEnd\""));

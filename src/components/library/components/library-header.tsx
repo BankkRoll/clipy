@@ -3,6 +3,7 @@ import {
   Grid3X3,
   List,
   Upload,
+  Download,
   RefreshCw,
   HardDrive,
   Clock,
@@ -34,6 +35,7 @@ interface LibraryHeaderProps {
   viewMode: ViewMode;
   onRefresh: () => void;
   onImport: () => void;
+  onExport: () => void;
   onSearchChange: (query: string) => void;
   onSortChange: (option: SortOption) => void;
   onViewModeChange: (mode: ViewMode) => void;
@@ -47,6 +49,7 @@ export function LibraryHeader({
   viewMode,
   onRefresh,
   onImport,
+  onExport,
   onSearchChange,
   onSortChange,
   onViewModeChange,
@@ -76,6 +79,11 @@ export function LibraryHeader({
         <Button variant="outline" size="sm" onClick={onImport} className="gap-2">
           <Upload className="h-4 w-4" />
           Import
+        </Button>
+
+        <Button variant="outline" size="sm" onClick={onExport} className="gap-2">
+          <Download className="h-4 w-4" />
+          Export library
         </Button>
 
         <Button variant="ghost" size="icon" onClick={onRefresh} disabled={loading}>

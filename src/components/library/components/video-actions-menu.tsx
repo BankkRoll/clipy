@@ -1,4 +1,4 @@
-import { Play, Pencil, FolderOpen, Trash2, MoreVertical } from "lucide-react";
+import { Play, Pencil, FolderOpen, Trash2, MoreVertical, Type } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -13,6 +13,7 @@ interface VideoActionsMenuProps {
   onEdit: () => void;
   onOpenFolder: () => void;
   onDelete: () => void;
+  onRename: () => void;
   triggerClassName?: string;
   showPlayEdit?: boolean;
 }
@@ -22,6 +23,7 @@ export function VideoActionsMenu({
   onEdit,
   onOpenFolder,
   onDelete,
+  onRename,
   triggerClassName,
   showPlayEdit = true,
 }: VideoActionsMenuProps) {
@@ -45,6 +47,10 @@ export function VideoActionsMenu({
             </DropdownMenuItem>
           </>
         )}
+        <DropdownMenuItem onClick={onRename}>
+          <Type className="mr-2 h-4 w-4" />
+          Rename
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={onOpenFolder}>
           <FolderOpen className="mr-2 h-4 w-4" />
           Show in folder

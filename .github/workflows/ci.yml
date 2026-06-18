@@ -1,22 +1,15 @@
 name: CI
 
-# Validate every commit on every branch and every pull request across all
-# three target operating systems. This workflow intentionally does NOT build
-# installers (that is the release workflow's job) to keep feedback fast.
-# It DOES run `cargo build` so we know the backend compiles everywhere.
-
 on:
   push:
     branches:
       - "**"
   pull_request:
 
-# Cancel in-progress runs for the same ref when a new commit arrives.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Least privilege: CI only needs to read the repository contents.
 permissions:
   contents: read
 
@@ -34,31 +27,30 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
           version: 9
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: 20
           cache: pnpm
 
       - name: Setup Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4f366e621dc8fa63f557ca04b8f4361824a35a45 # stable
         with:
           components: rustfmt, clippy
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab # v2.7.5
         with:
           workspaces: src-tauri -> target
 
-      # Tauri requires several system libraries on Linux. These are not needed
-      # on Windows/macOS, so the step is gated to ubuntu only.
+      # Tauri build dependencies (Linux only).
       - name: Install Linux system dependencies (Tauri)
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -76,7 +68,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # ---- Frontend checks ----
       - name: Typecheck
         run: pnpm typecheck
 
@@ -86,7 +77,6 @@ jobs:
       - name: Test (vitest)
         run: pnpm test
 
-      # ---- Rust backend checks ----
       - name: Rust format check
         working-directory: src-tauri
         run: cargo fmt --all -- --check
@@ -99,7 +89,6 @@ jobs:
         working-directory: src-tauri
         run: cargo test --all-features
 
-      # Ensure the backend actually compiles on this OS (no installers).
       - name: Rust build
         working-directory: src-tauri
         run: cargo build --all-features

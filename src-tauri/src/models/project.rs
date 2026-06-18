@@ -194,6 +194,15 @@ pub struct ExportSettings {
     pub audio_bitrate: u32,
     pub use_hardware_acceleration: bool,
     pub output_path: String,
+    /// Video codec family: "h264", "h265"/"hevc", "vp9", "av1". Defaults to h264.
+    #[serde(default)]
+    pub video_codec: String,
+    /// Constant Rate Factor for software encoders. Accepts `crf` or `crfQuality`.
+    #[serde(default, alias = "crfQuality")]
+    pub crf: Option<u32>,
+    /// Named encoder preset (e.g. "medium", "slow"). Defaults to empty (use quality mapping).
+    #[serde(default)]
+    pub encoding_preset: String,
 }
 
 impl Default for ExportSettings {
@@ -207,6 +216,9 @@ impl Default for ExportSettings {
             audio_bitrate: 256,
             use_hardware_acceleration: true,
             output_path: String::new(),
+            video_codec: String::new(),
+            crf: None,
+            encoding_preset: String::new(),
         }
     }
 }

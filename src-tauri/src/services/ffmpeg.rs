@@ -2,8 +2,8 @@
 
 use crate::error::{ClipyError, Result};
 use crate::models::project::{
-    ClipType, ExportProgress, ExportSettings, ExportStatus, Project, TextAlign, TrackType,
-    VerticalAlign,
+    ClipType, ExportProgress, ExportSettings, ExportStatus, Filter, Project, TextAlign, TrackType,
+    Transform, VerticalAlign,
 };
 use crate::services::binary;
 use std::path::PathBuf;
@@ -707,12 +707,42 @@ fn build_filter_graph(project: &Project, planned: &[PlannedClip], canvas: Canvas
                 }
             }
 
+            // Transform scale is applied to the source before fitting to canvas so
+            // that scaling >1 zooms in and <1 shrinks within the frame.
+            let t = &clip.properties.transform;
+            let sx = if t.scale_x > 0.0 { t.scale_x } else { 1.0 };
+            let sy = if t.scale_y > 0.0 { t.scale_y } else { 1.0 };
+            if (sx - 1.0).abs() > f64::EPSILON || (sy - 1.0).abs() > f64::EPSILON {
+                chain.push_str(&format!("scale=iw*{sx}:ih*{sy},"));
+            }
+
             chain.push_str(&format!(
                 "scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps={fps},format=yuv420p",
                 w = canvas.width,
                 h = canvas.height,
                 fps = project.settings.fps
             ));
+
+            // Rotation (degrees -> radians). Applied after fit so the whole frame rotates.
+            if let Some(rot) = build_rotate(t) {
+                chain.push_str(&format!(",{rot}"));
+            }
+
+            // Color/effect filters (eq/hue/blur/unsharp) from the clip.
+            let fstr = build_filters_string(&clip.properties.filters);
+            if !fstr.is_empty() {
+                chain.push(',');
+                chain.push_str(&fstr);
+            }
+
+            // Fade in/out timed to the clip's on-timeline duration.
+            let clip_dur = (clip.end_time - clip.start_time).max(0.0);
+            if let Some(fade) =
+                build_fade(clip.properties.fade_in, clip.properties.fade_out, clip_dur)
+            {
+                chain.push(',');
+                chain.push_str(&fade);
+            }
 
             let opacity = clip.properties.opacity.clamp(0.0, 1.0);
             if opacity < 1.0 {
@@ -807,6 +837,119 @@ fn build_filter_graph(project: &Project, planned: &[PlannedClip], canvas: Canvas
 /// `atempo` only accepts 0.5..=2.0 per stage; clamp to the valid single-stage range.
 fn clamp_atempo(speed: f64) -> f64 {
     speed.clamp(0.5, 2.0)
+}
+
+/// Read a numeric param from a filter's params map, accepting both raw numbers
+/// and numeric strings. Returns `default` when missing/unparseable.
+fn filter_param(filter: &Filter, key: &str, default: f64) -> f64 {
+    match filter.params.get(key) {
+        Some(serde_json::Value::Number(n)) => n.as_f64().unwrap_or(default),
+        Some(serde_json::Value::String(s)) => s.parse().unwrap_or(default),
+        _ => default,
+    }
+}
+
+/// Convert a single frontend `Filter` into an ffmpeg filter string.
+///
+/// The frontend stores the slider value under `params.value`. Mapping:
+/// - brightness: `eq=brightness=(value-1)` (ffmpeg brightness is -1..1, UI is 0..2)
+/// - contrast/saturation: `eq=contrast=value` / `eq=saturation=value` (UI 0..2 == ffmpeg)
+/// - hue: `hue=h=value` (degrees)
+/// - blur: `gblur=sigma=value`
+/// - sharpen: `unsharp=5:5:value:5:5:0.0`
+///
+/// Returns `None` for unknown/disabled filters or no-op values.
+fn build_filter(filter: &Filter) -> Option<String> {
+    if !filter.enabled {
+        return None;
+    }
+    let v = filter_param(filter, "value", f64::NAN);
+    match filter.filter_type.as_str() {
+        "brightness" => {
+            let b = if v.is_nan() { 0.0 } else { v - 1.0 };
+            if b.abs() < f64::EPSILON {
+                None
+            } else {
+                Some(format!("eq=brightness={b}"))
+            }
+        }
+        "contrast" => {
+            let c = if v.is_nan() { 1.0 } else { v };
+            Some(format!("eq=contrast={c}"))
+        }
+        "saturation" => {
+            let s = if v.is_nan() { 1.0 } else { v };
+            Some(format!("eq=saturation={s}"))
+        }
+        "hue" => {
+            let h = if v.is_nan() { 0.0 } else { v };
+            if h.abs() < f64::EPSILON {
+                None
+            } else {
+                Some(format!("hue=h={h}"))
+            }
+        }
+        "blur" => {
+            let sigma = if v.is_nan() { 0.0 } else { v };
+            if sigma <= 0.0 {
+                None
+            } else {
+                Some(format!("gblur=sigma={sigma}"))
+            }
+        }
+        "sharpen" => {
+            let amount = if v.is_nan() { 0.0 } else { v };
+            if amount <= 0.0 {
+                None
+            } else {
+                Some(format!("unsharp=5:5:{amount}:5:5:0.0"))
+            }
+        }
+        "grayscale" => Some("hue=s=0".to_string()),
+        "sepia" => {
+            Some("colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131".to_string())
+        }
+        "invert" => Some("negate".to_string()),
+        _ => None,
+    }
+}
+
+/// Join all enabled clip filters into a comma-separated ffmpeg filter fragment.
+fn build_filters_string(filters: &[Filter]) -> String {
+    filters
+        .iter()
+        .filter_map(build_filter)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Build a `rotate` filter from a transform, or `None` if there is no rotation.
+/// The UI stores rotation in degrees; ffmpeg `rotate` expects radians.
+fn build_rotate(transform: &Transform) -> Option<String> {
+    if transform.rotation.abs() < f64::EPSILON {
+        return None;
+    }
+    let rad = transform.rotation.to_radians();
+    Some(format!(
+        "rotate={rad}:ow=rotw({rad}):oh=roth({rad}):c=black@0"
+    ))
+}
+
+/// Build a fade-in/fade-out filter fragment for a clip of `duration` seconds.
+fn build_fade(fade_in: f64, fade_out: f64, duration: f64) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if fade_in > 0.0 {
+        parts.push(format!("fade=t=in:st=0:d={fade_in}"));
+    }
+    if fade_out > 0.0 && duration > 0.0 {
+        let start = (duration - fade_out).max(0.0);
+        parts.push(format!("fade=t=out:st={start}:d={fade_out}"));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(","))
+    }
 }
 
 /// Escape a string for use inside ffmpeg drawtext `text='...'`.
@@ -936,6 +1079,73 @@ async fn list_ffmpeg_encoders(app: &AppHandle) -> Result<Vec<String>> {
     Ok(names)
 }
 
+/// Whether an encoder name refers to a hardware encoder (nvenc/qsv/amf/vaapi/videotoolbox).
+fn is_hardware_encoder(name: &str) -> bool {
+    name.ends_with("nvenc")
+        || name.ends_with("qsv")
+        || name.ends_with("amf")
+        || name.ends_with("vaapi")
+        || name.ends_with("videotoolbox")
+}
+
+/// Resolve the concrete ffmpeg encoder name from the requested codec family,
+/// the container format, and the HW-detected H.264 `encoder`.
+///
+/// - h264 -> the detected encoder (libx264 or a HW h264_* variant)
+/// - h265/hevc -> HW hevc variant matching the detected family, else libx265
+/// - vp9 -> libvpx-vp9
+/// - av1 -> libaom-av1 (software)
+/// - WebM container always forces VP9 regardless of requested codec.
+fn select_codec_name(settings: &ExportSettings, encoder: &EncoderChoice) -> String {
+    if settings.format.eq_ignore_ascii_case("webm") {
+        return "libvpx-vp9".to_string();
+    }
+
+    match settings.video_codec.to_lowercase().as_str() {
+        "h265" | "hevc" => {
+            // Try to reuse the detected HW family (e.g. h264_nvenc -> hevc_nvenc).
+            if encoder.hardware {
+                if let Some(family) = encoder.name.strip_prefix("h264_") {
+                    return format!("hevc_{family}");
+                }
+            }
+            "libx265".to_string()
+        }
+        "vp9" => "libvpx-vp9".to_string(),
+        "av1" => "libaom-av1".to_string(),
+        // h264 (and unknown/empty) -> the detected encoder.
+        _ => encoder.name.clone(),
+    }
+}
+
+/// Resolve the encoder preset string: explicit `encoding_preset` wins, otherwise
+/// map the coarse `quality` field to an x264-style preset.
+fn resolve_preset(settings: &ExportSettings) -> String {
+    if !settings.encoding_preset.trim().is_empty() {
+        return settings.encoding_preset.trim().to_string();
+    }
+    match settings.quality.as_str() {
+        "low" => "veryfast",
+        "high" | "ultra" => "slow",
+        _ => "medium",
+    }
+    .to_string()
+}
+
+/// Map a named x264-style preset to an SVT-AV1 numeric preset (0=slowest, 13=fastest).
+fn svtav1_preset(preset: &str) -> String {
+    match preset {
+        "ultrafast" | "superfast" => "12",
+        "veryfast" | "faster" => "10",
+        "fast" => "8",
+        "medium" => "6",
+        "slow" => "4",
+        "slower" | "veryslow" => "2",
+        _ => "6",
+    }
+    .to_string()
+}
+
 /// Build FFmpeg output arguments from export settings and the chosen encoder.
 fn build_output_args(
     settings: &ExportSettings,
@@ -944,30 +1154,48 @@ fn build_output_args(
 ) -> Vec<String> {
     let mut args = Vec::new();
 
-    // Video codec (chosen by format, then encoder selection for H.264 family).
+    // Resolve the actual encoder name from the requested codec family. WebM
+    // formats force VP9. The H.264 family honors the HW-detected `encoder`.
+    let codec_name = select_codec_name(settings, encoder);
+    let is_software = !is_hardware_encoder(&codec_name);
+
     args.push("-c:v".to_string());
-    match settings.format.to_lowercase().as_str() {
-        "webm" => args.push("libvpx-vp9".to_string()),
-        // mp4/mov/mkv all use the selected H.264 encoder.
-        _ => args.push(encoder.name.clone()),
+    args.push(codec_name.clone());
+
+    // CRF for software encoders that support it (x264/x265/vp9/av1). Falls back
+    // to the bitrate path when CRF is absent or the encoder is hardware.
+    let crf_applied = if is_software {
+        if let Some(crf) = settings.crf {
+            args.push("-crf".to_string());
+            args.push(crf.to_string());
+            // VP9 in CRF mode also wants -b:v 0 to be truly constant-quality.
+            if codec_name == "libvpx-vp9" {
+                args.push("-b:v".to_string());
+                args.push("0".to_string());
+            }
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if !crf_applied {
+        args.push("-b:v".to_string());
+        args.push(format!("{}k", settings.video_bitrate));
     }
 
-    // Bitrate (skip for GIF which has its own pipeline; we keep mp4/webm/mov/mkv here).
-    args.push("-b:v".to_string());
-    args.push(format!("{}k", settings.video_bitrate));
-
-    // Preset: software x264/vp9 use named presets; HW encoders use their own.
-    if encoder.name == "libx264" {
+    // Preset: software x26x/av1 use named presets; HW encoders use their own.
+    let preset = resolve_preset(settings);
+    if codec_name == "libx264" || codec_name == "libx265" || codec_name == "libaom-av1" {
         args.push("-preset".to_string());
-        args.push(
-            match settings.quality.as_str() {
-                "low" => "veryfast",
-                "high" => "slow",
-                _ => "medium",
-            }
-            .to_string(),
-        );
-    } else if encoder.hardware && encoder.name == "h264_nvenc" {
+        args.push(preset);
+    } else if codec_name == "libsvtav1" {
+        // SVT-AV1 uses numeric presets; map named presets to a speed level.
+        args.push("-preset".to_string());
+        args.push(svtav1_preset(&preset));
+    } else if encoder.hardware && codec_name.ends_with("nvenc") {
         args.push("-preset".to_string());
         args.push("p4".to_string());
     }
@@ -1034,7 +1262,7 @@ pub async fn transcode_video(
 mod tests {
     use super::*;
     use crate::models::project::{
-        Clip, ClipProperties, ClipType, ProjectSettings, TextAlign, TextProperties, Track,
+        Clip, ClipProperties, ClipType, Filter, ProjectSettings, TextAlign, TextProperties, Track,
         TrackType, Transform, VerticalAlign,
     };
 
@@ -1541,5 +1769,247 @@ mod tests {
         assert_eq!(t.scale_x, 1.0);
         assert_eq!(t.scale_y, 1.0);
         assert_eq!(t.rotation, 0.0);
+    }
+
+    // ---- filter mapping ----
+
+    fn mk_filter(filter_type: &str, value: f64, enabled: bool) -> Filter {
+        let mut params = std::collections::HashMap::new();
+        params.insert("value".to_string(), serde_json::Value::from(value));
+        Filter {
+            id: "f".into(),
+            filter_type: filter_type.into(),
+            enabled,
+            params,
+        }
+    }
+
+    #[test]
+    fn build_filter_brightness_offsets_by_one() {
+        // UI brightness 1.5 -> ffmpeg eq=brightness=0.5
+        let f = mk_filter("brightness", 1.5, true);
+        assert_eq!(build_filter(&f).as_deref(), Some("eq=brightness=0.5"));
+    }
+
+    #[test]
+    fn build_filter_brightness_one_is_noop() {
+        let f = mk_filter("brightness", 1.0, true);
+        assert!(build_filter(&f).is_none());
+    }
+
+    #[test]
+    fn build_filter_contrast_and_saturation() {
+        assert_eq!(
+            build_filter(&mk_filter("contrast", 1.3, true)).as_deref(),
+            Some("eq=contrast=1.3")
+        );
+        assert_eq!(
+            build_filter(&mk_filter("saturation", 0.7, true)).as_deref(),
+            Some("eq=saturation=0.7")
+        );
+    }
+
+    #[test]
+    fn build_filter_hue_blur_sharpen() {
+        assert_eq!(
+            build_filter(&mk_filter("hue", 90.0, true)).as_deref(),
+            Some("hue=h=90")
+        );
+        assert_eq!(
+            build_filter(&mk_filter("blur", 4.0, true)).as_deref(),
+            Some("gblur=sigma=4")
+        );
+        assert_eq!(
+            build_filter(&mk_filter("sharpen", 2.0, true)).as_deref(),
+            Some("unsharp=5:5:2:5:5:0.0")
+        );
+    }
+
+    #[test]
+    fn build_filter_disabled_or_zero_is_none() {
+        assert!(build_filter(&mk_filter("brightness", 1.5, false)).is_none());
+        assert!(build_filter(&mk_filter("blur", 0.0, true)).is_none());
+        assert!(build_filter(&mk_filter("hue", 0.0, true)).is_none());
+        assert!(build_filter(&mk_filter("sharpen", 0.0, true)).is_none());
+    }
+
+    #[test]
+    fn build_filter_param_accepts_string() {
+        let mut params = std::collections::HashMap::new();
+        params.insert("value".to_string(), serde_json::Value::from("1.5"));
+        let f = Filter {
+            id: "f".into(),
+            filter_type: "contrast".into(),
+            enabled: true,
+            params,
+        };
+        assert_eq!(build_filter(&f).as_deref(), Some("eq=contrast=1.5"));
+    }
+
+    #[test]
+    fn build_filters_string_joins_enabled() {
+        let filters = vec![
+            mk_filter("contrast", 1.2, true),
+            mk_filter("brightness", 1.0, true), // no-op, dropped
+            mk_filter("blur", 3.0, true),
+        ];
+        assert_eq!(
+            build_filters_string(&filters),
+            "eq=contrast=1.2,gblur=sigma=3"
+        );
+    }
+
+    // ---- fade ----
+
+    #[test]
+    fn build_fade_in_and_out() {
+        let f = build_fade(1.0, 2.0, 10.0).unwrap();
+        assert!(f.contains("fade=t=in:st=0:d=1"));
+        assert!(f.contains("fade=t=out:st=8:d=2"));
+    }
+
+    #[test]
+    fn build_fade_in_only() {
+        let f = build_fade(1.5, 0.0, 10.0).unwrap();
+        assert_eq!(f, "fade=t=in:st=0:d=1.5");
+    }
+
+    #[test]
+    fn build_fade_none_when_zero() {
+        assert!(build_fade(0.0, 0.0, 10.0).is_none());
+    }
+
+    // ---- rotate ----
+
+    #[test]
+    fn build_rotate_none_for_zero() {
+        assert!(build_rotate(&Transform::default()).is_none());
+    }
+
+    #[test]
+    fn build_rotate_converts_degrees_to_radians() {
+        let t = Transform {
+            rotation: 90.0,
+            ..Transform::default()
+        };
+        let r = build_rotate(&t).unwrap();
+        assert!(r.starts_with("rotate="));
+        // 90 degrees ~= 1.5708 rad
+        assert!(r.contains("1.5707"));
+    }
+
+    // ---- filter graph integration ----
+
+    #[test]
+    fn filter_graph_applies_clip_filters_and_fade() {
+        let mut p = base_project();
+        let mut c = clip(ClipType::Video, "a.mp4");
+        c.properties.fade_in = 1.0;
+        c.properties.fade_out = 1.0;
+        c.properties.filters = vec![mk_filter("contrast", 1.4, true)];
+        c.properties.transform.rotation = 45.0;
+        c.properties.transform.scale_x = 1.5;
+        p.tracks = vec![track(TrackType::Video, vec![c])];
+        let planned = plan(&p);
+        let g = build_filter_graph(
+            &p,
+            &planned,
+            Canvas {
+                width: 1280,
+                height: 720,
+            },
+        );
+        assert!(g.filter.contains("eq=contrast=1.4"));
+        assert!(g.filter.contains("fade=t=in"));
+        assert!(g.filter.contains("fade=t=out"));
+        assert!(g.filter.contains("rotate="));
+        assert!(g.filter.contains("scale=iw*1.5"));
+    }
+
+    // ---- codec selection ----
+
+    #[test]
+    fn select_codec_h264_uses_detected_encoder() {
+        let mut s = base_settings();
+        s.format = "mp4".into();
+        s.video_codec = "h264".into();
+        assert_eq!(select_codec_name(&s, &enc("libx264", false)), "libx264");
+        assert_eq!(
+            select_codec_name(&s, &enc("h264_nvenc", true)),
+            "h264_nvenc"
+        );
+    }
+
+    #[test]
+    fn select_codec_h265_software_and_hardware() {
+        let mut s = base_settings();
+        s.format = "mp4".into();
+        s.video_codec = "h265".into();
+        assert_eq!(select_codec_name(&s, &enc("libx264", false)), "libx265");
+        assert_eq!(
+            select_codec_name(&s, &enc("h264_nvenc", true)),
+            "hevc_nvenc"
+        );
+    }
+
+    #[test]
+    fn select_codec_vp9_and_av1() {
+        let mut s = base_settings();
+        s.format = "mp4".into();
+        s.video_codec = "vp9".into();
+        assert_eq!(select_codec_name(&s, &enc("libx264", false)), "libvpx-vp9");
+        s.video_codec = "av1".into();
+        assert_eq!(select_codec_name(&s, &enc("libx264", false)), "libaom-av1");
+    }
+
+    #[test]
+    fn select_codec_webm_forces_vp9() {
+        let mut s = base_settings();
+        s.format = "webm".into();
+        s.video_codec = "h264".into();
+        assert_eq!(select_codec_name(&s, &enc("libx264", false)), "libvpx-vp9");
+    }
+
+    #[test]
+    fn build_output_args_uses_crf_for_software() {
+        let mut s = base_settings();
+        s.format = "mp4".into();
+        s.video_codec = "h264".into();
+        s.crf = Some(20);
+        let args = build_output_args(&s, &enc("libx264", false), false);
+        assert!(args.windows(2).any(|w| w == ["-crf", "20"]));
+        // CRF mode omits explicit bitrate.
+        assert!(!args.iter().any(|a| a == "-b:v"));
+    }
+
+    #[test]
+    fn build_output_args_crf_ignored_for_hardware() {
+        let mut s = base_settings();
+        s.format = "mp4".into();
+        s.crf = Some(20);
+        let args = build_output_args(&s, &enc("h264_nvenc", true), false);
+        assert!(!args.iter().any(|a| a == "-crf"));
+        // Hardware falls back to bitrate.
+        assert!(args.iter().any(|a| a == "-b:v"));
+    }
+
+    #[test]
+    fn build_output_args_explicit_preset_wins() {
+        let mut s = base_settings();
+        s.format = "mp4".into();
+        s.video_codec = "h264".into();
+        s.quality = "low".into();
+        s.encoding_preset = "veryslow".into();
+        let args = build_output_args(&s, &enc("libx264", false), false);
+        assert!(args.windows(2).any(|w| w == ["-preset", "veryslow"]));
+    }
+
+    #[test]
+    fn build_output_args_h265_uses_libx265() {
+        let mut s = base_settings();
+        s.format = "mp4".into();
+        s.video_codec = "h265".into();
+        let args = build_output_args(&s, &enc("libx264", false), false);
+        assert!(args.windows(2).any(|w| w == ["-c:v", "libx265"]));
     }
 }

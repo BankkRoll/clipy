@@ -141,6 +141,18 @@ pub struct DownloadOptions {
     #[serde(default)]
     pub use_download_archive: bool,
 
+    // Filename / organization
+    #[serde(default)]
+    pub create_channel_subfolder: bool,
+    #[serde(default)]
+    pub include_date_in_filename: bool,
+    #[serde(default)]
+    pub filename_template: String,
+
+    // Write metadata files
+    #[serde(default)]
+    pub write_info_json: bool,
+
     // Geo-bypass
     #[serde(default)]
     pub geo_bypass: bool,
@@ -209,6 +221,10 @@ impl Default for DownloadOptions {
             proxy_url: String::new(),
             restrict_filenames: false,
             use_download_archive: false,
+            create_channel_subfolder: false,
+            include_date_in_filename: false,
+            filename_template: String::new(),
+            write_info_json: false,
             geo_bypass: false,
         }
     }

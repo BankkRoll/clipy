@@ -1,7 +1,7 @@
 import { memo } from "react";
-import { Play, Pencil } from "lucide-react";
+import { Play, Pencil, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { formatBytes, formatDuration } from "@/lib/utils";
+import { formatBytes, formatDuration, cn } from "@/lib/utils";
 import { VideoActionsMenu } from "./video-actions-menu";
 import type { LibraryVideo } from "@/hooks/useLibrary";
 
@@ -11,6 +11,10 @@ interface VideoGridCardProps {
   onEdit: () => void;
   onOpenFolder: () => void;
   onDelete: () => void;
+  onRename: () => void;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }
 
 export const VideoGridCard = memo(function VideoGridCard({
@@ -19,9 +23,36 @@ export const VideoGridCard = memo(function VideoGridCard({
   onEdit,
   onOpenFolder,
   onDelete,
+  onRename,
+  selectionMode = false,
+  selected = false,
+  onToggleSelect,
 }: VideoGridCardProps) {
   return (
-    <div className="group relative overflow-hidden rounded-lg border border-border bg-card transition-all hover:shadow-lg hover:border-primary/50">
+    <div
+      className={cn(
+        "group relative overflow-hidden rounded-lg border bg-card transition-all hover:shadow-lg hover:border-primary/50",
+        selected ? "border-primary ring-2 ring-primary" : "border-border"
+      )}
+    >
+      {/* Selection checkbox */}
+      {(selectionMode || selected) && (
+        <button
+          type="button"
+          aria-label={selected ? "Deselect video" : "Select video"}
+          aria-pressed={selected}
+          onClick={onToggleSelect}
+          className={cn(
+            "absolute left-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded border bg-background/80 backdrop-blur transition-colors",
+            selected
+              ? "border-primary bg-primary text-primary-foreground"
+              : "border-border"
+          )}
+        >
+          {selected && <Check className="h-4 w-4" />}
+        </button>
+      )}
+
       {/* Thumbnail */}
       <div className="relative aspect-video bg-muted">
         <img
@@ -67,6 +98,7 @@ export const VideoGridCard = memo(function VideoGridCard({
         onEdit={onEdit}
         onOpenFolder={onOpenFolder}
         onDelete={onDelete}
+        onRename={onRename}
         triggerClassName="absolute right-1 top-1 h-7 w-7 bg-black/50 text-white opacity-0 group-hover:opacity-100"
       />
     </div>

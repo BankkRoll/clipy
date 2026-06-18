@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { Play, Pencil } from "lucide-react";
+import { Play, Pencil, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatBytes, formatDuration, formatRelativeTime, cn } from "@/lib/utils";
 import { VideoActionsMenu } from "./video-actions-menu";
@@ -11,6 +11,10 @@ interface VideoListRowProps {
   onEdit: () => void;
   onOpenFolder: () => void;
   onDelete: () => void;
+  onRename: () => void;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }
 
 export const VideoListRow = memo(function VideoListRow({
@@ -19,14 +23,35 @@ export const VideoListRow = memo(function VideoListRow({
   onEdit,
   onOpenFolder,
   onDelete,
+  onRename,
+  selectionMode = false,
+  selected = false,
+  onToggleSelect,
 }: VideoListRowProps) {
   return (
     <div
       className={cn(
-        "group flex items-center gap-4 rounded-lg border border-border bg-card p-3",
-        "transition-colors hover:bg-accent/50 hover:border-primary/50"
+        "group flex items-center gap-4 rounded-lg border bg-card p-3",
+        "transition-colors hover:bg-accent/50 hover:border-primary/50",
+        selected ? "border-primary ring-1 ring-primary" : "border-border"
       )}
     >
+      {(selectionMode || selected) && (
+        <button
+          type="button"
+          aria-label={selected ? "Deselect video" : "Select video"}
+          aria-pressed={selected}
+          onClick={onToggleSelect}
+          className={cn(
+            "flex h-5 w-5 flex-shrink-0 items-center justify-center rounded border transition-colors",
+            selected
+              ? "border-primary bg-primary text-primary-foreground"
+              : "border-border"
+          )}
+        >
+          {selected && <Check className="h-3.5 w-3.5" />}
+        </button>
+      )}
       {/* Thumbnail */}
       <div
         className="relative h-16 w-28 flex-shrink-0 overflow-hidden rounded bg-muted cursor-pointer"
@@ -75,6 +100,7 @@ export const VideoListRow = memo(function VideoListRow({
           onEdit={onEdit}
           onOpenFolder={onOpenFolder}
           onDelete={onDelete}
+          onRename={onRename}
           showPlayEdit={false}
         />
       </div>

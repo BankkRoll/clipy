@@ -308,6 +308,9 @@ pub async fn transcode_for_editing(
         audio_bitrate: 192,
         use_hardware_acceleration: true,
         output_path: output_path.clone(),
+        video_codec: String::new(),
+        crf: None,
+        encoding_preset: String::new(),
     };
 
     debug!(

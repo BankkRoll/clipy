@@ -154,11 +154,7 @@ pub async fn download_video(
     let ytdlp_path = binary::get_ytdlp_path(app)?;
 
     // Build output template
-    let output_template = if options.filename.is_empty() {
-        format!("{}/%(title)s.%(ext)s", options.output_path)
-    } else {
-        format!("{}/{}", options.output_path, options.filename)
-    };
+    let output_template = build_output_template(options);
 
     // Build format selector
     let format_selector = build_format_selector(options);
@@ -244,6 +240,9 @@ pub async fn download_video(
         if !options.subtitle_format.is_empty() {
             args.push("--sub-format".to_string());
             args.push(options.subtitle_format.clone());
+            // Ensure the on-disk subtitle file is converted to the requested format
+            args.push("--convert-subs".to_string());
+            args.push(options.subtitle_format.clone());
         }
 
         if options.embed_subtitles {
@@ -259,6 +258,11 @@ pub async fn download_video(
         } else {
             args.push("sponsor".to_string());
         }
+    }
+
+    // Write info JSON
+    if options.write_info_json {
+        args.push("--write-info-json".to_string());
     }
 
     // Write description
@@ -561,6 +565,32 @@ pub async fn download_video(
 
     info!("Download completed: {:?}", output_path);
     Ok(output_path)
+}
+
+/// Compose the yt-dlp `-o` output template from filename/organization options.
+///
+/// Precedence:
+/// 1. An explicit `filename` (legacy per-download override) wins.
+/// 2. A non-empty `filename_template` is used verbatim (advanced users).
+/// 3. Otherwise build from `create_channel_subfolder` + `include_date_in_filename`.
+fn build_output_template(options: &DownloadOptions) -> String {
+    let name_part = if !options.filename.is_empty() {
+        options.filename.clone()
+    } else if !options.filename_template.is_empty() {
+        options.filename_template.clone()
+    } else {
+        let mut t = String::new();
+        if options.create_channel_subfolder {
+            t.push_str("%(channel)s/");
+        }
+        if options.include_date_in_filename {
+            t.push_str("%(upload_date)s - ");
+        }
+        t.push_str("%(title)s.%(ext)s");
+        t
+    };
+
+    format!("{}/{}", options.output_path, name_part)
 }
 
 /// Build format selector string for yt-dlp
@@ -974,6 +1004,67 @@ mod tests {
             build_format_selector(&o),
             "bestaudio[ext=m4a]/bestaudio/best"
         );
+    }
+
+    // ---- build_output_template ----
+
+    #[test]
+    fn output_template_default() {
+        let mut o = opts();
+        o.output_path = "/downloads".into();
+        assert_eq!(build_output_template(&o), "/downloads/%(title)s.%(ext)s");
+    }
+
+    #[test]
+    fn output_template_channel_subfolder() {
+        let mut o = opts();
+        o.output_path = "/downloads".into();
+        o.create_channel_subfolder = true;
+        assert_eq!(
+            build_output_template(&o),
+            "/downloads/%(channel)s/%(title)s.%(ext)s"
+        );
+    }
+
+    #[test]
+    fn output_template_include_date() {
+        let mut o = opts();
+        o.output_path = "/downloads".into();
+        o.include_date_in_filename = true;
+        assert_eq!(
+            build_output_template(&o),
+            "/downloads/%(upload_date)s - %(title)s.%(ext)s"
+        );
+    }
+
+    #[test]
+    fn output_template_channel_and_date() {
+        let mut o = opts();
+        o.output_path = "/downloads".into();
+        o.create_channel_subfolder = true;
+        o.include_date_in_filename = true;
+        assert_eq!(
+            build_output_template(&o),
+            "/downloads/%(channel)s/%(upload_date)s - %(title)s.%(ext)s"
+        );
+    }
+
+    #[test]
+    fn output_template_custom_template_wins() {
+        let mut o = opts();
+        o.output_path = "/downloads".into();
+        o.create_channel_subfolder = true; // ignored when template is set
+        o.filename_template = "%(id)s.%(ext)s".into();
+        assert_eq!(build_output_template(&o), "/downloads/%(id)s.%(ext)s");
+    }
+
+    #[test]
+    fn output_template_explicit_filename_wins() {
+        let mut o = opts();
+        o.output_path = "/downloads".into();
+        o.filename_template = "%(id)s.%(ext)s".into();
+        o.filename = "myfile.%(ext)s".into();
+        assert_eq!(build_output_template(&o), "/downloads/myfile.%(ext)s");
     }
 
     // ---- get_available_qualities ----

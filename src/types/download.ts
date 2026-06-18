@@ -115,6 +115,14 @@ export interface DownloadOptions {
   restrictFilenames: boolean;
   useDownloadArchive: boolean;
 
+  // Filename / organization
+  createChannelSubfolder: boolean;
+  includeDateInFilename: boolean;
+  filenameTemplate: string;
+
+  // Write metadata files
+  writeInfoJson: boolean;
+
   // Geo-bypass
   geoBypass: boolean;
 }
@@ -156,6 +164,10 @@ export const DEFAULT_DOWNLOAD_OPTIONS: DownloadOptions = {
   proxyUrl: "",
   restrictFilenames: false,
   useDownloadArchive: false,
+  createChannelSubfolder: false,
+  includeDateInFilename: false,
+  filenameTemplate: "",
+  writeInfoJson: false,
   geoBypass: false,
 };
 

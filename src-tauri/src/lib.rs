@@ -19,6 +19,7 @@ pub mod models;
 pub mod services;
 pub mod utils;
 
+use tauri::Manager;
 use tracing::info;
 
 /// Initialize and run the Tauri application
@@ -82,14 +83,30 @@ pub fn run() {
                 }
             }
 
+            // "Start minimized": hide the main window on launch if requested.
+            if settings.general.minimize_to_tray {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.hide();
+                }
+            }
+
             info!("Clipy initialized successfully");
             Ok(())
         })
         .on_window_event(|window, event| {
-            // On window close, kill any in-flight downloads/exports so we don't
-            // orphan yt-dlp / ffmpeg child processes.
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                let _ = window;
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // "Close to tray": hide the window and keep running instead of quitting.
+                let close_to_tray = services::config::get_settings()
+                    .map(|s| s.general.close_to_tray)
+                    .unwrap_or(false);
+
+                if close_to_tray {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    return;
+                }
+
+                // Real quit: cancel in-flight work so we don't orphan child processes.
                 services::ffmpeg::request_export_cancel();
                 if let Ok(queue) = services::queue::get_queue() {
                     tauri::async_runtime::block_on(async move {
@@ -139,6 +156,7 @@ pub fn run() {
             commands::library::get_library_stats,
             commands::library::bulk_delete_library_videos,
             commands::library::export_library_json,
+            commands::library::export_library_to_file,
             // Editor commands
             commands::editor::get_video_metadata,
             commands::editor::generate_thumbnail,

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { RefreshCw, Loader2, AlertCircle, ChevronRight } from "lucide-react";
 import { cn, isNewerVersion } from "@/lib/utils";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
+import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -136,6 +137,22 @@ export function Settings() {
       setCheckingUpdates(false);
     }
   }, []);
+
+  // Wrap updateSetting so a few keys also take effect on the LIVE backend
+  // immediately (not just persisted to config and applied on next launch).
+  const handleUpdateSetting = useCallback(
+    async (path: string, value: unknown) => {
+      await updateSetting(path, value);
+      if (path === "download.maxConcurrentDownloads") {
+        try {
+          await invoke("set_max_concurrent_downloads", { max: Number(value) });
+        } catch (err) {
+          logger.error("Settings", "Failed to apply concurrency live", err);
+        }
+      }
+    },
+    [updateSetting]
+  );
 
   const handleBrowseDownloadPath = useCallback(async () => {
     try {
@@ -304,37 +321,37 @@ export function Settings() {
           <div className="flex-1 overflow-auto">
             <div className="max-w-2xl p-6">
               <TabsContent value="general" className="mt-0">
-                <GeneralTab settings={settings} onUpdateSetting={updateSetting} />
+                <GeneralTab settings={settings} onUpdateSetting={handleUpdateSetting} />
               </TabsContent>
 
               <TabsContent value="downloads" className="mt-0">
                 <DownloadsTab
                   settings={settings}
-                  onUpdateSetting={updateSetting}
+                  onUpdateSetting={handleUpdateSetting}
                   onBrowseDownloadPath={handleBrowseDownloadPath}
                 />
               </TabsContent>
 
               <TabsContent value="quality" className="mt-0">
-                <QualityTab settings={settings} onUpdateSetting={updateSetting} />
+                <QualityTab settings={settings} onUpdateSetting={handleUpdateSetting} />
               </TabsContent>
 
               <TabsContent value="subtitles" className="mt-0">
-                <SubtitlesTab settings={settings} onUpdateSetting={updateSetting} />
+                <SubtitlesTab settings={settings} onUpdateSetting={handleUpdateSetting} />
               </TabsContent>
 
               <TabsContent value="sponsorblock" className="mt-0">
-                <SponsorBlockTab settings={settings} onUpdateSetting={updateSetting} />
+                <SponsorBlockTab settings={settings} onUpdateSetting={handleUpdateSetting} />
               </TabsContent>
 
               <TabsContent value="network" className="mt-0">
-                <NetworkTab settings={settings} onUpdateSetting={updateSetting} />
+                <NetworkTab settings={settings} onUpdateSetting={handleUpdateSetting} />
               </TabsContent>
 
               <TabsContent value="advanced" className="mt-0">
                 <AdvancedTab
                   settings={settings}
-                  onUpdateSetting={updateSetting}
+                  onUpdateSetting={handleUpdateSetting}
                   cacheStats={cacheStats}
                   onClearCache={handleClearCache}
                   onRefreshCache={refreshCache}

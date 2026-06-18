@@ -268,3 +268,14 @@ pub fn export_library_json() -> Result<String> {
     debug!("Exported JSON: {} bytes", json.len());
     Ok(json)
 }
+
+/// Export library to a JSON file at the given path
+#[tauri::command]
+pub fn export_library_to_file(path: String) -> Result<()> {
+    info!("Exporting library to file: {}", path);
+    let json = export_library_json()?;
+    std::fs::write(&path, json)
+        .map_err(|e| ClipyError::Library(format!("Failed to write library file: {}", e)))?;
+    info!("Library exported to {}", path);
+    Ok(())
+}
