@@ -6,7 +6,7 @@ use crate::utils::paths;
 use std::path::PathBuf;
 use std::process::Command;
 use tauri::AppHandle;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Check if required binaries are installed
 pub fn check_binaries(app: &AppHandle) -> Result<BinaryStatus> {
@@ -383,8 +383,15 @@ async fn download_binary(url: &str, target_path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// Download and extract FFmpeg (platform-specific)
-#[allow(unused_variables)]
+/// Download and extract FFmpeg (platform-specific).
+///
+/// Downloads the archive at `url` to a temp file inside `binaries_dir`, then
+/// extracts the `ffmpeg` (and `ffprobe`) binaries into `binaries_dir`, placing
+/// the ffmpeg binary at `target_path`. The archives are nested, so entries are
+/// matched by basename rather than full path.
+///
+/// - Windows/macOS: `.zip` archives, extracted via the `zip` crate.
+/// - Linux: `.tar.xz` archive, decompressed with `xz2` then untarred with `tar`.
 async fn download_and_extract_ffmpeg(url: &str, binaries_dir: &PathBuf, target_path: &PathBuf) -> Result<()> {
     // Download the archive
     debug!("Downloading FFmpeg from {}", url);
@@ -401,17 +408,181 @@ async fn download_and_extract_ffmpeg(url: &str, binaries_dir: &PathBuf, target_p
         .await
         .map_err(|e| ClipyError::Other(format!("Failed to read response: {}", e)))?;
 
-    // Write to temp file
-    let temp_archive = binaries_dir.join("ffmpeg_temp.zip");
+    // Write to temp file (memory-friendly: extraction streams from this file)
+    let ext = if cfg!(target_os = "linux") { "tar.xz" } else { "zip" };
+    let temp_archive = binaries_dir.join(format!("ffmpeg_temp.{}", ext));
     std::fs::write(&temp_archive, &bytes)
         .map_err(|e| ClipyError::Other(format!("Failed to write archive: {}", e)))?;
+    drop(bytes);
 
-    // Extract (platform-specific logic would go here)
-    // For now, we'll use a simple approach
-    warn!("FFmpeg extraction not fully implemented - manual installation may be required");
+    // Extract on a blocking thread (zip/tar are synchronous, blocking I/O).
+    let temp_archive_extract = temp_archive.clone();
+    let binaries_dir_extract = binaries_dir.clone();
+    let target_path_extract = target_path.clone();
+    let extract_result = tokio::task::spawn_blocking(move || {
+        extract_ffmpeg_archive(&temp_archive_extract, &binaries_dir_extract, &target_path_extract)
+    })
+    .await
+    .map_err(|e| ClipyError::Other(format!("Extraction task failed: {}", e)))?;
 
-    // Clean up
+    // Clean up temp archive regardless of extraction outcome.
     let _ = std::fs::remove_file(&temp_archive);
+
+    extract_result?;
+
+    if !target_path.exists() {
+        return Err(ClipyError::Other(
+            "FFmpeg binary not found in downloaded archive".into(),
+        ));
+    }
+
+    info!("FFmpeg extracted to {:?}", target_path);
+    Ok(())
+}
+
+/// Synchronous extraction of the ffmpeg/ffprobe binaries from a downloaded archive.
+#[cfg(not(target_os = "linux"))]
+fn extract_ffmpeg_archive(archive: &PathBuf, binaries_dir: &PathBuf, target_path: &PathBuf) -> Result<()> {
+    extract_ffmpeg_zip(archive, binaries_dir, target_path)
+}
+
+/// Synchronous extraction of the ffmpeg/ffprobe binaries from a downloaded archive.
+#[cfg(target_os = "linux")]
+fn extract_ffmpeg_archive(archive: &PathBuf, binaries_dir: &PathBuf, target_path: &PathBuf) -> Result<()> {
+    extract_ffmpeg_tar_xz(archive, binaries_dir, target_path)
+}
+
+/// Return true if `name` is the basename `ffmpeg`/`ffmpeg.exe` or `ffprobe`/`ffprobe.exe`.
+/// Returns the destination filename to use, or None if this entry is not wanted.
+fn ffmpeg_entry_dest(name: &str) -> Option<&'static str> {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    match base {
+        "ffmpeg" | "ffmpeg.exe" => Some(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }),
+        "ffprobe" | "ffprobe.exe" => Some(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" }),
+        _ => None,
+    }
+}
+
+/// Set 0o755 permissions on an extracted unix binary.
+#[cfg(unix)]
+fn set_executable(path: &PathBuf) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(path)?.permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_executable(_path: &PathBuf) -> Result<()> {
+    Ok(())
+}
+
+/// Extract ffmpeg/ffprobe from a `.zip` archive (Windows/macOS).
+#[cfg(not(target_os = "linux"))]
+fn extract_ffmpeg_zip(archive: &PathBuf, binaries_dir: &PathBuf, target_path: &PathBuf) -> Result<()> {
+    let file = std::fs::File::open(archive)
+        .map_err(|e| ClipyError::Other(format!("Failed to open archive: {}", e)))?;
+    let mut zip = zip::ZipArchive::new(file)
+        .map_err(|e| ClipyError::Other(format!("Failed to read zip archive: {}", e)))?;
+
+    let mut found_ffmpeg = false;
+    for i in 0..zip.len() {
+        let mut entry = zip
+            .by_index(i)
+            .map_err(|e| ClipyError::Other(format!("Failed to read zip entry: {}", e)))?;
+
+        if !entry.is_file() {
+            continue;
+        }
+
+        let entry_name = entry.name().to_string();
+        let dest_name = match ffmpeg_entry_dest(&entry_name) {
+            Some(name) => name,
+            None => continue,
+        };
+
+        let dest_path = if dest_name == target_path.file_name().and_then(|n| n.to_str()).unwrap_or("") {
+            target_path.clone()
+        } else {
+            binaries_dir.join(dest_name)
+        };
+
+        debug!("Extracting {} -> {:?}", entry_name, dest_path);
+        let mut out = std::fs::File::create(&dest_path)
+            .map_err(|e| ClipyError::Other(format!("Failed to create {:?}: {}", dest_path, e)))?;
+        std::io::copy(&mut entry, &mut out)
+            .map_err(|e| ClipyError::Other(format!("Failed to extract {}: {}", entry_name, e)))?;
+        drop(out);
+
+        set_executable(&dest_path)?;
+
+        if dest_name.starts_with("ffmpeg") {
+            found_ffmpeg = true;
+        }
+    }
+
+    if !found_ffmpeg {
+        return Err(ClipyError::Other(
+            "ffmpeg binary not found inside zip archive".into(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Extract ffmpeg/ffprobe from a `.tar.xz` archive (Linux).
+#[cfg(target_os = "linux")]
+fn extract_ffmpeg_tar_xz(archive: &PathBuf, binaries_dir: &PathBuf, target_path: &PathBuf) -> Result<()> {
+    let file = std::fs::File::open(archive)
+        .map_err(|e| ClipyError::Other(format!("Failed to open archive: {}", e)))?;
+    let decompressor = xz2::read::XzDecoder::new(std::io::BufReader::new(file));
+    let mut tar = tar::Archive::new(decompressor);
+
+    let mut found_ffmpeg = false;
+    let entries = tar
+        .entries()
+        .map_err(|e| ClipyError::Other(format!("Failed to read tar entries: {}", e)))?;
+
+    for entry in entries {
+        let mut entry =
+            entry.map_err(|e| ClipyError::Other(format!("Failed to read tar entry: {}", e)))?;
+
+        let path = entry
+            .path()
+            .map_err(|e| ClipyError::Other(format!("Failed to read tar entry path: {}", e)))?;
+        let entry_name = path.to_string_lossy().to_string();
+
+        let dest_name = match ffmpeg_entry_dest(&entry_name) {
+            Some(name) => name,
+            None => continue,
+        };
+
+        let dest_path = if dest_name == target_path.file_name().and_then(|n| n.to_str()).unwrap_or("") {
+            target_path.clone()
+        } else {
+            binaries_dir.join(dest_name)
+        };
+
+        debug!("Extracting {} -> {:?}", entry_name, dest_path);
+        let mut out = std::fs::File::create(&dest_path)
+            .map_err(|e| ClipyError::Other(format!("Failed to create {:?}: {}", dest_path, e)))?;
+        std::io::copy(&mut entry, &mut out)
+            .map_err(|e| ClipyError::Other(format!("Failed to extract {}: {}", entry_name, e)))?;
+        drop(out);
+
+        set_executable(&dest_path)?;
+
+        if dest_name.starts_with("ffmpeg") {
+            found_ffmpeg = true;
+        }
+    }
+
+    if !found_ffmpeg {
+        return Err(ClipyError::Other(
+            "ffmpeg binary not found inside tar.xz archive".into(),
+        ));
+    }
 
     Ok(())
 }

@@ -7,6 +7,13 @@ dist/
 dist-ssr/
 *.local
 
+# Stale Electron-era build artifacts (not used by the Tauri build)
+.vite/
+out/
+
+# Local agent/skills scratch
+.agents/
+
 # Tauri
 src-tauri/target/
 src-tauri/WixTools/
@@ -33,7 +40,11 @@ src-tauri/binaries/yt-dlp*
 Thumbs.db
 desktop.ini
 ehthumbs.db
-Icon?
+# NOTE: the old macOS `Icon?` rule was removed — on Windows git matches
+# case-insensitively, so `Icon?` swallowed the real app icons (icon.ico,
+# icon.png, 32x32.png ...). App icons are REQUIRED by `tauri build`.
+!src-tauri/icons/
+!src-tauri/icons/**
 
 # Environment files
 .env

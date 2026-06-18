@@ -170,12 +170,11 @@ async fn cleanup_old_files(path: &PathBuf, max_age: Duration) -> Result<u64> {
             if metadata.is_file() {
                 if let Ok(modified) = metadata.modified() {
                     if let Ok(age) = now.duration_since(modified) {
-                        if age > max_age {
-                            if fs::remove_file(&entry_path).await.is_ok() {
+                        if age > max_age
+                            && fs::remove_file(&entry_path).await.is_ok() {
                                 deleted += 1;
                                 debug!("Deleted old cache file: {:?}", entry_path);
                             }
-                        }
                     }
                 }
             } else if metadata.is_dir() {
@@ -212,7 +211,7 @@ pub async fn enforce_cache_limit(app: &AppHandle, max_size_mb: u64) -> Result<u6
     let mut files = collect_files_with_metadata(&cache_path).await?;
 
     // Sort by modification time (oldest first)
-    files.sort_by(|a, b| a.1.cmp(&b.1));
+    files.sort_by_key(|a| a.1);
 
     let mut freed = 0u64;
     let target_size = max_size_bytes * 80 / 100; // Target 80% of limit

@@ -546,6 +546,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -564,6 +565,7 @@ dependencies = [
  "url",
  "uuid",
  "winapi",
+ "xz2",
  "zip 2.4.2",
 ]
 

@@ -12,8 +12,8 @@ pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, tauri::
     // Build the tray menu
     let menu = build_tray_menu(app)?;
 
-    // Create the tray icon
-    let tray = TrayIconBuilder::new()
+    // Create the tray icon (id "main" so update_tray_download_progress can find it)
+    let tray = TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().unwrap().clone())
         .menu(&menu)
         .show_menu_on_left_click(false)

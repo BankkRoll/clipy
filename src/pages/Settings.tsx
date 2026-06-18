@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { RefreshCw, Loader2, AlertCircle, ChevronRight } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, isNewerVersion } from "@/lib/utils";
+import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -99,12 +100,38 @@ export function Settings() {
   const handleCheckForUpdates = useCallback(async () => {
     setCheckingUpdates(true);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      toast.success("You're up to date!", {
-        description: `Clipy ${APP_VERSION} is the latest version.`,
+      // Real update check: compare against the latest published GitHub release.
+      const res = await fetch(
+        "https://api.github.com/repos/BankkRoll/clipy/releases/latest",
+        { headers: { Accept: "application/vnd.github+json" } }
+      );
+      if (!res.ok) {
+        throw new Error(`GitHub API returned ${res.status}`);
+      }
+      const data = (await res.json()) as { tag_name?: string; html_url?: string };
+      const latest = (data.tag_name ?? "").replace(/^v/i, "").trim();
+      if (!latest) {
+        throw new Error("No release tag found");
+      }
+
+      if (isNewerVersion(latest, APP_VERSION)) {
+        toast.info(`Update available: v${latest}`, {
+          description: `You have ${APP_VERSION}. Click to view the release.`,
+          action: data.html_url
+            ? { label: "View", onClick: () => openUrl(data.html_url as string) }
+            : undefined,
+          duration: 10000,
+        });
+      } else {
+        toast.success("You're up to date!", {
+          description: `Clipy ${APP_VERSION} is the latest version.`,
+        });
+      }
+    } catch (err) {
+      logger.error("Settings", "Update check failed", err);
+      toast.error("Failed to check for updates", {
+        description: "Could not reach the update server. Try again later.",
       });
-    } catch {
-      toast.error("Failed to check for updates");
     } finally {
       setCheckingUpdates(false);
     }

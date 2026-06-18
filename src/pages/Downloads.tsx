@@ -9,8 +9,8 @@ import {
   STATUS_PRIORITY,
 } from "@/components/downloads";
 import { useDownloadStore } from "@/stores/downloadStore";
-import type { Download, DownloadProgress } from "@/types/download";
-import { useFileSystem, useTauriEvent } from "@/hooks";
+import type { Download } from "@/types/download";
+import { useFileSystem } from "@/hooks";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { logger } from "@/lib/logger";
 
@@ -20,9 +20,6 @@ export function Downloads() {
 
   const {
     downloads,
-    updateProgress,
-    updateDownload,
-    setStatus,
     pauseDownload,
     resumeDownload,
     cancelDownload,
@@ -33,28 +30,9 @@ export function Downloads() {
 
   const { showInFolder } = useFileSystem();
 
-  // Listen for download progress events from Tauri backend
-  useTauriEvent<DownloadProgress>("download-progress", (progress) => {
-    // Log all progress events for debugging
-    console.log("[Download Progress]", progress.downloadId, progress.progress + "%", progress.status);
-    logger.debug("Downloads", "Progress received:", progress);
-
-    if (progress.status === "completed" || progress.status === "failed" || progress.status === "cancelled") {
-      setStatus(progress.downloadId, progress.status);
-      if (progress.status === "completed" && progress.filePath) {
-        logger.debug("Downloads", "Download completed with file path:", progress.filePath);
-        updateDownload(progress.downloadId, { outputPath: progress.filePath });
-      }
-    } else {
-      updateProgress(
-        progress.downloadId,
-        progress.progress,
-        progress.downloadedBytes,
-        progress.speed,
-        progress.eta
-      );
-    }
-  });
+  // NOTE: the `download-progress` event is handled centrally in App.tsx (the
+  // single source of truth). Do not subscribe here too, or completed file paths
+  // get lost depending on which route is mounted.
 
   // Memoized sorted downloads
   const sortedDownloads = useMemo(

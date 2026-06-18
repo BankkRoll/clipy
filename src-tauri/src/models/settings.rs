@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Application settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct AppSettings {
     pub general: GeneralSettings,
     pub download: DownloadSettings,
@@ -13,17 +14,6 @@ pub struct AppSettings {
     pub advanced: AdvancedSettings,
 }
 
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            general: GeneralSettings::default(),
-            download: DownloadSettings::default(),
-            editor: EditorSettings::default(),
-            appearance: AppearanceSettings::default(),
-            advanced: AdvancedSettings::default(),
-        }
-    }
-}
 
 /// General settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -331,6 +321,7 @@ impl Default for AdvancedSettings {
 /// Binary status information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct BinaryStatus {
     pub ffmpeg_installed: bool,
     pub ffmpeg_version: Option<String>,
@@ -340,15 +331,3 @@ pub struct BinaryStatus {
     pub ytdlp_path: Option<String>,
 }
 
-impl Default for BinaryStatus {
-    fn default() -> Self {
-        Self {
-            ffmpeg_installed: false,
-            ffmpeg_version: None,
-            ffmpeg_path: None,
-            ytdlp_installed: false,
-            ytdlp_version: None,
-            ytdlp_path: None,
-        }
-    }
-}

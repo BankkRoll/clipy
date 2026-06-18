@@ -48,6 +48,11 @@ pub fn run() {
             // Initialize process registry for download management
             services::process_registry::init_registry();
 
+            // Set up the system tray (menu + left-click-to-show + tooltip).
+            if let Err(e) = utils::tray::setup_tray(&app_handle) {
+                info!("Failed to set up system tray: {}", e);
+            }
+
             // Initialize download queue
             let settings = services::config::get_settings()?;
             services::queue::init_queue(app_handle.clone(), settings.download.max_concurrent_downloads);
@@ -66,6 +71,19 @@ pub fn run() {
 
             info!("Clipy initialized successfully");
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // On window close, kill any in-flight downloads/exports so we don't
+            // orphan yt-dlp / ffmpeg child processes.
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                let _ = window;
+                services::ffmpeg::request_export_cancel();
+                if let Ok(queue) = services::queue::get_queue() {
+                    tauri::async_runtime::block_on(async move {
+                        queue.shutdown().await;
+                    });
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             // System commands

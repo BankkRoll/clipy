@@ -37,7 +37,7 @@ impl DownloadQueue {
     }
 
     /// Add a download to the queue
-    pub async fn add_download(&self, task: DownloadTask) -> Result<()> {
+    pub async fn add_download(self: Arc<Self>, task: DownloadTask) -> Result<()> {
         info!("Adding download to queue: {}", task.title);
 
         // Check if already in queue
@@ -62,41 +62,76 @@ impl DownloadQueue {
         }
 
         // Try to start downloads
-        self.process_queue().await?;
+        self.clone().process_queue().await?;
 
         Ok(())
     }
 
-    /// Process the queue and start downloads
-    async fn process_queue(&self) -> Result<()> {
-        let max_concurrent = *self.max_concurrent.read().await;
-        let pending_count = self.pending.read().await.len();
-        debug!("Processing queue: {} pending, max concurrent: {}", pending_count, max_concurrent);
+    /// Count tasks that are genuinely occupying a concurrency slot.
+    /// Completed/Failed/Cancelled tasks linger in `active` for history until
+    /// `clear_completed`, so they must NOT count against the concurrency limit
+    /// (otherwise the queue stalls once `max_concurrent` downloads finish).
+    async fn running_count(&self) -> usize {
+        let active = self.active.read().await;
+        active
+            .values()
+            .filter(|t| {
+                matches!(
+                    t.status,
+                    DownloadStatus::Downloading
+                        | DownloadStatus::Fetching
+                        | DownloadStatus::Processing
+                        | DownloadStatus::Pending
+                )
+            })
+            .count()
+    }
 
-        loop {
-            let active_count = self.active.read().await.len();
-            debug!("Active downloads: {}/{}", active_count, max_concurrent);
-            if active_count >= max_concurrent as usize {
-                break;
-            }
+    /// Process the queue and start downloads.
+    ///
+    /// Returns a boxed future so the recursive cycle (process_queue ->
+    /// start_download -> completion task -> process_queue) has a concrete `Send`
+    /// type the compiler can reason about.
+    fn process_queue(
+        self: Arc<Self>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
+        Box::pin(async move {
+            let max_concurrent = *self.max_concurrent.read().await;
+            let pending_count = self.pending.read().await.len();
+            debug!(
+                "Processing queue: {} pending, max concurrent: {}",
+                pending_count, max_concurrent
+            );
 
-            let task = {
-                let mut pending = self.pending.write().await;
-                if pending.is_empty() {
+            loop {
+                let active_count = self.running_count().await;
+                debug!("Active downloads: {}/{}", active_count, max_concurrent);
+                if active_count >= max_concurrent as usize {
                     break;
                 }
-                pending.remove(0)
-            };
 
-            // Start the download
-            self.start_download(task).await?;
-        }
+                let task = {
+                    let mut pending = self.pending.write().await;
+                    if pending.is_empty() {
+                        break;
+                    }
+                    pending.remove(0)
+                };
 
-        Ok(())
+                // Start the download
+                self.clone().start_download(task).await?;
+            }
+
+            Ok(())
+        })
     }
 
     /// Start a download task
-    async fn start_download(&self, mut task: DownloadTask) -> Result<()> {
+    fn start_download(
+        self: Arc<Self>,
+        mut task: DownloadTask,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
+      Box::pin(async move {
         info!("Starting download: {}", task.title);
 
         task.status = DownloadStatus::Downloading;
@@ -142,7 +177,7 @@ impl DownloadQueue {
                 {
                     let mut active = active_ref.write().await;
                     if let Some(t) = active.get_mut(&task_id_clone) {
-                        t.status = progress.status.clone();
+                        t.status = progress.status;
                         t.progress = progress.progress;
                         t.downloaded_bytes = progress.downloaded_bytes;
                         t.total_bytes = progress.total_bytes;
@@ -217,7 +252,7 @@ impl DownloadQueue {
                 // Emit final status with file path for completed downloads
                 let _ = app_for_download.emit("download-progress", &DownloadProgress {
                     download_id: task_id_for_completion.clone(),
-                    status: t.status.clone(),
+                    status: t.status,
                     progress: t.progress,
                     downloaded_bytes: t.downloaded_bytes,
                     total_bytes: t.total_bytes,
@@ -226,9 +261,24 @@ impl DownloadQueue {
                     file_path: completed_file_path,
                 });
             }
+            drop(active);
+
+            // A slot just freed up: pull the next pending download (if any).
+            // Without this the queue would stall after the first batch finishes.
+            // Spawn the follow-up as an independent top-level task so the cyclic
+            // process_queue -> start_download -> completion-spawn type graph does
+            // not have to prove `Send` through this future.
+            if let Ok(queue) = get_queue() {
+                tokio::spawn(async move {
+                    if let Err(e) = queue.process_queue().await {
+                        error!("Failed to process queue after completion: {}", e);
+                    }
+                });
+            }
         });
 
         Ok(())
+      })
     }
 
     /// Emit progress to frontend
@@ -266,7 +316,7 @@ impl DownloadQueue {
     }
 
     /// Resume a paused download
-    pub async fn resume_download(&self, id: &str) -> Result<()> {
+    pub async fn resume_download(self: Arc<Self>, id: &str) -> Result<()> {
         info!("Resuming download: {}", id);
 
         let task = {
@@ -287,7 +337,9 @@ impl DownloadQueue {
             self.start_download(task).await?;
             Ok(())
         } else {
-            Err(ClipyError::Download("Download not found or not paused".into()))
+            Err(ClipyError::Download(
+                "Download not found or not paused".into(),
+            ))
         }
     }
 
@@ -380,12 +432,14 @@ impl DownloadQueue {
     }
 
     /// Set maximum concurrent downloads
-    pub async fn set_max_concurrent(&self, max: u32) {
-        let mut max_concurrent = self.max_concurrent.write().await;
-        *max_concurrent = max;
+    pub async fn set_max_concurrent(self: Arc<Self>, max: u32) {
+        {
+            let mut max_concurrent = self.max_concurrent.write().await;
+            *max_concurrent = max;
+        }
 
         // Process queue in case we can start more downloads
-        let _ = self.process_queue().await;
+        let _ = self.clone().process_queue().await;
     }
 
     /// Shutdown the queue

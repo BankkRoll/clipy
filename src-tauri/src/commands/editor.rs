@@ -132,6 +132,10 @@ pub async fn export_project(
 pub async fn cancel_export(app: AppHandle) -> Result<()> {
     info!("Cancelling export");
 
+    // Signal the running ffmpeg export to stop; the export loop will observe
+    // this, kill the process, clean up the partial file, and emit Cancelled.
+    ffmpeg::request_export_cancel();
+
     let project_id = {
         let mut active = ACTIVE_EXPORT.lock().await;
         active.take()

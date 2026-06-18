@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Video information from YouTube
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct VideoInfo {
     pub id: String,
     pub title: String,
@@ -40,22 +41,3 @@ pub struct VideoFormat {
     pub has_audio: bool,
 }
 
-impl Default for VideoInfo {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            title: String::new(),
-            description: String::new(),
-            thumbnail: String::new(),
-            duration: 0,
-            channel: String::new(),
-            channel_id: String::new(),
-            upload_date: String::new(),
-            view_count: 0,
-            like_count: 0,
-            formats: Vec::new(),
-            is_live: false,
-            is_private: false,
-        }
-    }
-}

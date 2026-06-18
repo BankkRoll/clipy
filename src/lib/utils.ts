@@ -191,3 +191,27 @@ export function sanitizeFilename(filename: string): string {
     .trim()
     .slice(0, 200);
 }
+
+/**
+ * Compare two semantic version strings (e.g. "2.1.0").
+ * Returns true if `candidate` is strictly newer than `current`.
+ * Tolerates a leading "v" and missing patch/minor segments.
+ */
+export function isNewerVersion(candidate: string, current: string): boolean {
+  const parse = (v: string): number[] =>
+    (v.replace(/^v/i, "").split("-")[0] ?? "")
+      .split(".")
+      .map((n) => parseInt(n, 10) || 0);
+
+  const a = parse(candidate);
+  const b = parse(current);
+  const len = Math.max(a.length, b.length);
+
+  for (let i = 0; i < len; i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x > y) return true;
+    if (x < y) return false;
+  }
+  return false;
+}

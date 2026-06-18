@@ -38,15 +38,24 @@ export function App() {
       });
   }, []);
 
-  // Global listener for download progress events from Tauri backend
+  // Global listener for download progress events from Tauri backend.
+  // This is the SINGLE source of truth for download-progress (do not add a
+  // second listener elsewhere) so the completed file path is never lost
+  // depending on which route happens to be mounted.
   const handleDownloadProgress = useCallback(
     (progress: DownloadProgress) => {
-      // Update the download in the store
       if (
         progress.status === "completed" ||
         progress.status === "failed" ||
         progress.status === "cancelled"
       ) {
+        // Persist the final file path on completion so "Open folder" / play work
+        // regardless of the active route.
+        updateDownload(progress.downloadId, {
+          status: progress.status,
+          progress: progress.status === "completed" ? 100 : progress.progress,
+          ...(progress.filePath ? { outputPath: progress.filePath } : {}),
+        });
         setStatus(progress.downloadId, progress.status, undefined);
       } else {
         updateDownload(progress.downloadId, {

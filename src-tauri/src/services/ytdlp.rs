@@ -762,3 +762,170 @@ pub fn get_available_qualities(video_info: &VideoInfo) -> Vec<String> {
 
     heights.iter().map(|h| format!("{}p", h)).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::download::DownloadOptions;
+    use crate::models::video::{VideoFormat, VideoInfo};
+
+    // ---- parse_size ----
+
+    #[test]
+    fn parse_size_units() {
+        assert_eq!(parse_size("1KiB"), 1024);
+        assert_eq!(parse_size("1KB"), 1024);
+        assert_eq!(parse_size("1MiB"), 1024 * 1024);
+        assert_eq!(parse_size("1GiB"), 1024 * 1024 * 1024);
+        assert_eq!(parse_size("100"), 100); // plain bytes, no unit
+        assert_eq!(parse_size("2.5MiB"), (2.5 * 1024.0 * 1024.0) as u64);
+    }
+
+    #[test]
+    fn parse_size_invalid_returns_zero() {
+        assert_eq!(parse_size("N/A"), 0);
+        assert_eq!(parse_size("~"), 0);
+        assert_eq!(parse_size(""), 0);
+    }
+
+    // ---- parse_speed ----
+
+    #[test]
+    fn parse_speed_strips_per_second() {
+        assert_eq!(parse_speed("1MiB/s"), 1024 * 1024);
+        assert_eq!(parse_speed("512KiB/s"), 512 * 1024);
+        assert_eq!(parse_speed("N/A"), 0);
+    }
+
+    // ---- parse_eta ----
+
+    #[test]
+    fn parse_eta_formats() {
+        assert_eq!(parse_eta("01:23"), 83);
+        assert_eq!(parse_eta("00:10"), 10);
+        assert_eq!(parse_eta("01:02:03"), 3723);
+        assert_eq!(parse_eta("Unknown"), 0);
+        assert_eq!(parse_eta(""), 0);
+        assert_eq!(parse_eta("12"), 0); // single component -> 0
+    }
+
+    // ---- parse_progress_line ----
+
+    #[test]
+    fn parse_progress_line_full() {
+        let line = "[download]  50.0% of 100.00MiB at 5.00MiB/s ETA 00:10";
+        let (pct, downloaded, total, speed, eta) = parse_progress_line(line).unwrap();
+        assert_eq!(pct, 50.0);
+        assert_eq!(total, 100 * 1024 * 1024);
+        assert_eq!(downloaded, total / 2);
+        assert_eq!(speed, 5 * 1024 * 1024);
+        assert_eq!(eta, 10);
+    }
+
+    #[test]
+    fn parse_progress_line_non_progress_returns_none() {
+        assert!(parse_progress_line("[download] Destination: /tmp/x.mp4").is_none());
+        assert!(parse_progress_line("some other log line").is_none());
+    }
+
+    #[test]
+    fn parse_progress_line_hundred_percent() {
+        let line = "[download] 100% of 10.00MiB";
+        let r = parse_progress_line(line);
+        assert!(r.is_some());
+        assert_eq!(r.unwrap().0, 100.0);
+    }
+
+    // ---- build_format_selector ----
+
+    fn opts() -> DownloadOptions {
+        DownloadOptions::default()
+    }
+
+    #[test]
+    fn format_selector_quality_height_caps() {
+        let mut o = opts();
+        o.video_codec = "auto".into();
+        for (q, h) in [("1080", 1080), ("720", 720), ("480", 480), ("360", 360)] {
+            o.quality = q.into();
+            let sel = build_format_selector(&o);
+            assert_eq!(
+                sel,
+                format!("bestvideo[height<={h}]+bestaudio/best[height<={h}]")
+            );
+        }
+    }
+
+    #[test]
+    fn format_selector_4k_alias() {
+        let mut o = opts();
+        o.quality = "4k".into();
+        assert_eq!(
+            build_format_selector(&o),
+            "bestvideo[height<=2160]+bestaudio/best[height<=2160]"
+        );
+    }
+
+    #[test]
+    fn format_selector_unknown_quality_is_best() {
+        let mut o = opts();
+        o.quality = "weird".into();
+        assert_eq!(build_format_selector(&o), "bestvideo+bestaudio/best");
+    }
+
+    #[test]
+    fn format_selector_codec_preference() {
+        let mut o = opts();
+        o.quality = "1080".into();
+        o.video_codec = "h264".into();
+        assert_eq!(
+            build_format_selector(&o),
+            "bestvideo[height<=1080][vcodec^=avc]+bestaudio/best[height<=1080]"
+        );
+        o.video_codec = "av1".into();
+        assert!(build_format_selector(&o).contains("[vcodec^=av01]"));
+    }
+
+    #[test]
+    fn format_selector_audio_only() {
+        let mut o = opts();
+        o.audio_only = true;
+        o.audio_format = "mp3".into();
+        assert_eq!(build_format_selector(&o), "bestaudio[ext=mp3]/bestaudio/best");
+    }
+
+    #[test]
+    fn format_selector_audio_only_best_defaults_to_m4a() {
+        let mut o = opts();
+        o.audio_only = true;
+        o.audio_format = "best".into();
+        assert_eq!(build_format_selector(&o), "bestaudio[ext=m4a]/bestaudio/best");
+    }
+
+    // ---- get_available_qualities ----
+
+    #[test]
+    fn available_qualities_sorted_descending_deduped() {
+        let mut info = VideoInfo::default();
+        let mk = |h: u32| VideoFormat {
+            format_id: "f".into(),
+            extension: "mp4".into(),
+            resolution: format!("x{h}"),
+            width: 0,
+            height: h,
+            fps: 30,
+            vcodec: "avc".into(),
+            acodec: "none".into(),
+            filesize: None,
+            filesize_approx: None,
+            tbr: 0.0,
+            has_video: true,
+            has_audio: false,
+        };
+        info.formats = vec![mk(720), mk(1080), mk(720), mk(480)];
+        assert_eq!(
+            get_available_qualities(&info),
+            vec!["1080p".to_string(), "720p".into(), "480p".into()]
+        );
+    }
+}

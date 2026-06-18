@@ -63,6 +63,11 @@ opener = "0.7"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Linux-specific (FFmpeg tar.xz extraction)
+[target.'cfg(target_os = "linux")'.dependencies]
+tar = "0.4"
+xz2 = "0.1"
+
 # Windows-specific
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["winuser", "shellapi"] }

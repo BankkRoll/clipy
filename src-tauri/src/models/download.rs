@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 /// Download status enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum DownloadStatus {
+    #[default]
     Pending,
     Fetching,
     Downloading,
@@ -16,11 +18,6 @@ pub enum DownloadStatus {
     Paused,
 }
 
-impl Default for DownloadStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
-}
 
 /// Download task information
 #[derive(Debug, Clone, Serialize, Deserialize)]
