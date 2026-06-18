@@ -38,7 +38,7 @@ pub fn run() {
     info!("Starting Clipy v{}", env!("CARGO_PKG_VERSION"));
 
     tauri::Builder::default()
-        .register_uri_scheme_protocol(media_protocol::SCHEME, media_protocol::handle)
+        .register_asynchronous_uri_scheme_protocol(media_protocol::SCHEME, media_protocol::handle)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
@@ -174,6 +174,7 @@ pub fn run() {
             commands::editor::transcode_for_editing,
             commands::editor::get_export_formats,
             commands::editor::get_export_resolutions,
+            commands::editor::generate_captions,
             // Settings commands
             commands::settings::get_settings,
             commands::settings::update_settings,

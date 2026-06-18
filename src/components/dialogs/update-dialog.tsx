@@ -1,7 +1,6 @@
 import {
   Download,
   RefreshCw,
-  Sparkles,
   Clock,
   XCircle,
   CheckCircle,
@@ -11,6 +10,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogBody,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -60,18 +60,11 @@ export function UpdateDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <div className="flex items-start gap-4">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary/10">
-              <Sparkles className="h-6 w-6 text-primary" />
-            </div>
-            <div className="space-y-1">
-              <DialogTitle>{title}</DialogTitle>
-              <DialogDescription>{description}</DialogDescription>
-            </div>
-          </div>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <DialogBody className="space-y-4">
           {/* Version info */}
           <div className="flex items-center justify-center gap-4 py-2">
             <div className="text-center">
@@ -150,9 +143,9 @@ export function UpdateDialog({
               <span>Updates in background, no restart needed</span>
             </div>
           )}
-        </div>
+        </DialogBody>
 
-        <DialogFooter className="gap-2 sm:gap-0">
+        <DialogFooter>
           {downloadStatus === "idle" && (
             <>
               {onSkip && (

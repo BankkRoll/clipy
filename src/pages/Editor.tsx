@@ -39,6 +39,8 @@ import {
   Unlock,
   Clipboard,
   GripVertical,
+  Captions,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,6 +56,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle,
+} from "@/components/ui/resizable";
+import type { ImperativePanelHandle } from "react-resizable-panels";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -85,6 +93,15 @@ import {
   EmptyDescription,
 } from "@/components/ui/empty";
 import { ExportDialog, type ExportSettings } from "@/components/editor/export-dialog";
+import { CaptionsPanel } from "@/components/editor/captions-panel";
+import { PreviewOverlay } from "@/components/editor/preview-overlay";
+import {
+  type CaptionStyleId,
+  type RawCaptionResult,
+  getCaptionStyle,
+  groupWordsIntoLines,
+} from "@/types/captions";
+import { useTauriEvent } from "@/hooks/useTauri";
 
 // Filter presets
 const FILTER_PRESETS = [
@@ -166,14 +183,51 @@ export function Editor() {
   const timelineContentRef = useRef<HTMLDivElement>(null);
   const playbackIntervalRef = useRef<number | null>(null);
 
+  // Resizable side-panel handles. We drive collapse/expand imperatively so the
+  // panel can shrink to a rail but never gets "lost" — the toggle buttons in the
+  // panel headers and the always-visible rails (see render) can always bring it
+  // back. `leftPanelOpen`/`rightPanelOpen` mirror the collapsed state for icons.
+  const leftPanelRef = useRef<ImperativePanelHandle>(null);
+  const rightPanelRef = useRef<ImperativePanelHandle>(null);
+
   // Local state
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
-  const [activeLeftTab, setActiveLeftTab] = useState<"media" | "library">("library");
+
+  const toggleLeftPanel = useCallback(() => {
+    const p = leftPanelRef.current;
+    if (!p) return;
+    if (p.isCollapsed()) p.expand();
+    else p.collapse();
+  }, []);
+  const toggleRightPanel = useCallback(() => {
+    const p = rightPanelRef.current;
+    if (!p) return;
+    if (p.isCollapsed()) p.expand();
+    else p.collapse();
+  }, []);
+
+  const [activeLeftTab, setActiveLeftTab] = useState<
+    "media" | "captions" | "text" | "audio"
+  >("media");
   const [activeRightTab, setActiveRightTab] = useState<"properties" | "filters" | "text">(
     "properties"
   );
   const [showExportDialog, setShowExportDialog] = useState(false);
+
+  // Captions generation state (whisper.cpp).
+  const [captionsGenerating, setCaptionsGenerating] = useState(false);
+  const [captionsProgress, setCaptionsProgress] = useState<number | null>(null);
+  const [captionsStage, setCaptionsStage] = useState<string | null>(null);
+
+  // Live progress from the Rust caption pipeline (download/extract/transcribe).
+  useTauriEvent<{ stage: string; progress: number; message: string }>(
+    "caption-progress",
+    (p) => {
+      setCaptionsStage(p.message);
+      setCaptionsProgress(p.progress >= 0 ? p.progress : null);
+    }
+  );
 
   // Drag state
   const [draggingClip, setDraggingClip] = useState<{
@@ -253,6 +307,107 @@ export function Editor() {
     commitHistory,
     clearSelection,
   } = useEditorStore();
+
+  // Generate captions for the first video clip via the on-device Whisper
+  // pipeline (Rust `generate_captions`), group the words into caption lines, and
+  // drop each line onto a dedicated "Captions" text track so they render through
+  // the preview overlay and are editable like any text clip.
+  const handleGenerateCaptions = useCallback(
+    async ({ model, styleId }: { model: string; styleId: CaptionStyleId }) => {
+      const videoClip = project?.tracks
+        .flatMap((t) => t.clips)
+        .find((c) => c.type === "video");
+      if (!videoClip) {
+        toast.error("Add a video to the timeline first");
+        return;
+      }
+      setCaptionsGenerating(true);
+      setCaptionsProgress(null);
+      try {
+        const raw = await invoke<RawCaptionResult>("generate_captions", {
+          sourcePath: videoClip.sourcePath,
+          model,
+        });
+        if (!raw.words.length) {
+          toast.error("No speech detected in this clip");
+          return;
+        }
+
+        const style = getCaptionStyle(styleId);
+        const { lines, words } = groupWordsIntoLines(
+          raw.words.map((w) => ({
+            text: w.text,
+            startMs: w.start_ms,
+            endMs: w.end_ms,
+            confidence: w.confidence,
+          })),
+          style.maxWordsPerLine
+        );
+
+        // Caption timing is relative to the start of the source media; offset by
+        // where the video clip sits on the timeline (minus its trimmed-in point).
+        const timelineOffset = videoClip.startTime - videoClip.sourceStart;
+        const trackId = addTrack("text");
+
+        for (const line of lines) {
+          const start = timelineOffset + line.startMs / 1000;
+          const end = timelineOffset + line.endMs / 1000;
+          const clip: Omit<Clip, "id" | "trackId"> = {
+            type: "text",
+            name: line.text.slice(0, 24) || "Caption",
+            startTime: start,
+            endTime: Math.max(end, start + 0.4),
+            sourceStart: 0,
+            sourceEnd: Math.max(end - start, 0.4),
+            sourcePath: "",
+            thumbnails: [],
+            properties: {
+              volume: 1,
+              opacity: 1,
+              speed: 1,
+              fadeIn: 0,
+              fadeOut: 0,
+              filters: [],
+              transform: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+              text: {
+                content: style.uppercase ? line.text.toUpperCase() : line.text,
+                fontFamily: style.fontFamily,
+                fontSize: 54,
+                fontWeight: style.fontWeight,
+                color: style.baseColor,
+                backgroundColor:
+                  style.highlight === "box" ? "rgba(0,0,0,0.6)" : "transparent",
+                align: "center",
+                verticalAlign: "bottom",
+                ...(style.highlight !== "none" && { highlightColor: style.activeColor }),
+                // Per-word timing relative to this clip's start, for karaoke.
+                captionWords: line.wordIndices.map((wi) => {
+                  const w = words[wi]!;
+                  return {
+                    text: style.uppercase ? w.text.toUpperCase() : w.text,
+                    start: w.startMs / 1000 - line.startMs / 1000,
+                    end: w.endMs / 1000 - line.startMs / 1000,
+                  };
+                }),
+              },
+            },
+          };
+          addClip(trackId, clip);
+        }
+
+        commitHistory("Generate captions");
+        toast.success(`Added ${lines.length} captions`);
+      } catch (e) {
+        logger.error("Editor", "Caption generation failed:", e);
+        toast.error(`Caption generation failed: ${e}`);
+      } finally {
+        setCaptionsGenerating(false);
+        setCaptionsProgress(null);
+        setCaptionsStage(null);
+      }
+    },
+    [project, addTrack, addClip, commitHistory]
+  );
 
   // Calculate timeline width
   const timelineWidth = useMemo(() => {
@@ -1355,59 +1510,105 @@ export function Editor() {
           </div>
         </header>
 
-        {/* Main Content */}
-        <div className="flex flex-1 overflow-hidden">
-          {/* Left Panel - Media Browser */}
-          <div
-            className={cn(
-              "flex flex-col border-r border-border bg-card transition-all",
-              leftPanelOpen ? "w-64" : "w-0"
-            )}
-          >
-            {leftPanelOpen && (
-              <>
-                <div className="flex h-10 items-center justify-between border-b border-border px-3">
+        {/* Main Content — nested resizable panels: vertical (top / timeline),
+            top split horizontally into media / preview / properties. */}
+        <ResizablePanelGroup direction="vertical" className="min-h-0 flex-1">
+          <ResizablePanel defaultSize={75} minSize={30} className="min-h-0">
+            <ResizablePanelGroup direction="horizontal" className="min-h-0">
+              {/* Always-visible left rail to reopen the media panel when collapsed */}
+              {!leftPanelOpen && (
+                <div className="flex w-10 flex-shrink-0 flex-col items-center border-r border-border bg-card pt-2">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleLeftPanel}>
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">Show Media</TooltipContent>
+                  </Tooltip>
+                </div>
+              )}
+
+              {/* Left Panel - Media Browser */}
+              <ResizablePanel
+                ref={leftPanelRef}
+                order={1}
+                collapsible
+                collapsedSize={0}
+                defaultSize={20}
+                minSize={14}
+                maxSize={35}
+                onCollapse={() => setLeftPanelOpen(false)}
+                onExpand={() => setLeftPanelOpen(true)}
+                className="min-w-0"
+              >
+                <div className="flex h-full flex-col border-r border-border bg-card">
+                <div className="flex h-10 flex-shrink-0 items-center justify-between border-b border-border px-3">
                   <span className="text-sm font-medium">Media</span>
                   <Button
                     variant="ghost"
                     size="icon"
                     className="h-7 w-7"
-                    onClick={() => setLeftPanelOpen(false)}
+                    onClick={toggleLeftPanel}
                   >
                     <ChevronLeft className="h-4 w-4" />
                   </Button>
                 </div>
                 <Tabs
                   value={activeLeftTab}
-                  onValueChange={(v) => setActiveLeftTab(v as "media" | "library")}
-                  className="flex flex-1 flex-col"
+                  onValueChange={(v) =>
+                    setActiveLeftTab(v as "media" | "captions" | "text" | "audio")
+                  }
+                  className="flex min-h-0 flex-1 flex-col"
                 >
-                  <TabsList className="mx-2 mt-2">
-                    <TabsTrigger value="library" className="flex-1">
-                      Library
+                  <TabsList variant="underline" className="flex-shrink-0 px-2">
+                    <TabsTrigger value="media">
+                      <Film className="h-3.5 w-3.5" />
+                      Media
                     </TabsTrigger>
-                    <TabsTrigger value="media" className="flex-1">
-                      Import
+                    <TabsTrigger value="captions">
+                      <Captions className="h-3.5 w-3.5" />
+                      Captions
+                    </TabsTrigger>
+                    <TabsTrigger value="text">
+                      <Type className="h-3.5 w-3.5" />
+                      Text
+                    </TabsTrigger>
+                    <TabsTrigger value="audio">
+                      <Music className="h-3.5 w-3.5" />
+                      Audio
                     </TabsTrigger>
                   </TabsList>
 
-                  <TabsContent value="library" className="m-0 flex-1 overflow-auto p-2">
-                    <div className="space-y-2">
+                  {/* MEDIA: library + import in one place */}
+                  <TabsContent value="media" className="m-0 min-h-0 flex-1 overflow-y-auto p-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mb-2 w-full justify-start"
+                      onClick={handleImportFile}
+                    >
+                      <Upload className="mr-2 h-4 w-4" />
+                      Import from disk
+                    </Button>
+                    <div className="grid grid-cols-2 gap-2">
                       {libraryLoading ? (
-                        <div className="flex items-center justify-center py-8">
+                        <div className="col-span-2 flex items-center justify-center py-8">
                           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                         </div>
                       ) : libraryVideos.length === 0 ? (
-                        <div className="py-8 text-center text-sm text-muted-foreground">
+                        <div className="col-span-2 py-8 text-center text-sm text-muted-foreground">
                           <Film className="mx-auto mb-2 h-8 w-8 opacity-50" />
-                          <p>No videos in library</p>
+                          <p>No media yet</p>
                         </div>
                       ) : (
                         libraryVideos.map((video) => (
-                          <div
+                          <button
                             key={video.id}
-                            className="group relative cursor-pointer overflow-hidden rounded-lg border border-border hover:border-primary/50"
+                            type="button"
+                            className="group relative overflow-hidden rounded-lg border border-border text-left transition-colors hover:border-primary/60"
                             onClick={() => handleAddMediaToTimeline(video)}
+                            title={video.title}
                           >
                             <div className="aspect-video bg-muted">
                               {video.thumbnail && (
@@ -1418,79 +1619,83 @@ export function Editor() {
                                 />
                               )}
                               <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
-                                <Plus className="h-8 w-8 text-white" />
+                                <Plus className="h-7 w-7 text-white" />
                               </div>
-                            </div>
-                            <div className="p-2">
-                              <p className="truncate text-xs font-medium">{video.title}</p>
-                              <p className="text-xs text-muted-foreground">
+                              <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1 text-[10px] text-white">
                                 {formatDuration(video.duration)}
-                              </p>
+                              </span>
                             </div>
-                          </div>
+                            <p className="truncate p-1.5 text-[11px] font-medium">{video.title}</p>
+                          </button>
                         ))
                       )}
                     </div>
                   </TabsContent>
 
-                  <TabsContent value="media" className="m-0 flex-1 overflow-auto p-2">
-                    <div className="space-y-2">
-                      <Button
-                        variant="outline"
-                        className="w-full justify-start"
-                        onClick={handleImportFile}
-                      >
-                        <Upload className="mr-2 h-4 w-4" />
-                        Import Files
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="w-full justify-start"
-                        onClick={handleAddTextTrack}
-                      >
-                        <Type className="mr-2 h-4 w-4" />
-                        Add Text
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="w-full justify-start"
-                        onClick={() => addTrack("audio")}
-                      >
-                        <Music className="mr-2 h-4 w-4" />
-                        Add Audio Track
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="w-full justify-start"
-                        onClick={() => addTrack("video")}
-                      >
-                        <Video className="mr-2 h-4 w-4" />
-                        Add Video Track
-                      </Button>
-                    </div>
+                  {/* CAPTIONS: auto-generate + style */}
+                  <TabsContent value="captions" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
+                    <CaptionsPanel
+                      hasVideo={project.tracks.some((t) =>
+                        t.clips.some((c) => c.type === "video")
+                      )}
+                      onGenerate={handleGenerateCaptions}
+                      generating={captionsGenerating}
+                      progress={captionsProgress}
+                      stageLabel={captionsStage}
+                    />
+                  </TabsContent>
+
+                  {/* TEXT & STICKERS */}
+                  <TabsContent value="text" className="m-0 min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+                    <p className="text-xs font-medium text-muted-foreground">Text</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full justify-start"
+                      onClick={handleAddTextTrack}
+                    >
+                      <Type className="mr-2 h-4 w-4" />
+                      Add Text Overlay
+                    </Button>
+                  </TabsContent>
+
+                  {/* AUDIO & TTS */}
+                  <TabsContent value="audio" className="m-0 min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+                    <p className="text-xs font-medium text-muted-foreground">Audio</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full justify-start"
+                      onClick={() => addTrack("audio")}
+                    >
+                      <Music className="mr-2 h-4 w-4" />
+                      Add Audio Track
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full justify-start"
+                      onClick={() => addTrack("video")}
+                    >
+                      <Video className="mr-2 h-4 w-4" />
+                      Add Video Track
+                    </Button>
                   </TabsContent>
                 </Tabs>
-              </>
-            )}
-          </div>
+                </div>
+              </ResizablePanel>
 
-          {/* Toggle Left Panel Button */}
-          {!leftPanelOpen && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="absolute left-0 top-1/2 z-10 h-8 w-6 -translate-y-1/2 rounded-l-none"
-              onClick={() => setLeftPanelOpen(true)}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          )}
+              <ResizableHandle withHandle className={cn(!leftPanelOpen && "hidden")} />
 
-          {/* Center - Preview */}
-          <div className="flex flex-1 flex-col">
+              {/* Center - Preview */}
+              <ResizablePanel order={2} defaultSize={60} minSize={30} className="min-w-0">
+              <div className="flex h-full flex-col">
             {/* Video Preview */}
             <div className="flex flex-1 items-center justify-center bg-black p-4">
-              <div className="relative aspect-video w-full max-w-4xl overflow-hidden rounded bg-neutral-900">
+              <div
+                className="relative aspect-video w-full max-w-4xl overflow-hidden rounded bg-neutral-900"
+                style={{ containerType: "size" }}
+              >
                 {currentClip ? (
                   <>
                     <video
@@ -1585,6 +1790,9 @@ export function Editor() {
                 {/* Hidden audio element for separate audio clips — always mounted so
                     audio-only timelines (no video clip at playhead) still play. */}
                 <audio ref={audioRef} className="hidden" />
+
+                {/* Text / caption overlays drawn on top of the video. */}
+                <PreviewOverlay tracks={project.tracks} currentTime={currentTime} />
               </div>
             </div>
 
@@ -1654,24 +1862,32 @@ export function Editor() {
                 />
               </div>
             </div>
-          </div>
+              </div>
+              </ResizablePanel>
 
-          {/* Right Panel - Properties */}
-          <div
-            className={cn(
-              "flex flex-col border-l border-border bg-card transition-all",
-              rightPanelOpen ? "w-72" : "w-0"
-            )}
-          >
-            {rightPanelOpen && (
-              <>
-                <div className="flex h-10 items-center justify-between border-b border-border px-3">
+              <ResizableHandle withHandle className={cn(!rightPanelOpen && "hidden")} />
+
+              {/* Right Panel - Properties */}
+              <ResizablePanel
+                ref={rightPanelRef}
+                order={3}
+                collapsible
+                collapsedSize={0}
+                defaultSize={20}
+                minSize={14}
+                maxSize={35}
+                onCollapse={() => setRightPanelOpen(false)}
+                onExpand={() => setRightPanelOpen(true)}
+                className="min-w-0"
+              >
+                <div className="flex h-full flex-col border-l border-border bg-card">
+                <div className="flex h-10 flex-shrink-0 items-center justify-between border-b border-border px-3">
                   <span className="text-sm font-medium">Properties</span>
                   <Button
                     variant="ghost"
                     size="icon"
                     className="h-7 w-7"
-                    onClick={() => setRightPanelOpen(false)}
+                    onClick={toggleRightPanel}
                   >
                     <ChevronRight className="h-4 w-4" />
                   </Button>
@@ -1681,17 +1897,20 @@ export function Editor() {
                   <Tabs
                     value={activeRightTab}
                     onValueChange={(v) => setActiveRightTab(v as "properties" | "filters" | "text")}
-                    className="flex flex-1 flex-col"
+                    className="flex min-h-0 flex-1 flex-col"
                   >
-                    <TabsList className="mx-2 mt-2">
+                    <TabsList variant="underline" className="flex-shrink-0 px-2">
                       <TabsTrigger value="properties" className="flex-1">
+                        <Settings2 className="h-3.5 w-3.5" />
                         Props
                       </TabsTrigger>
                       <TabsTrigger value="filters" className="flex-1">
+                        <Sparkles className="h-3.5 w-3.5" />
                         Filters
                       </TabsTrigger>
                       {selectedClip.type === "text" && (
                         <TabsTrigger value="text" className="flex-1">
+                          <Type className="h-3.5 w-3.5" />
                           Text
                         </TabsTrigger>
                       )}
@@ -1699,7 +1918,7 @@ export function Editor() {
 
                     <TabsContent
                       value="properties"
-                      className="m-0 flex-1 space-y-4 overflow-auto p-3"
+                      className="m-0 min-h-0 flex-1 space-y-4 overflow-y-auto p-3"
                     >
                       <div className="space-y-2">
                         <Label className="text-xs">Clip Name</Label>
@@ -1901,7 +2120,7 @@ export function Editor() {
                       </div>
                     </TabsContent>
 
-                    <TabsContent value="filters" className="m-0 flex-1 space-y-4 overflow-auto p-3">
+                    <TabsContent value="filters" className="m-0 min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
                       <div className="space-y-2">
                         <Label className="text-xs">Add Filter</Label>
                         <Select onValueChange={(v) => handleAddFilter(v as FilterType)}>
@@ -1968,7 +2187,7 @@ export function Editor() {
                     </TabsContent>
 
                     {selectedClip.type === "text" && (
-                      <TabsContent value="text" className="m-0 flex-1 space-y-4 overflow-auto p-3">
+                      <TabsContent value="text" className="m-0 min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
                         <div className="space-y-2">
                           <Label className="text-xs">Text Content</Label>
                           <textarea
@@ -2210,25 +2429,30 @@ export function Editor() {
                     </div>
                   </div>
                 )}
-              </>
-            )}
-          </div>
+                </div>
+              </ResizablePanel>
 
-          {/* Toggle Right Panel Button */}
-          {!rightPanelOpen && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="absolute right-0 top-1/2 z-10 h-8 w-6 -translate-y-1/2 rounded-r-none"
-              onClick={() => setRightPanelOpen(true)}
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-          )}
-        </div>
+              {/* Always-visible right rail to reopen properties when collapsed */}
+              {!rightPanelOpen && (
+                <div className="flex w-10 flex-shrink-0 flex-col items-center border-l border-border bg-card pt-2">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleRightPanel}>
+                        <ChevronLeft className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">Show Properties</TooltipContent>
+                  </Tooltip>
+                </div>
+              )}
+            </ResizablePanelGroup>
+          </ResizablePanel>
 
-        {/* Timeline */}
-        <div className="flex h-72 flex-col border-t border-border bg-card">
+          <ResizableHandle withHandle />
+
+          {/* Timeline */}
+          <ResizablePanel defaultSize={25} minSize={12} maxSize={60} className="min-h-0">
+          <div className="flex h-full flex-col border-t border-border bg-card">
           {/* Timeline Header */}
           <div className="flex h-8 flex-shrink-0 items-center justify-between border-b border-border px-4">
             <div className="flex items-center gap-2">
@@ -2690,7 +2914,9 @@ export function Editor() {
               ))
             )}
           </div>
-        </div>
+          </div>
+          </ResizablePanel>
+        </ResizablePanelGroup>
 
         {/* Export Dialog */}
         <ExportDialog

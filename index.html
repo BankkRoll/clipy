@@ -5,7 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Clipy - Open-source YouTube video downloader and editor" />
     <meta name="theme-color" content="#0a0a0a" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' ipc: http://ipc.localhost" />
+    <!--
+      This CSP <meta> tag OVERRIDES the one in tauri.conf.json for the webview's
+      resource loading. It MUST allow the custom `clipy-media` scheme (both the
+      bare `clipy-media:` form used on macOS/Linux and the `http://clipy-media.localhost`
+      form WebView2 uses on Windows) under BOTH `media-src` and `img-src`, or
+      local video/audio/poster loads are rejected with
+      "Media load rejected by URL safety check" (CSP falls back to default-src).
+      Keep this in sync with `app.security.csp` in src-tauri/tauri.conf.json.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: clipy-media: http://clipy-media.localhost https://clipy-media.localhost https://i.ytimg.com https://*.ytimg.com https://pbs.twimg.com; media-src 'self' blob: clipy-media: http://clipy-media.localhost https://clipy-media.localhost; connect-src 'self' ipc: http://ipc.localhost https://api.github.com"
+    />
     <link rel="icon" type="image/svg+xml" href="/logo.svg" />
     <title>Clipy</title>
   </head>

@@ -2,6 +2,8 @@
 
 An open-source, bloat-free desktop application for downloading and editing YouTube videos in their original quality.
 
+<img width="1872" height="1073" alt="image" src="https://github.com/user-attachments/assets/3fcacf8c-102a-4c24-aa5e-6d4cdaff5d35" />
+
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Tauri](https://img.shields.io/badge/Tauri-2.0-blue)

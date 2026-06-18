@@ -3,6 +3,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogBody,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -204,7 +205,7 @@ export function ExportDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Export Video</DialogTitle>
           <DialogDescription>
@@ -212,8 +213,9 @@ export function ExportDialog({
           </DialogDescription>
         </DialogHeader>
 
+        <DialogBody>
         {exporting ? (
-          <div className="space-y-4 py-4">
+          <div className="space-y-4">
             <div className="text-center">
               <Loader2 className="mx-auto mb-3 h-10 w-10 animate-spin text-primary" />
               <p className="font-medium">
@@ -234,7 +236,7 @@ export function ExportDialog({
             </Button>
           </div>
         ) : (
-          <div className="space-y-4 py-2">
+          <div className="space-y-4">
             {/* Format & Codec Row */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
@@ -443,9 +445,10 @@ export function ExportDialog({
             </Collapsible>
           </div>
         )}
+        </DialogBody>
 
         {!exporting && (
-          <DialogFooter className="gap-2 sm:gap-0">
+          <DialogFooter>
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>

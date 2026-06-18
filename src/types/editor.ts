@@ -76,6 +76,13 @@ export interface TextProperties {
   backgroundColor: string;
   align: "left" | "center" | "right";
   verticalAlign: "top" | "middle" | "bottom";
+  /**
+   * When present this text clip is an auto-caption: words carry timing (in
+   * seconds, relative to the clip start) so the preview can highlight the
+   * active word karaoke-style. `highlightColor` is the active-word color.
+   */
+  captionWords?: { text: string; start: number; end: number }[];
+  highlightColor?: string;
 }
 
 export interface Filter {

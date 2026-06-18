@@ -417,3 +417,15 @@ pub struct ExportResolution {
     pub width: u32,
     pub height: u32,
 }
+
+/// Generate auto-captions for a source media file via on-device whisper.cpp.
+/// Downloads the whisper binary + model on first use. Returns word-level timing.
+#[tauri::command]
+pub async fn generate_captions(
+    app: AppHandle,
+    source_path: String,
+    model: String,
+) -> Result<crate::services::captions::CaptionResult> {
+    info!("Generating captions for {} (model {})", source_path, model);
+    crate::services::captions::generate_captions(&app, &source_path, &model).await
+}

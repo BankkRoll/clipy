@@ -221,13 +221,37 @@ export function isNewerVersion(candidate: string, current: string): boolean {
  * Build a webview-safe URL for a local media file via our custom
  * `clipy-media` URI scheme (registered in src-tauri/src/media_protocol.rs).
  *
- * We delegate to Tauri's `convertFileSrc(path, "clipy-media")` rather than
- * hand-building the URL: Tauri's internal builder produces the correct,
- * WebView2-safe form (e.g. `http://clipy-media.localhost/...` on Windows) and
- * registers it so it passes the webview's URL safety check. The default
- * `asset` protocol rejects many real download filenames on Windows
- * ("Media load rejected by URL safety check"), which is why we use our own.
+ * We delegate to Tauri's `convertFileSrc(path, "clipy-media")` for ONE reason:
+ * it emits the correct per-platform host form that the webview can actually
+ * navigate to — `http://clipy-media.localhost/<path>` on Windows (WebView2) and
+ * `clipy-media://localhost/<path>` on macOS/Linux. Feeding a raw
+ * `clipy-media://` URL straight into <video src> on Windows fails WebView2's
+ * URL safety check, which is the bug we were hitting.
+ *
+ * THE ACTUAL BUG. Tauri's `convertFileSrc` builds the media URL with
+ * `encodeURIComponent(filePath)`. That leaves several characters UNescaped that
+ * Chromium's media URL safety check (`html_media_element.cc`) then REJECTS,
+ * producing "MEDIA_ELEMENT_ERROR: Media load rejected by URL safety check":
+ *   - `\` backslashes from Windows paths  -> we normalize them to `/` first
+ *   - `(` `)` `'` `!` `*`                  -> `encodeURIComponent` does NOT
+ *     escape these, but they trip the safety check, so we escape them ourselves
+ *
+ * Real-world example that was failing:
+ *   C:\Users\...\Justin Gaethje vs Ilia Topuria (Suga's Reaction).mp4
+ * `convertFileSrc` produced `...localhost/C%3A%2F...(Suga%E2%80%99s%20Reaction).mp4`
+ * — note the literal `(` `)`. Those parens are why it was still rejected even
+ * after the backslash fix.
+ *
+ * The Rust handler decodes with a standard percent decoder, so escaping more is
+ * always safe — the path round-trips back to the original either way.
  */
 export function mediaSrc(path: string): string {
-  return convertFileSrc(path, "clipy-media");
+  // 1) backslashes -> forward slashes (so they encode to %2F, not %5C)
+  const normalized = path.replace(/\\/g, "/");
+  // 2) let Tauri build the correct per-platform host form, then
+  // 3) escape the residual characters encodeURIComponent leaves behind.
+  return convertFileSrc(normalized, "clipy-media").replace(
+    /[()'!*]/g,
+    (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase()
+  );
 }
