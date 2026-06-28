@@ -1,3 +1,11 @@
+> [!IMPORTANT]
+> 🚧 **This repository is currently undergoing a rewrite in Tauri.**
+>
+> Active development has moved to the **`tauri-rewrite`** branch:
+> https://github.com/alrapine/clipy/tree/tauri-rewrite
+>
+> The `main` branch is no longer receiving major feature updates until the rewrite is complete.
+
 <div align="center">
   <h1>Clipy</h1>
   <p><strong>Professional YouTube video downloader & editor. 100% free, open-source, and privacy-focused.</strong></p>
