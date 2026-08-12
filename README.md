@@ -2,7 +2,7 @@
 > 🚧 **This repository is currently undergoing a rewrite in Tauri.**
 >
 > Active development has moved to the **`tauri-rewrite`** branch:
-> https://github.com/alrapine/clipy/tree/tauri-rewrite
+> https://github.com/BankkRoll/clipy/tree/tauri-rewrite
 >
 > The `main` branch is no longer receiving major feature updates until the rewrite is complete.
 
