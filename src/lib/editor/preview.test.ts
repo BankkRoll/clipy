@@ -1,6 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { buildTransformCss, fadeFactor, mediaElementVolume, previewOpacity } from "./preview";
+import {
+  buildTransformCss,
+  captionWordStyle,
+  describeMediaError,
+  fadeFactor,
+  mediaElementVolume,
+  outlineShadow,
+  previewOpacity,
+} from "./preview";
 import { makeClip } from "@/test/editor-fixtures";
+import type { TextProperties } from "@/types/editor";
 
 const canvas = { width: 1920, height: 1080 };
 
@@ -41,6 +50,66 @@ describe("fades", () => {
     expect(previewOpacity(clip, 11)).toBe(0.25);
     expect(previewOpacity(clip, 15)).toBe(0.5);
     expect(previewOpacity(makeClip({ properties: { opacity: 3 } }), 1)).toBe(1);
+  });
+});
+
+describe("describeMediaError", () => {
+  it.each([
+    [4, "Media format not supported or file not found"],
+    [2, "Network error loading media"],
+    [3, "Media decoding failed"],
+    [1, "Failed to load media"],
+    [undefined, "Failed to load media"],
+  ])("code %s", (code, message) => {
+    expect(describeMediaError(code)).toBe(message);
+  });
+});
+
+describe("caption styling", () => {
+  const text: TextProperties = {
+    content: "hi",
+    fontFamily: "Arial",
+    fontSize: 48,
+    fontWeight: 400,
+    color: "#fff",
+    backgroundColor: "transparent",
+    align: "center",
+    verticalAlign: "bottom",
+    highlightColor: "#ff0",
+  };
+
+  it("outlineShadow draws an outline only for a visible color", () => {
+    expect(outlineShadow(undefined)).toBe("0 2px 4px rgba(0,0,0,0.5)");
+    expect(outlineShadow("transparent")).toBe("0 2px 4px rgba(0,0,0,0.5)");
+    const outlined = outlineShadow("#000");
+    expect(outlined.match(/#000/g)).toHaveLength(8);
+  });
+
+  it("inactive words are unstyled", () => {
+    expect(captionWordStyle(text, false)).not.toHaveProperty("color");
+    expect(captionWordStyle({ ...text, highlightStyle: "none" }, true)).not.toHaveProperty("color");
+    const { highlightColor: _h, ...noColor } = text;
+    expect(captionWordStyle(noColor, true)).not.toHaveProperty("color");
+  });
+
+  it("defaults to a color highlight", () => {
+    expect(captionWordStyle(text, true)).toMatchObject({ color: "#ff0" });
+    expect(captionWordStyle({ ...text, highlightStyle: "color" }, true)).toMatchObject({
+      color: "#ff0",
+    });
+  });
+
+  it("box puts the background behind the active word only", () => {
+    const style = captionWordStyle({ ...text, highlightStyle: "box" }, true);
+    expect(style).toMatchObject({ backgroundColor: "#ff0" });
+    expect(style).not.toHaveProperty("color");
+  });
+
+  it("scale enlarges the active word", () => {
+    expect(captionWordStyle({ ...text, highlightStyle: "scale" }, true)).toMatchObject({
+      color: "#ff0",
+      transform: "scale(1.15)",
+    });
   });
 });
 

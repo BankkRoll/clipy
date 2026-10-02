@@ -1,17 +1,32 @@
 import { useMemo } from "react";
-import type { Clip, Track } from "@/types/editor";
+import type { Clip, ProjectSettings, Track } from "@/types/editor";
+import {
+  buildTransformCss,
+  captionWordStyle,
+  outlineShadow,
+  previewOpacity,
+} from "@/lib/editor/preview";
 
-interface PreviewOverlayProps {
+/** Props for {@link PreviewOverlay}. */
+export interface PreviewOverlayProps {
   tracks: Track[];
   currentTime: number;
+  /** Project canvas size; transform offsets are relative to it. */
+  canvas?: Pick<ProjectSettings, "width" | "height">;
 }
 
+const DEFAULT_CANVAS = { width: 1920, height: 1080 };
 /**
- * Renders text overlays (and, later, captions) on top of the preview video.
- * Absolutely fills the preview box; each active text clip is positioned by its
- * transform + alignment. Pointer-events are off so it never blocks the video.
+ * Renders text overlays and karaoke captions on top of the preview media.
+ * Absolutely fills the preview box; each active text clip is positioned by
+ * alignment plus its transform, and faded by opacity and fade in/out.
+ * Pointer events are off so it never blocks the video.
  */
-export function PreviewOverlay({ tracks, currentTime }: PreviewOverlayProps) {
+export function PreviewOverlay({
+  tracks,
+  currentTime,
+  canvas = DEFAULT_CANVAS,
+}: PreviewOverlayProps) {
   const activeTextClips = useMemo(() => {
     const out: Clip[] = [];
     for (const track of tracks) {
@@ -33,10 +48,12 @@ export function PreviewOverlay({ tracks, currentTime }: PreviewOverlayProps) {
   if (activeTextClips.length === 0) return null;
 
   return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+    <div
+      className="pointer-events-none absolute inset-0 overflow-hidden"
+      data-testid="preview-overlay"
+    >
       {activeTextClips.map((clip) => {
         const t = clip.properties.text!;
-        const tf = clip.properties.transform;
         const justify =
           t.verticalAlign === "top"
             ? "flex-start"
@@ -45,6 +62,8 @@ export function PreviewOverlay({ tracks, currentTime }: PreviewOverlayProps) {
               : "center";
         const align =
           t.align === "left" ? "flex-start" : t.align === "right" ? "flex-end" : "center";
+        const hasBackground = t.backgroundColor !== "transparent";
+        const clipTime = currentTime - clip.startTime;
         return (
           <div
             key={clip.id}
@@ -52,45 +71,40 @@ export function PreviewOverlay({ tracks, currentTime }: PreviewOverlayProps) {
             style={{
               justifyContent: align,
               alignItems: justify,
-              opacity: clip.properties.opacity,
+              opacity: previewOpacity(clip, currentTime),
             }}
           >
             <span
+              data-testid={`overlay-text-${clip.id}`}
               style={{
-                transform: `translate(${tf.x}px, ${tf.y}px) scale(${tf.scaleX}, ${tf.scaleY}) rotate(${tf.rotation}deg)`,
+                transform: buildTransformCss(clip.properties.transform, canvas),
                 // fontSize is authored against a 1080p canvas; scale to the
                 // preview height via cqh so it looks right at any size.
                 fontSize: `${(t.fontSize / 1080) * 100}cqh`,
                 fontFamily: t.fontFamily,
                 fontWeight: t.fontWeight,
                 color: t.color,
-                backgroundColor:
-                  t.backgroundColor === "transparent" ? undefined : t.backgroundColor,
+                backgroundColor: hasBackground ? t.backgroundColor : undefined,
                 textAlign: t.align,
-                padding: t.backgroundColor === "transparent" ? undefined : "0.1em 0.3em",
+                padding: hasBackground ? "0.1em 0.3em" : undefined,
                 lineHeight: 1.2,
                 whiteSpace: "pre-wrap",
-                textShadow: "0 2px 4px rgba(0,0,0,0.5)",
+                textShadow: outlineShadow(t.outlineColor),
                 maxWidth: "92%",
               }}
             >
               {t.captionWords && t.captionWords.length > 0
-                ? t.captionWords.map((w, i) => {
-                    const clipTime = currentTime - clip.startTime;
-                    const active = clipTime >= w.start && clipTime < w.end;
-                    return (
+                ? t.captionWords.map((w, i) => (
+                    <span key={i}>
                       <span
-                        key={i}
-                        style={{
-                          color: active && t.highlightColor ? t.highlightColor : undefined,
-                          transition: "color 80ms linear",
-                        }}
+                        data-active={clipTime >= w.start && clipTime < w.end ? "true" : undefined}
+                        style={captionWordStyle(t, clipTime >= w.start && clipTime < w.end)}
                       >
                         {w.text}
-                        {i < t.captionWords!.length - 1 ? " " : ""}
                       </span>
-                    );
-                  })
+                      {i < t.captionWords!.length - 1 ? " " : ""}
+                    </span>
+                  ))
                 : t.content}
             </span>
           </div>

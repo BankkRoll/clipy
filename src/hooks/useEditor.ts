@@ -2,9 +2,9 @@
  * Editor-related Tauri hooks
  */
 
-import { invoke } from '@tauri-apps/api/core';
-import { useCallback, useState } from 'react';
-import { useTauriEvent } from './useTauri';
+import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useState } from "react";
+import { useTauriEvent } from "./useTauri";
 
 // ============================================================================
 // Types
@@ -40,7 +40,7 @@ export interface ProjectSettings {
 
 export interface Track {
   id: string;
-  trackType: 'video' | 'audio' | 'text' | 'effect';
+  trackType: "video" | "audio" | "text" | "effect";
   name: string;
   clips: Clip[];
   muted: boolean;
@@ -52,7 +52,7 @@ export interface Track {
 export interface Clip {
   id: string;
   trackId: string;
-  clipType: 'video' | 'audio' | 'text' | 'image';
+  clipType: "video" | "audio" | "text" | "image";
   name: string;
   startTime: number;
   endTime: number;
@@ -89,8 +89,13 @@ export interface TextProperties {
   fontWeight: number;
   color: string;
   backgroundColor: string;
-  align: 'left' | 'center' | 'right';
-  verticalAlign: 'top' | 'middle' | 'bottom';
+  align: "left" | "center" | "right";
+  verticalAlign: "top" | "middle" | "bottom";
+  /** Caption-only fields; the backend currently ignores them on save. */
+  captionWords?: { text: string; start: number; end: number }[];
+  highlightColor?: string;
+  highlightStyle?: "color" | "box" | "scale" | "none";
+  outlineColor?: string;
 }
 
 export interface Filter {
@@ -123,7 +128,7 @@ export interface ExportProgress {
   totalFrames: number;
   elapsedTime: number;
   estimatedTime: number;
-  status: 'preparing' | 'exporting' | 'finalizing' | 'completed' | 'failed' | 'cancelled';
+  status: "preparing" | "exporting" | "finalizing" | "completed" | "failed" | "cancelled";
   error: string | null;
 }
 
@@ -154,11 +159,11 @@ export function useVideoMetadata() {
     setLoading(true);
     setError(null);
     try {
-      const result = await invoke<VideoMetadata>('get_video_metadata', { path });
+      const result = await invoke<VideoMetadata>("get_video_metadata", { path });
       setMetadata(result);
       return result;
     } catch (e) {
-      const errorMsg = e?.toString() || 'Failed to get video metadata';
+      const errorMsg = e?.toString() || "Failed to get video metadata";
       setError(errorMsg);
       throw new Error(errorMsg);
     } finally {
@@ -176,14 +181,14 @@ export function useVideoMetadata() {
 export function useThumbnails() {
   const generateThumbnail = useCallback(
     async (videoPath: string, outputPath: string, timeOffset: number) => {
-      await invoke('generate_thumbnail', { videoPath, outputPath, timeOffset });
+      await invoke("generate_thumbnail", { videoPath, outputPath, timeOffset });
     },
     []
   );
 
   const generateTimelineThumbnails = useCallback(
     async (videoPath: string, outputDir: string, count: number, width: number) => {
-      const thumbnails = await invoke<string[]>('generate_timeline_thumbnails', {
+      const thumbnails = await invoke<string[]>("generate_timeline_thumbnails", {
         videoPath,
         outputDir,
         count,
@@ -210,11 +215,11 @@ export function useWaveform() {
     setLoading(true);
     setError(null);
     try {
-      const result = await invoke<number[]>('extract_waveform', { videoPath, samples });
+      const result = await invoke<number[]>("extract_waveform", { videoPath, samples });
       setWaveform(result);
       return result;
     } catch (e) {
-      const errorMsg = e?.toString() || 'Failed to extract waveform';
+      const errorMsg = e?.toString() || "Failed to extract waveform";
       setError(errorMsg);
       return [];
     } finally {
@@ -236,7 +241,7 @@ export function useProject() {
 
   const createProject = useCallback(
     async (name: string, width: number, height: number, fps: number) => {
-      const newProject = await invoke<Project>('create_project', {
+      const newProject = await invoke<Project>("create_project", {
         name,
         width,
         height,
@@ -252,11 +257,11 @@ export function useProject() {
     setLoading(true);
     setError(null);
     try {
-      const loadedProject = await invoke<Project>('load_project', { path });
+      const loadedProject = await invoke<Project>("load_project", { path });
       setProject(loadedProject);
       return loadedProject;
     } catch (e) {
-      const errorMsg = e?.toString() || 'Failed to load project';
+      const errorMsg = e?.toString() || "Failed to load project";
       setError(errorMsg);
       throw new Error(errorMsg);
     } finally {
@@ -266,8 +271,8 @@ export function useProject() {
 
   const saveProject = useCallback(
     async (path: string) => {
-      if (!project) throw new Error('No project to save');
-      await invoke('save_project', { project, path });
+      if (!project) throw new Error("No project to save");
+      await invoke("save_project", { project, path });
     },
     [project]
   );
@@ -293,9 +298,9 @@ export function useExport() {
   const [error, setError] = useState<string | null>(null);
 
   // Listen for export progress
-  useTauriEvent<ExportProgress>('export-progress', (p) => {
+  useTauriEvent<ExportProgress>("export-progress", (p) => {
     setProgress(p);
-    if (p.status === 'completed' || p.status === 'failed' || p.status === 'cancelled') {
+    if (p.status === "completed" || p.status === "failed" || p.status === "cancelled") {
       setExporting(false);
     }
     if (p.error) {
@@ -308,10 +313,10 @@ export function useExport() {
     setProgress(null);
     setError(null);
     try {
-      const outputPath = await invoke<string>('export_project', { project, settings });
+      const outputPath = await invoke<string>("export_project", { project, settings });
       return outputPath;
     } catch (e) {
-      const errorMsg = e?.toString() || 'Export failed';
+      const errorMsg = e?.toString() || "Export failed";
       setError(errorMsg);
       setExporting(false);
       throw new Error(errorMsg);
@@ -319,12 +324,12 @@ export function useExport() {
   }, []);
 
   const cancelExport = useCallback(async () => {
-    await invoke('cancel_export');
+    await invoke("cancel_export");
     setExporting(false);
   }, []);
 
   const getExportStatus = useCallback(async () => {
-    return invoke<string | null>('get_export_status');
+    return invoke<string | null>("get_export_status");
   }, []);
 
   return {
@@ -347,8 +352,8 @@ export function useExportOptions() {
 
   const loadOptions = useCallback(async () => {
     const [f, r] = await Promise.all([
-      invoke<ExportFormat[]>('get_export_formats'),
-      invoke<ExportResolution[]>('get_export_resolutions'),
+      invoke<ExportFormat[]>("get_export_formats"),
+      invoke<ExportResolution[]>("get_export_resolutions"),
     ]);
     setFormats(f);
     setResolutions(r);
