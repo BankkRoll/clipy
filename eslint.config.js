@@ -6,7 +6,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   // Build output, native target, and dist are never linted.
-  { ignores: ["dist", "src-tauri/target", "node_modules"] },
+  { ignores: ["dist", "coverage", ".claude", "src-tauri/target", "node_modules"] },
 
   // Type-aware linting for application source only. Test files and root config
   // files are linted with a lighter, non-type-aware pass below (they are not part
