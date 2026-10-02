@@ -175,13 +175,18 @@ fn default_encoding_preset() -> String {
     "medium".to_string()
 }
 
-/// Default download directory as a string (OS Videos/Clipy or Downloads/Clipy),
-/// created if missing. Never empty — an empty path breaks yt-dlp's output
-/// template (resolves to drive root -> "permission denied").
+/// Default download directory as a string (OS Videos/Clipy or Downloads/Clipy).
+/// Never empty — an empty path breaks yt-dlp's output template (resolves to
+/// drive root -> "permission denied").
+///
+/// NOTE: deliberately side-effect free. The directory is created by
+/// `paths::ensure_app_dirs` at startup and again lazily when a download
+/// starts, so merely constructing default settings (tests, parsing, resets)
+/// never touches the filesystem.
 fn default_download_path() -> String {
-    let dir = crate::utils::paths::get_default_downloads_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    dir.to_string_lossy().to_string()
+    crate::utils::paths::get_default_downloads_dir()
+        .to_string_lossy()
+        .to_string()
 }
 
 impl Default for DownloadSettings {
@@ -339,4 +344,61 @@ pub struct BinaryStatus {
     pub ytdlp_installed: bool,
     pub ytdlp_version: Option<String>,
     pub ytdlp_path: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_download_path_is_never_empty() {
+        let s = DownloadSettings::default();
+        assert!(!s.download_path.is_empty());
+        assert!(s.download_path.ends_with("Clipy"));
+    }
+
+    #[test]
+    fn older_config_without_new_fields_still_parses() {
+        let mut json = serde_json::to_value(AppSettings::default()).unwrap();
+        let download = json["download"].as_object_mut().unwrap();
+        for key in [
+            "filenameTemplate",
+            "audioFormat",
+            "audioBitrate",
+            "audioCodec",
+            "videoCodec",
+            "crfQuality",
+            "encodingPreset",
+            "subtitleFormat",
+            "subtitleLanguage",
+            "sponsorBlockCategories",
+            "concurrentFragments",
+        ] {
+            download.remove(key);
+        }
+        json["advanced"]
+            .as_object_mut()
+            .unwrap()
+            .remove("hardwareAccelerationType");
+
+        let s: AppSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(s.download.filename_template, "%(title)s.%(ext)s");
+        assert_eq!(s.download.audio_format, "m4a");
+        assert_eq!(s.download.audio_bitrate, "192");
+        assert_eq!(s.download.video_codec, "auto");
+        assert_eq!(s.download.crf_quality, 23);
+        assert_eq!(s.download.encoding_preset, "medium");
+        assert_eq!(s.download.subtitle_format, "srt");
+        assert_eq!(s.download.subtitle_language, "en");
+        assert_eq!(s.download.sponsor_block_categories, ["sponsor"]);
+        assert_eq!(s.download.concurrent_fragments, 1);
+        assert_eq!(s.advanced.hardware_acceleration_type, "auto");
+    }
+
+    #[test]
+    fn binary_status_defaults_to_not_installed() {
+        let b = BinaryStatus::default();
+        assert!(!b.ffmpeg_installed && !b.ytdlp_installed);
+        assert!(serde_json::to_value(&b).unwrap()["ffmpegPath"].is_null());
+    }
 }

@@ -1,16 +1,21 @@
 //! Download-related commands
+//!
+//! Thin IPC wrappers over the global [`queue`](crate::services::queue) plus
+//! pure URL helpers. URLs are only ever logged through
+//! [`redact_url`] because query strings can carry tokens.
 
-use crate::error::{ClipyError, Result};
+use crate::error::Result;
 use crate::models::download::{DownloadOptions, DownloadStatus, DownloadTask};
 use crate::models::video::VideoInfo;
 use crate::services::{queue, ytdlp};
+use crate::utils::logger::redact_url;
 use tauri::AppHandle;
 use tracing::{debug, info};
 
 /// Fetch video information from URL
 #[tauri::command]
 pub async fn fetch_video_info(app: AppHandle, url: String) -> Result<VideoInfo> {
-    info!("Fetching video info for: {}", url);
+    info!("Fetching video info for: {}", redact_url(&url));
     ytdlp::fetch_video_info(&app, &url).await
 }
 
@@ -20,31 +25,19 @@ pub fn get_available_qualities(video_info: VideoInfo) -> Vec<String> {
     ytdlp::get_available_qualities(&video_info)
 }
 
-/// Start a download
-#[tauri::command]
-pub async fn start_download(
-    _app: AppHandle,
+/// Build a fresh pending [`DownloadTask`] for `url` under `id`.
+pub fn build_task(
+    id: String,
     url: String,
-    video_info: VideoInfo,
+    video_info: &VideoInfo,
     options: DownloadOptions,
-) -> Result<String> {
-    info!("Starting download: {}", video_info.title);
-    debug!("Download URL: {}", url);
-    debug!(
-        "Download options: quality={}, format={}, output={}",
-        options.quality, options.format, options.output_path
-    );
-
-    let download_id = uuid::Uuid::new_v4().to_string();
-    debug!("Generated download ID: {}", download_id);
-    let now = chrono::Utc::now().to_rfc3339();
-
-    let task = DownloadTask {
-        id: download_id.clone(),
+) -> DownloadTask {
+    DownloadTask {
+        id,
         video_id: video_info.id.clone(),
         title: video_info.title.clone(),
         thumbnail: video_info.thumbnail.clone(),
-        url: url.clone(),
+        url,
         status: DownloadStatus::Pending,
         progress: 0.0,
         downloaded_bytes: 0,
@@ -55,156 +48,277 @@ pub async fn start_download(
         format: options.format.clone(),
         output_path: options.output_path.clone(),
         error: None,
-        created_at: now,
+        created_at: chrono::Utc::now().to_rfc3339(),
         completed_at: None,
         duration: video_info.duration,
         channel: video_info.channel.clone(),
-        options: options.clone(),
-    };
+        options,
+    }
+}
 
-    let download_queue = queue::get_queue()?;
-    download_queue.add_download(task).await?;
+/// Queue a download and return its id.
+#[tauri::command]
+pub async fn start_download(
+    url: String,
+    video_info: VideoInfo,
+    options: DownloadOptions,
+) -> Result<String> {
+    info!("Starting download: {}", video_info.title);
+    debug!(
+        "Download {} options: quality={}, format={}",
+        redact_url(&url),
+        options.quality,
+        options.format
+    );
 
+    let download_id = uuid::Uuid::new_v4().to_string();
+    let task = build_task(download_id.clone(), url, &video_info, options);
+    queue::get_queue()?.add_download(task).await?;
     Ok(download_id)
 }
 
 /// Pause a download
 #[tauri::command]
 pub async fn pause_download(id: String) -> Result<()> {
-    info!("Pausing download: {}", id);
-    let download_queue = queue::get_queue()?;
-    download_queue.pause_download(&id).await
+    queue::get_queue()?.pause_download(&id).await
 }
 
 /// Resume a download
 #[tauri::command]
 pub async fn resume_download(id: String) -> Result<()> {
-    info!("Resuming download: {}", id);
-    let download_queue = queue::get_queue()?;
-    download_queue.resume_download(&id).await
+    queue::get_queue()?.resume_download(&id).await
 }
 
 /// Cancel a download
 #[tauri::command]
 pub async fn cancel_download(id: String) -> Result<()> {
-    info!("Cancelling download: {}", id);
-    let download_queue = queue::get_queue()?;
-    download_queue.cancel_download(&id).await
+    queue::get_queue()?.cancel_download(&id).await
 }
 
 /// Get all downloads
 #[tauri::command]
 pub async fn get_downloads() -> Result<Vec<DownloadTask>> {
-    let download_queue = queue::get_queue()?;
-    Ok(download_queue.get_all_downloads().await)
+    Ok(queue::get_queue()?.get_all_downloads().await)
 }
 
 /// Get active downloads
 #[tauri::command]
 pub async fn get_active_downloads() -> Result<Vec<DownloadTask>> {
-    let download_queue = queue::get_queue()?;
-    Ok(download_queue.get_active_downloads().await)
+    Ok(queue::get_queue()?.get_active_downloads().await)
 }
 
 /// Clear completed downloads
 #[tauri::command]
 pub async fn clear_completed_downloads() -> Result<()> {
-    let download_queue = queue::get_queue()?;
-    download_queue.clear_completed().await;
+    queue::get_queue()?.clear_completed().await;
     Ok(())
 }
 
-/// Retry a failed download
+/// Retry a failed or cancelled download under the same id.
 #[tauri::command]
 pub async fn retry_download(id: String) -> Result<()> {
-    info!("Retrying download: {}", id);
-
-    let download_queue = queue::get_queue()?;
-    let downloads = download_queue.get_all_downloads().await;
-
-    let task = downloads
-        .iter()
-        .find(|t| t.id == id)
-        .ok_or_else(|| ClipyError::Download("Download not found".into()))?;
-
-    if task.status != DownloadStatus::Failed && task.status != DownloadStatus::Cancelled {
-        return Err(ClipyError::Download(
-            "Download is not in a retryable state".into(),
-        ));
-    }
-
-    // Re-queue under the SAME id. The frontend keeps the original id when it
-    // flips the row to "pending", so reusing the id keeps both sides in sync —
-    // generating a new uuid here would orphan the UI row (progress events would
-    // arrive under an id the frontend never registered).
-    let mut new_task = task.clone();
-    new_task.status = DownloadStatus::Pending;
-    new_task.progress = 0.0;
-    new_task.downloaded_bytes = 0;
-    new_task.total_bytes = 0;
-    new_task.speed = 0;
-    new_task.eta = 0;
-    new_task.error = None;
-    new_task.created_at = chrono::Utc::now().to_rfc3339();
-    new_task.completed_at = None;
-
-    // Remove the old (failed) task first, then re-add under the same id.
-    download_queue.cancel_download(&id).await?;
-    download_queue.add_download(new_task).await?;
-
-    Ok(())
+    queue::get_queue()?.retry_download(&id).await
 }
 
-/// Set maximum concurrent downloads
+/// Set maximum concurrent downloads (clamped to the supported range).
 #[tauri::command]
 pub async fn set_max_concurrent_downloads(max: u32) -> Result<()> {
-    let download_queue = queue::get_queue()?;
-    download_queue.set_max_concurrent(max).await;
+    let applied = queue::get_queue()?.set_max_concurrent(max).await;
+    debug!(
+        "Max concurrent downloads set to {} (requested {})",
+        applied, max
+    );
     Ok(())
 }
 
-/// Validate a URL (check if it's a valid URL)
-/// Note: yt-dlp supports 1000+ sites, so we just validate URL format
+/// Whether `url` is an absolute http(s) URL with a host.
+///
+/// yt-dlp supports 1000+ sites, so only the shape is checked here.
 #[tauri::command]
 pub fn validate_url(url: String) -> bool {
-    // Basic URL validation - yt-dlp supports 1000+ sites
-    // We just check if it's a valid URL with http/https
-    if let Ok(parsed) = url::Url::parse(&url) {
-        let scheme = parsed.scheme();
-        return scheme == "http" || scheme == "https";
-    }
-    false
+    url::Url::parse(&url).is_ok_and(|parsed| {
+        matches!(parsed.scheme(), "http" | "https")
+            && parsed.host_str().is_some_and(|h| !h.is_empty())
+    })
 }
 
-/// Extract video ID from URL
+/// Whether `host` is `domain` itself or one of its subdomains.
+///
+/// # Example
+/// ```
+/// use clipy_lib::commands::download::host_matches;
+/// assert!(host_matches("m.youtube.com", "youtube.com"));
+/// assert!(!host_matches("notyoutube.com", "youtube.com"));
+/// ```
+pub fn host_matches(host: &str, domain: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    host == domain
+        || host
+            .strip_suffix(domain)
+            .is_some_and(|prefix| prefix.ends_with('.'))
+}
+
+/// Extract the site-specific video id from a YouTube or Vimeo URL.
 #[tauri::command]
 pub fn extract_video_id(url: String) -> Option<String> {
-    if let Ok(parsed) = url::Url::parse(&url) {
-        let host = parsed.host_str()?;
+    let parsed = url::Url::parse(&url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = parsed.host_str()?;
+    let first_segment = || {
+        parsed
+            .path_segments()?
+            .next()
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
 
-        // YouTube
-        if host.contains("youtube.com") || host.contains("youtu.be") {
-            if host.contains("youtu.be") {
-                return parsed.path().strip_prefix('/').map(|s| s.to_string());
-            }
+    if host_matches(host, "youtu.be") {
+        return first_segment();
+    }
+    if host_matches(host, "youtube.com") {
+        return parsed
+            .query_pairs()
+            .find(|(key, _)| key == "v")
+            .map(|(_, value)| value.into_owned())
+            .filter(|v| !v.is_empty());
+    }
+    if host_matches(host, "vimeo.com") {
+        return first_segment().filter(|id| id.chars().all(|c| c.is_ascii_digit()));
+    }
+    None
+}
 
-            for (key, value) in parsed.query_pairs() {
-                if key == "v" {
-                    return Some(value.to_string());
-                }
-            }
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::queue::testing::{eventually, harness};
 
-        // Vimeo
-        if host.contains("vimeo.com") {
-            let path = parsed.path();
-            if let Some(id) = path.strip_prefix('/') {
-                if id.chars().all(|c| c.is_ascii_digit()) {
-                    return Some(id.to_string());
-                }
-            }
-        }
+    #[test]
+    fn validate_url_requires_http_scheme_and_host() {
+        assert!(validate_url("https://youtube.com/watch?v=abc".into()));
+        assert!(validate_url("http://example.com".into()));
+        assert!(!validate_url("ftp://example.com".into()));
+        assert!(!validate_url("file:///etc/passwd".into()));
+        assert!(!validate_url("javascript:alert(1)".into()));
+        assert!(!validate_url("not a url".into()));
+        assert!(!validate_url("".into()));
     }
 
-    None
+    #[test]
+    fn host_matching_is_exact_or_subdomain() {
+        assert!(host_matches("youtube.com", "youtube.com"));
+        assert!(host_matches("www.youtube.com", "youtube.com"));
+        assert!(host_matches("WWW.YouTube.com.", "youtube.com"));
+        assert!(!host_matches("evilyoutube.com", "youtube.com"));
+        assert!(!host_matches("youtube.com.evil.net", "youtube.com"));
+        assert!(!host_matches("com", "youtube.com"));
+    }
+
+    #[test]
+    fn extracts_ids_only_from_genuine_hosts() {
+        let id = |u: &str| extract_video_id(u.into());
+        assert_eq!(
+            id("https://www.youtube.com/watch?v=abc"),
+            Some("abc".into())
+        );
+        assert_eq!(
+            id("https://m.youtube.com/watch?x=1&v=abc"),
+            Some("abc".into())
+        );
+        assert_eq!(id("https://youtu.be/abc?t=5"), Some("abc".into()));
+        assert_eq!(id("https://vimeo.com/123"), Some("123".into()));
+        assert_eq!(id("https://player.vimeo.com/123"), Some("123".into()));
+
+        assert_eq!(id("https://notyoutube.com/watch?v=abc"), None);
+        assert_eq!(id("https://youtube.com.evil.net/watch?v=abc"), None);
+        assert_eq!(id("https://evilyoutu.be/abc"), None);
+        assert_eq!(id("https://fakevimeo.com/123"), None);
+        assert_eq!(id("https://youtube.com/watch?v="), None);
+        assert_eq!(id("https://youtube.com/watch"), None);
+        assert_eq!(id("https://youtu.be/"), None);
+        assert_eq!(id("https://vimeo.com/channels/abc"), None);
+        assert_eq!(id("ftp://youtube.com/watch?v=abc"), None);
+        assert_eq!(id("garbage"), None);
+    }
+
+    #[test]
+    fn build_task_copies_metadata_and_options() {
+        let info = VideoInfo {
+            id: "vid".into(),
+            title: "T".into(),
+            thumbnail: "th".into(),
+            duration: 9,
+            channel: "C".into(),
+            ..Default::default()
+        };
+        let options = DownloadOptions {
+            quality: "720".into(),
+            format: "webm".into(),
+            output_path: "/dl".into(),
+            ..Default::default()
+        };
+        let t = build_task("id1".into(), "https://u".into(), &info, options);
+        assert_eq!(t.id, "id1");
+        assert_eq!(t.video_id, "vid");
+        assert_eq!((t.quality.as_str(), t.format.as_str()), ("720", "webm"));
+        assert_eq!(t.output_path, "/dl");
+        assert_eq!(t.status, DownloadStatus::Pending);
+        assert_eq!((t.duration, t.channel.as_str()), (9, "C"));
+        assert!(chrono::DateTime::parse_from_rfc3339(&t.created_at).is_ok());
+    }
+
+    #[tokio::test]
+    async fn commands_drive_the_global_queue() {
+        let _g = crate::test_support::lock_globals_async().await;
+        let h = harness(1);
+        crate::services::queue::install_queue(h.queue.clone());
+
+        let info = VideoInfo {
+            id: "v".into(),
+            title: "Video".into(),
+            ..Default::default()
+        };
+        let id = start_download(
+            "https://youtu.be/v?si=secret".into(),
+            info.clone(),
+            DownloadOptions::default(),
+        )
+        .await
+        .unwrap();
+        h.wait_running(&id).await;
+        let second = start_download(
+            "https://youtu.be/w".into(),
+            info,
+            DownloadOptions::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(get_downloads().await.unwrap().len(), 2);
+        assert_eq!(get_active_downloads().await.unwrap().len(), 1);
+
+        pause_download(id.clone()).await.unwrap();
+        h.wait_running(&second).await;
+        resume_download(id.clone()).await.unwrap();
+        cancel_download(second.clone()).await.unwrap();
+        h.wait_running(&id).await;
+        h.dl.fail(&id, "nope");
+        h.wait_status(&id, DownloadStatus::Failed).await;
+        retry_download(id.clone()).await.unwrap();
+        h.wait_running(&id).await;
+        h.dl.succeed(&id);
+        h.wait_status(&id, DownloadStatus::Completed).await;
+
+        set_max_concurrent_downloads(0).await.unwrap();
+        assert_eq!(h.queue.max_concurrent().await, 1);
+
+        clear_completed_downloads().await.unwrap();
+        eventually("cleared", || async {
+            get_downloads().await.unwrap().is_empty()
+        })
+        .await;
+        assert!(pause_download("missing".into()).await.is_err());
+    }
 }

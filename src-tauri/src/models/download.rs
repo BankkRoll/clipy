@@ -245,3 +245,63 @@ pub struct DownloadProgress {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_path: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn options_missing_optional_fields_take_serde_defaults() {
+        let json = r#"{
+            "quality": "720",
+            "format": "mp4",
+            "audioOnly": false,
+            "outputPath": "/dl",
+            "filename": "",
+            "embedThumbnail": true,
+            "embedMetadata": false
+        }"#;
+        let o: DownloadOptions = serde_json::from_str(json).unwrap();
+        assert_eq!(o.quality, "720");
+        assert_eq!(o.audio_format, "m4a");
+        assert_eq!(o.audio_bitrate, "192");
+        assert_eq!(
+            (o.video_codec.as_str(), o.audio_codec.as_str()),
+            ("auto", "auto")
+        );
+        assert_eq!(o.subtitle_format, "srt");
+        assert!(o.no_playlist);
+        assert_eq!(o.concurrent_fragments, 1);
+        assert!(o.subtitle_languages.is_empty());
+    }
+
+    #[test]
+    fn status_serializes_lowercase_and_defaults_to_pending() {
+        assert_eq!(DownloadStatus::default(), DownloadStatus::Pending);
+        assert_eq!(
+            serde_json::to_value(DownloadStatus::Downloading).unwrap(),
+            "downloading"
+        );
+        let s: DownloadStatus = serde_json::from_str("\"paused\"").unwrap();
+        assert_eq!(s, DownloadStatus::Paused);
+    }
+
+    #[test]
+    fn progress_omits_absent_file_path() {
+        let mut p = DownloadProgress {
+            download_id: "a".into(),
+            status: DownloadStatus::Completed,
+            progress: 100.0,
+            downloaded_bytes: 1,
+            total_bytes: 1,
+            speed: 0,
+            eta: 0,
+            file_path: None,
+        };
+        let json = serde_json::to_value(&p).unwrap();
+        assert!(json.get("filePath").is_none());
+        assert_eq!(json["downloadId"], "a");
+        p.file_path = Some("/x.mp4".into());
+        assert_eq!(serde_json::to_value(&p).unwrap()["filePath"], "/x.mp4");
+    }
+}
