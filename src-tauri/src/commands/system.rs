@@ -1,10 +1,12 @@
 //! System-related commands
 
-use crate::error::Result;
+use crate::error::{ClipyError, Result};
 use crate::models::settings::BinaryStatus;
 use crate::services::{binary, cache};
-use crate::utils::paths;
+use crate::utils::{path_policy, paths};
 use serde::Serialize;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 use tracing::info;
 
@@ -87,87 +89,115 @@ pub async fn clear_temp(app: AppHandle) -> Result<()> {
     cache::clear_temp(&app).await
 }
 
+/// Target OS for building file-manager command lines. A parameter rather than
+/// `cfg!` so every platform's argv can be unit-tested on any host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Os {
+    Windows,
+    MacOs,
+    Linux,
+}
+
+impl Os {
+    fn current() -> Self {
+        if cfg!(target_os = "windows") {
+            Os::Windows
+        } else if cfg!(target_os = "macos") {
+            Os::MacOs
+        } else {
+            Os::Linux
+        }
+    }
+}
+
+/// A program plus its argv, ready to spawn.
+#[derive(Debug, PartialEq, Eq)]
+struct ShellCommand {
+    program: &'static str,
+    args: Vec<OsString>,
+}
+
+impl ShellCommand {
+    fn spawn(&self, what: &str) -> Result<()> {
+        std::process::Command::new(self.program)
+            .args(&self.args)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| ClipyError::Other(format!("Failed to {what}: {e}")))
+    }
+}
+
+// NOTE: neither `open` nor `xdg-open` accepts `--`, so option injection is
+// prevented upstream instead: every path reaching these builders went through
+// `path_policy`, which only yields absolute paths (never starting with `-`).
+
+/// Command that opens directory `dir` in the platform file manager.
+fn folder_command(os: Os, dir: &Path) -> ShellCommand {
+    let program = match os {
+        Os::Windows => "explorer",
+        Os::MacOs => "open",
+        Os::Linux => "xdg-open",
+    };
+    ShellCommand {
+        program,
+        args: vec![dir.as_os_str().to_owned()],
+    }
+}
+
+/// Command that reveals `target` in the platform file manager. Linux has no
+/// standard "select" verb, so its parent directory is opened instead.
+fn reveal_command(os: Os, target: &Path) -> ShellCommand {
+    match os {
+        Os::Windows => {
+            // Explorer parses `/select,<path>` as one token; passing it as one
+            // argument keeps paths with commas or spaces intact.
+            let mut arg = OsString::from("/select,");
+            arg.push(target.as_os_str());
+            ShellCommand {
+                program: "explorer",
+                args: vec![arg],
+            }
+        }
+        Os::MacOs => ShellCommand {
+            program: "open",
+            args: vec!["-R".into(), target.as_os_str().to_owned()],
+        },
+        Os::Linux => folder_command(os, target.parent().unwrap_or(target)),
+    }
+}
+
+/// Validate a path for `open_file`: must be an existing local audio, video or
+/// image file, so the shell can never be asked to run an executable, script,
+/// shortcut (`.lnk`) or URL.
+fn validate_open_file(path: &str) -> Result<PathBuf> {
+    path_policy::ensure_editor_source(path)
+}
+
+/// Validate a path for `show_in_folder`: any existing local file or directory.
+/// Revealing never executes the target, so no type restriction is needed.
+fn validate_reveal_target(path: &str) -> Result<PathBuf> {
+    path_policy::canonicalize(&path_policy::validate_raw_path(path)?)
+}
+
 /// Open folder in file explorer
 #[tauri::command]
 pub async fn open_folder(path: String) -> Result<()> {
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| {
-                crate::error::ClipyError::Other(format!("Failed to open folder: {}", e))
-            })?;
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| {
-                crate::error::ClipyError::Other(format!("Failed to open folder: {}", e))
-            })?;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| {
-                crate::error::ClipyError::Other(format!("Failed to open folder: {}", e))
-            })?;
-    }
-
-    Ok(())
+    let dir = path_policy::ensure_local_dir(&path)?;
+    folder_command(Os::current(), &dir).spawn("open folder")
 }
 
 /// Open file with default application
 #[tauri::command]
 pub async fn open_file(path: String) -> Result<()> {
-    opener::open(&path)
-        .map_err(|e| crate::error::ClipyError::Other(format!("Failed to open file: {}", e)))?;
-    Ok(())
+    let file = validate_open_file(&path)?;
+    opener::open(&file).map_err(|e| ClipyError::Other(format!("Failed to open file: {}", e)))
 }
 
 /// Show file in file explorer
 #[tauri::command]
 pub async fn show_in_folder(path: String) -> Result<()> {
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .args(["/select,", &path])
-            .spawn()
-            .map_err(|e| {
-                crate::error::ClipyError::Other(format!("Failed to show in folder: {}", e))
-            })?;
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .args(["-R", &path])
-            .spawn()
-            .map_err(|e| {
-                crate::error::ClipyError::Other(format!("Failed to show in folder: {}", e))
-            })?;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        // Linux doesn't have a standard way to select file, just open the folder
-        if let Some(parent) = std::path::Path::new(&path).parent() {
-            std::process::Command::new("xdg-open")
-                .arg(parent)
-                .spawn()
-                .map_err(|e| {
-                    crate::error::ClipyError::Other(format!("Failed to show in folder: {}", e))
-                })?;
-        }
-    }
-
-    Ok(())
+    let target = validate_reveal_target(&path)?;
+    reveal_command(Os::current(), &target).spawn("show in folder")
 }
 
 /// Get default download path
@@ -206,5 +236,109 @@ pub fn is_admin() -> bool {
     {
         // On Unix, check if running as root
         unsafe { libc::geteuid() == 0 }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn s(p: &Path) -> String {
+        p.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn folder_commands_per_os() {
+        let dir = Path::new("/videos/My Clips");
+        for (os, program) in [
+            (Os::Windows, "explorer"),
+            (Os::MacOs, "open"),
+            (Os::Linux, "xdg-open"),
+        ] {
+            let cmd = folder_command(os, dir);
+            assert_eq!(cmd.program, program);
+            assert_eq!(cmd.args, vec![OsString::from("/videos/My Clips")]);
+        }
+    }
+
+    #[test]
+    fn reveal_commands_per_os() {
+        let f = Path::new("/videos/a, b.mp4");
+        assert_eq!(
+            reveal_command(Os::Windows, f).args,
+            vec![OsString::from("/select,/videos/a, b.mp4")]
+        );
+        let mac = reveal_command(Os::MacOs, f);
+        assert_eq!(mac.program, "open");
+        assert_eq!(
+            mac.args,
+            vec![OsString::from("-R"), OsString::from("/videos/a, b.mp4")]
+        );
+        let linux = reveal_command(Os::Linux, f);
+        assert_eq!(linux.program, "xdg-open");
+        assert_eq!(linux.args, vec![OsString::from("/videos")]);
+        assert_eq!(
+            reveal_command(Os::Linux, Path::new("/")).args,
+            vec![OsString::from("/")]
+        );
+    }
+
+    #[test]
+    fn current_os_matches_target() {
+        let os = Os::current();
+        if cfg!(windows) {
+            assert_eq!(os, Os::Windows);
+        } else if cfg!(target_os = "macos") {
+            assert_eq!(os, Os::MacOs);
+        } else {
+            assert_eq!(os, Os::Linux);
+        }
+    }
+
+    #[test]
+    fn open_file_only_accepts_media() {
+        let dir = tempfile::tempdir().unwrap();
+        let video = dir.path().join("v.mp4");
+        fs::write(&video, b"x").unwrap();
+        assert!(validate_open_file(&s(&video)).is_ok());
+        for name in ["setup.exe", "run.bat", "link.lnk", "x.ps1", "x.sh", "x.html"] {
+            let p = dir.path().join(name);
+            fs::write(&p, b"x").unwrap();
+            assert!(validate_open_file(&s(&p)).is_err(), "{name}");
+        }
+        assert!(validate_open_file("https://evil.example/x.mp4").is_err());
+        assert!(validate_open_file("-x.mp4").is_err());
+        assert!(validate_open_file(&s(dir.path())).is_err());
+    }
+
+    #[test]
+    fn reveal_accepts_existing_files_and_dirs_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("notes.txt");
+        fs::write(&f, b"x").unwrap();
+        assert!(validate_reveal_target(&s(&f)).is_ok());
+        assert!(validate_reveal_target(&s(dir.path())).is_ok());
+        assert!(validate_reveal_target(&s(&dir.path().join("missing"))).is_err());
+        assert!(validate_reveal_target("file:///etc").is_err());
+    }
+
+    #[tokio::test]
+    async fn commands_reject_bad_paths_without_spawning() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("evil.exe");
+        fs::write(&exe, b"MZ").unwrap();
+        assert!(open_file(s(&exe)).await.is_err());
+        assert!(open_folder(s(&exe)).await.is_err());
+        assert!(open_folder("--help".into()).await.is_err());
+        assert!(show_in_folder("http://x".into()).await.is_err());
+        assert!(show_in_folder(s(&dir.path().join("missing"))).await.is_err());
+    }
+
+    #[test]
+    fn simple_commands() {
+        assert!(get_default_download_path().ends_with("Clipy"));
+        assert!(media_url("/a b.mp4".into()).starts_with("clipy-media://localhost/"));
+        let _ = is_admin();
     }
 }
