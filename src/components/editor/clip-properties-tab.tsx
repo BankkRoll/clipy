@@ -40,7 +40,12 @@ function PercentSlider({
           aria-label={label}
           value={[value * 100]}
           onValueChange={([v]) => v !== undefined && onChange(v / 100)}
-          onValueCommit={() => commitHistory(commit)}
+          onValueCommit={([v]) => {
+            // Radix fires the keyboard commit before onValueChange; apply first so
+            // the history snapshot contains the new value.
+            if (v !== undefined) onChange(v / 100);
+            commitHistory(commit);
+          }}
           min={min}
           max={max}
           step={step}
@@ -129,7 +134,10 @@ export function ClipPropertiesTab({ clip }: ClipPropertiesTabProps) {
           aria-label="Fade in"
           value={[p.fadeIn]}
           onValueChange={([v]) => v !== undefined && patchClipProperties(clip.id, { fadeIn: v })}
-          onValueCommit={() => commitHistory("Change fade in")}
+          onValueCommit={([v]) => {
+            if (v !== undefined) patchClipProperties(clip.id, { fadeIn: v });
+            commitHistory("Change fade in");
+          }}
           max={5}
           step={0.1}
         />
@@ -140,7 +148,10 @@ export function ClipPropertiesTab({ clip }: ClipPropertiesTabProps) {
           aria-label="Fade out"
           value={[p.fadeOut]}
           onValueChange={([v]) => v !== undefined && patchClipProperties(clip.id, { fadeOut: v })}
-          onValueCommit={() => commitHistory("Change fade out")}
+          onValueCommit={([v]) => {
+            if (v !== undefined) patchClipProperties(clip.id, { fadeOut: v });
+            commitHistory("Change fade out");
+          }}
           max={5}
           step={0.1}
         />

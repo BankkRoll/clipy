@@ -93,7 +93,11 @@ export function TextPropertiesTab({ clip }: TextPropertiesTabProps) {
             aria-label="Font size"
             value={[t.fontSize || 48]}
             onValueChange={([v]) => v !== undefined && patchText(clip.id, { fontSize: v })}
-            onValueCommit={() => commitHistory("Change font size")}
+            onValueCommit={([v]) => {
+              // Keyboard commits arrive before onValueChange; apply first.
+              if (v !== undefined) patchText(clip.id, { fontSize: v });
+              commitHistory("Change font size");
+            }}
             min={12}
             max={200}
           />

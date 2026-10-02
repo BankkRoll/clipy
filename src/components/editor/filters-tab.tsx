@@ -104,7 +104,11 @@ export function FiltersTab({ clip }: FiltersTabProps) {
                     aria-label={preset.name}
                     value={[value]}
                     onValueChange={([v]) => v !== undefined && setFilterValue(filter.id, v)}
-                    onValueCommit={() => commitHistory("Adjust filter")}
+                    onValueCommit={([v]) => {
+                      // Keyboard commits arrive before onValueChange; apply first.
+                      if (v !== undefined) setFilterValue(filter.id, v);
+                      commitHistory("Adjust filter");
+                    }}
                     min={preset.min}
                     max={preset.max}
                     step={0.01}
