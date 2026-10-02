@@ -1,28 +1,32 @@
 name: Release
 
+# Owner-only, tag-driven release:
+#   authorize -> ci (full test matrix) -> draft release -> build + sign updater
+#   artifacts + install/launch smoke test on every OS -> checksums + publish.
+# Nothing becomes public until every platform has built AND passed its smoke
+# test; the release stays a draft otherwise.
 on:
   push:
     tags:
       - "v*.*.*"
-  workflow_dispatch:
-    inputs:
-      confirm:
-        description: "Tag to release (e.g. v2.0.0). Owner-only; gated by authorize."
-        required: true
-        type: string
 
 permissions: {}
 
+# Never cancel a release mid-upload; a second push of the same tag queues.
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
 
 jobs:
-  # Gate: only the owner on the canonical repo, tag pushes only.
   authorize:
     name: Authorize release
-    runs-on: ubuntu-latest
-    permissions: {}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
       version: ${{ steps.resolve.outputs.version }}
@@ -33,144 +37,243 @@ jobs:
           REPO: ${{ github.repository }}
           ACTOR: ${{ github.actor }}
           REF_TYPE: ${{ github.ref_type }}
-          EVENT: ${{ github.event_name }}
         run: |
           if [ "$REPO" != "BankkRoll/clipy" ]; then
-            echo "::error::Not the canonical repository (BankkRoll/clipy)."
-            exit 1
+            echo "::error::Not the canonical repository (BankkRoll/clipy)."; exit 1
           fi
           if [ "$ACTOR" != "BankkRoll" ]; then
-            echo "::error::Actor '$ACTOR' is not the repository owner."
-            exit 1
+            echo "::error::Actor '$ACTOR' is not the repository owner."; exit 1
           fi
-          if [ "$EVENT" = "push" ] && [ "$REF_TYPE" != "tag" ]; then
-            echo "::error::Push trigger must be a tag (v*.*.*)."
-            exit 1
+          if [ "$REF_TYPE" != "tag" ]; then
+            echo "::error::Releases are tag-driven only."; exit 1
           fi
 
-      # Resolve tag, strip leading v for version, mark prerelease if tag has a hyphen.
       - name: Resolve tag and version
         id: resolve
         env:
-          TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.confirm }}
+          TAG: ${{ github.ref_name }}
         run: |
-          if [ -z "$TAG" ]; then
-            echo "::error::No tag resolved."
-            exit 1
-          fi
-          if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-.+)?$'; then
-            echo "::error::Tag '$TAG' must match v*.*.* (optionally with a prerelease suffix)."
-            exit 1
+          if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::Tag '$TAG' must match vMAJOR.MINOR.PATCH[-prerelease]."; exit 1
           fi
           VERSION="${TAG#v}"
-          if echo "$TAG" | grep -q '-'; then
-            PRERELEASE=true
-          else
-            PRERELEASE=false
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          case "$TAG" in *-*) PRERELEASE=true ;; *) PRERELEASE=false ;; esac
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "prerelease=$PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
 
-  release:
-    name: Build & Publish (${{ matrix.os }})
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Installer file names and the updater manifest come from the config
+      # version, so a tag that disagrees would publish mislabelled binaries.
+      - name: Verify version consistency
+        run: node scripts/check-version.mjs "${{ steps.resolve.outputs.version }}"
+
+  ci:
+    name: CI gate
     needs: authorize
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  draft:
+    name: Create draft release
+    needs: [authorize, ci]
+    runs-on: ubuntu-22.04
     environment: release
     permissions:
-      contents: write # create release + upload assets
+      contents: write
+    outputs:
+      release_id: ${{ steps.create.outputs.release_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Create draft release from CHANGELOG
+        id: create
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.authorize.outputs.tag }}
+          VERSION: ${{ needs.authorize.outputs.version }}
+          PRERELEASE: ${{ needs.authorize.outputs.prerelease }}
+        run: |
+          node scripts/release-notes.mjs "$VERSION" > notes.md
+          FLAGS=(--draft --verify-tag --title "Clipy $VERSION" --notes-file notes.md)
+          if [ "$PRERELEASE" = "true" ]; then FLAGS+=(--prerelease); fi
+          gh release create "$TAG" "${FLAGS[@]}"
+          ID="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n1)"
+          test -n "$ID"
+          echo "release_id=$ID" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build, smoke-test & upload (${{ matrix.name }})
+    needs: [authorize, draft]
+    environment: release
+    permissions:
+      contents: write # upload release assets
       id-token: write # OIDC for provenance
       attestations: write # write provenance attestation
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
+          - name: macOS (universal)
+            os: macos-latest
             args: "--target universal-apple-darwin"
-          - os: ubuntu-latest
+            bundle: src-tauri/target/universal-apple-darwin/release/bundle
+          # 22.04 keeps the glibc floor low enough for older distros.
+          - name: Linux (x64)
+            os: ubuntu-22.04
             args: ""
-          - os: windows-latest
+            bundle: src-tauri/target/release/bundle
+          - name: Windows (x64)
+            os: windows-latest
             args: ""
+            bundle: src-tauri/target/release/bundle
     runs-on: ${{ matrix.os }}
 
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
 
-      - name: Checkout
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - name: Checkout tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.authorize.outputs.tag }}
+          persist-credentials: false
 
       - name: Install pnpm
-        uses: pnpm/action-setup@9fd676a19091d4595eefd76e4bd31c97133911f1 # v4.2.0
-        with:
-          version: 9
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20
-          cache: pnpm
+          node-version: 22
+          # No dependency cache for release builds: a poisoned cache from a
+          # branch build must never reach a published binary.
 
       - name: Setup Rust (stable)
-        uses: dtolnay/rust-toolchain@4f366e621dc8fa63f557ca04b8f4361824a35a45 # stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         with:
           toolchain: stable
-          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
-        with:
-          workspaces: src-tauri -> target
-
-      - name: Install Linux system dependencies (Tauri)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Install Linux system dependencies (Tauri + AppImage media)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
+            libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev xdg-utils \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-libav \
+            xvfb rpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build installers & publish release
+      - name: Build installers & upload to draft
         id: tauri
-        uses: tauri-apps/tauri-action@42e9df6c59070d114bf90dcd3943a1b8f138b113 # v0.5.20
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # SECURITY: updater signing key lives only in the protected `release`
+          # environment. Without it the build fails rather than shipping
+          # unsigned updater artifacts.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          releaseId: ${{ needs.draft.outputs.release_id }}
           tagName: ${{ needs.authorize.outputs.tag }}
-          releaseName: "Clipy ${{ needs.authorize.outputs.version }}"
-          releaseDraft: false
-          prerelease: ${{ needs.authorize.outputs.prerelease == 'true' }}
-          generateReleaseNotes: true
+          uploadUpdaterJson: true
+          # NSIS installs per-user, so updates apply without an admin prompt.
+          updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
+
+      - name: Smoke test installers (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/smoke/windows.ps1 -BundleDir "${{ matrix.bundle }}"
+
+      - name: Smoke test installers (Linux)
+        if: runner.os == 'Linux'
+        run: bash scripts/smoke/linux.sh "${{ matrix.bundle }}"
+
+      - name: Smoke test installers (macOS)
+        if: runner.os == 'macOS'
+        run: bash scripts/smoke/macos.sh "${{ matrix.bundle }}"
 
       # tauri-action exports artifactPaths as a JSON array; flatten to newlines.
       - name: Collect artifact paths
         id: artifacts
-        if: steps.tauri.outputs.artifactPaths != ''
         shell: bash
         env:
           ARTIFACT_PATHS_JSON: ${{ steps.tauri.outputs.artifactPaths }}
         run: |
           {
             echo "paths<<EOF"
-            echo "$ARTIFACT_PATHS_JSON" | node -e "process.stdin.on('data', d => JSON.parse(d).forEach(p => console.log(p)))"
+            node -e "JSON.parse(process.env.ARTIFACT_PATHS_JSON).forEach(p => console.log(p))"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
       - name: Attest build provenance
-        if: steps.artifacts.outputs.paths != ''
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: ${{ steps.artifacts.outputs.paths }}
+
+  publish:
+    name: Checksums & publish
+    needs: [authorize, draft, build]
+    runs-on: ubuntu-22.04
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.authorize.outputs.tag }}
+        run: |
+          mkdir assets
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir assets
+
+      # Every platform must have shipped its installers and updater bundle, or
+      # the release stays a draft.
+      - name: Verify expected assets
+        working-directory: assets
+        run: |
+          set -e
+          ls -la
+          for pattern in '*_x64-setup.exe' '*_x64_en-US.msi' '*_universal.dmg' '*_universal.app.tar.gz' \
+                         '*_amd64.deb' '*_amd64.AppImage' '*.x86_64.rpm' 'latest.json' '*.sig'; do
+            compgen -G "$pattern" > /dev/null || { echo "::error::Missing asset matching $pattern"; exit 1; }
+          done
+          node -e "const j=require('./latest.json'); for (const p of ['windows-x86_64','linux-x86_64','darwin-aarch64','darwin-x86_64']) { if (!j.platforms[p]?.signature) { console.error('latest.json missing ' + p); process.exit(1) } }"
+
+      - name: Generate SHA256SUMS
+        working-directory: assets
+        run: sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Attest checksums
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: assets/SHA256SUMS.txt
+
+      - name: Upload checksums and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.authorize.outputs.tag }}
+        run: |
+          gh release upload "$TAG" assets/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

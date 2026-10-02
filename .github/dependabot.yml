@@ -1,0 +1,34 @@
+version: 2
+updates:
+  # Keeps SHA-pinned actions current; Dependabot rewrites both the SHA and the
+  # trailing version comment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      radix:
+        patterns: ["@radix-ui/*"]
+      tauri:
+        patterns: ["@tauri-apps/*"]
+      dev-tooling:
+        dependency-type: development
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      tauri:
+        patterns: ["tauri*"]

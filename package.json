@@ -9,6 +9,10 @@
     "url": "https://github.com/BankkRoll/clipy"
   },
   "type": "module",
+  "packageManager": "pnpm@10.13.1",
+  "engines": {
+    "node": ">=20.19"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
@@ -24,6 +28,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "coverage:rust": "node scripts/coverage-rust.mjs",
+    "coverage": "pnpm test:coverage && pnpm build && pnpm coverage:rust && node scripts/coverage-summary.mjs",
     "prepare": "husky"
   },
   "dependencies": {
