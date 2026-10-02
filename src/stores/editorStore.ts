@@ -1,3 +1,12 @@
+/**
+ * Editor store: the single source of truth for the open project, playback,
+ * timeline view state, selection and undo history.
+ *
+ * History model: `history[historyIndex]` is always a snapshot of the current
+ * project. Creating or loading a project records a baseline snapshot at index
+ * 0, so undo can always return to the untouched project. Compound operations
+ * run inside {@link EditorState.batch} so they produce exactly one undo step.
+ */
 import { create } from "zustand";
 import {
   type EditorProject,
@@ -8,7 +17,11 @@ import {
 } from "@/types/editor";
 import { generateId } from "@/lib/utils";
 
-interface EditorState {
+/** Maximum number of undo snapshots kept in memory. */
+export const MAX_HISTORY = 50;
+
+/** Shape of the editor store: state slices plus the actions that mutate them. */
+export interface EditorState {
   // Project state
   project: EditorProject | null;
   isLoading: boolean;
@@ -47,10 +60,12 @@ interface EditorState {
   removeTrack: (trackId: string) => void;
   updateTrack: (trackId: string, updates: Partial<Track>) => void;
   reorderTracks: (fromIndex: number, toIndex: number) => void;
+  duplicateTrack: (trackId: string) => string | null;
 
   // Clip actions
   addClip: (trackId: string, clip: Omit<Clip, "id" | "trackId">) => string;
   removeClip: (clipId: string) => void;
+  removeClips: (clipIds: string[]) => void;
   updateClip: (clipId: string, updates: Partial<Clip>) => void;
   moveClip: (clipId: string, newTrackId: string, newStartTime: number) => void;
   splitClip: (clipId: string, splitTime: number) => void;
@@ -85,11 +100,66 @@ interface EditorState {
   pushHistory: (description: string) => void;
   commitHistory: (description: string) => void;
   clearHistory: () => void;
+  /**
+   * Run `fn` with history recording suspended, then record a single entry.
+   * Nested batches collapse into the outermost one.
+   */
+  batch: <T>(description: string, fn: () => T) => T;
 
   // Export actions
   startExport: (settings: ExportSettings) => void;
   updateExportProgress: (progress: number) => void;
   cancelExport: () => void;
+}
+
+/** The data (non-action) part of {@link EditorState}. */
+export type EditorDataState = Pick<
+  EditorState,
+  | "project"
+  | "isLoading"
+  | "isDirty"
+  | "currentTime"
+  | "isPlaying"
+  | "duration"
+  | "volume"
+  | "isMuted"
+  | "zoom"
+  | "scrollX"
+  | "selectedClipIds"
+  | "selectedTrackId"
+  | "history"
+  | "historyIndex"
+  | "isExporting"
+  | "exportProgress"
+>;
+
+/**
+ * Fresh data state for the editor store, used on startup and to reset the
+ * store between tests.
+ *
+ * @returns A new object each call, safe to pass to `setState`.
+ * @example
+ * useEditorStore.setState(getInitialEditorState());
+ */
+export function getInitialEditorState(): EditorDataState {
+  return {
+    project: null,
+    isLoading: false,
+    isDirty: false,
+    currentTime: 0,
+    isPlaying: false,
+    duration: 0,
+    volume: 1,
+    isMuted: false,
+    zoom: 1,
+    scrollX: 0,
+    selectedClipIds: [],
+    selectedTrackId: null,
+    history: [],
+    historyIndex: -1,
+    isExporting: false,
+    exportProgress: 0,
+  };
 }
 
 const createDefaultProject = (name: string): EditorProject => ({
@@ -128,24 +198,24 @@ const createDefaultProject = (name: string): EditorProject => ({
   },
 });
 
+const snapshot = (project: EditorProject, description: string): HistoryEntry => ({
+  id: generateId(),
+  type: "edit",
+  description,
+  timestamp: Date.now(),
+  state: JSON.parse(JSON.stringify(project)) as EditorProject,
+});
+
+const projectDuration = (tracks: Track[]): number =>
+  Math.max(...tracks.flatMap((t) => t.clips.map((c) => c.endTime)), 0);
+
+// Depth of nested `batch` calls; while > 0, pushHistory is a no-op so the
+// outermost batch can record one entry for the whole compound operation.
+let historyBatchDepth = 0;
+
+/** Global editor store hook. */
 export const useEditorStore = create<EditorState>((set, get) => ({
-  // Initial state
-  project: null,
-  isLoading: false,
-  isDirty: false,
-  currentTime: 0,
-  isPlaying: false,
-  duration: 0,
-  volume: 1,
-  isMuted: false,
-  zoom: 1,
-  scrollX: 0,
-  selectedClipIds: [],
-  selectedTrackId: null,
-  history: [],
-  historyIndex: -1,
-  isExporting: false,
-  exportProgress: 0,
+  ...getInitialEditorState(),
 
   // Project actions
   createProject: (name) => {
@@ -155,12 +225,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       isDirty: false,
       currentTime: 0,
       isPlaying: false,
+      duration: 0,
       zoom: 1,
       scrollX: 0,
       selectedClipIds: [],
       selectedTrackId: null,
-      history: [],
-      historyIndex: -1,
+      history: [snapshot(project, "New project")],
+      historyIndex: 0,
     });
   },
 
@@ -171,8 +242,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       currentTime: 0,
       isPlaying: false,
       duration: project.duration,
-      history: [],
-      historyIndex: -1,
+      selectedClipIds: [],
+      selectedTrackId: null,
+      history: [snapshot(project, "Open project")],
+      historyIndex: 0,
     });
   },
 
@@ -252,13 +325,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((state) => {
       if (!state.project) return state;
 
+      const removedIds = new Set(
+        state.project.tracks.find((t) => t.id === trackId)?.clips.map((c) => c.id) ?? []
+      );
+      const tracks = state.project.tracks.filter((t) => t.id !== trackId);
+      const duration = projectDuration(tracks);
+
       return {
-        project: {
-          ...state.project,
-          tracks: state.project.tracks.filter((t) => t.id !== trackId),
-        },
+        project: { ...state.project, tracks, duration },
+        duration,
         isDirty: true,
         selectedTrackId: state.selectedTrackId === trackId ? null : state.selectedTrackId,
+        selectedClipIds: state.selectedClipIds.filter((id) => !removedIds.has(id)),
       };
     });
 
@@ -277,6 +355,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         isDirty: true,
       };
     });
+
+    get().pushHistory("Update track");
   },
 
   reorderTracks: (fromIndex, toIndex) => {
@@ -298,6 +378,33 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     get().pushHistory("Reorder tracks");
   },
 
+  duplicateTrack: (trackId) => {
+    const source = get().project?.tracks.find((t) => t.id === trackId);
+    if (!source) return null;
+
+    const newTrackId = generateId();
+    const copy: Track = {
+      ...JSON.parse(JSON.stringify(source)),
+      id: newTrackId,
+      name: `${source.name} (copy)`,
+      clips: source.clips.map((c) => ({
+        ...(JSON.parse(JSON.stringify(c)) as Clip),
+        id: generateId(),
+        trackId: newTrackId,
+      })),
+    };
+
+    set((state) => {
+      if (!state.project) return state;
+      const tracks = [...state.project.tracks];
+      tracks.splice(tracks.findIndex((t) => t.id === trackId) + 1, 0, copy);
+      return { project: { ...state.project, tracks }, isDirty: true };
+    });
+
+    get().pushHistory("Duplicate track");
+    return newTrackId;
+  },
+
   // Clip actions
   addClip: (trackId, clipData) => {
     const clipId = generateId();
@@ -314,9 +421,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const tracks = state.project.tracks.map((t) =>
         t.id === trackId ? { ...t, clips: [...t.clips, clip] } : t
       );
-
-      const allClips = tracks.flatMap((t) => t.clips);
-      const duration = Math.max(...allClips.map((c) => c.endTime), 0);
+      const duration = projectDuration(tracks);
 
       return {
         project: { ...state.project, tracks, duration },
@@ -330,26 +435,32 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   removeClip: (clipId) => {
+    get().removeClips([clipId]);
+  },
+
+  removeClips: (clipIds) => {
+    if (clipIds.length === 0) return;
+    const ids = new Set(clipIds);
+
     set((state) => {
       if (!state.project) return state;
 
       const tracks = state.project.tracks.map((t) => ({
         ...t,
-        clips: t.clips.filter((c) => c.id !== clipId),
+        clips: t.clips.filter((c) => !ids.has(c.id)),
       }));
-
-      const allClips = tracks.flatMap((t) => t.clips);
-      const duration = Math.max(...allClips.map((c) => c.endTime), 0);
+      const duration = projectDuration(tracks);
 
       return {
         project: { ...state.project, tracks, duration },
         duration,
+        currentTime: Math.min(state.currentTime, duration),
         isDirty: true,
-        selectedClipIds: state.selectedClipIds.filter((id) => id !== clipId),
+        selectedClipIds: state.selectedClipIds.filter((id) => !ids.has(id)),
       };
     });
 
-    get().pushHistory("Remove clip");
+    get().pushHistory(clipIds.length === 1 ? "Remove clip" : "Remove clips");
   },
 
   updateClip: (clipId, updates) => {
@@ -360,9 +471,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ...t,
         clips: t.clips.map((c) => (c.id === clipId ? { ...c, ...updates } : c)),
       }));
-
-      const allClips = tracks.flatMap((t) => t.clips);
-      const duration = Math.max(...allClips.map((c) => c.endTime), 0);
+      const duration = projectDuration(tracks);
 
       return {
         project: { ...state.project, tracks, duration },
@@ -378,7 +487,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       let movedClip: Clip | null = null;
 
-      // Find and remove clip from current track
       const tracksWithRemoval = state.project.tracks.map((t) => {
         const clip = t.clips.find((c) => c.id === clipId);
         if (clip) {
@@ -397,13 +505,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       if (!movedClip) return state;
 
-      // Add clip to new track
       const tracks = tracksWithRemoval.map((t) =>
         t.id === newTrackId ? { ...t, clips: [...t.clips, movedClip!] } : t
       );
-
-      const allClips = tracks.flatMap((t) => t.clips);
-      const duration = Math.max(...allClips.map((c) => c.endTime), 0);
+      const duration = projectDuration(tracks);
 
       return {
         project: { ...state.project, tracks, duration },
@@ -432,24 +537,25 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
 
     if (!foundClip || !foundTrackId) return;
+    const original = foundClip;
+    const trackId = foundTrackId;
 
-    const sourceProgress = (splitTime - foundClip.startTime) / (foundClip.endTime - foundClip.startTime);
-    const sourceSplitTime = foundClip.sourceStart + sourceProgress * (foundClip.sourceEnd - foundClip.sourceStart);
-
-    const firstClip: Partial<Clip> = {
-      endTime: splitTime,
-      sourceEnd: sourceSplitTime,
-    };
+    const sourceProgress =
+      (splitTime - original.startTime) / (original.endTime - original.startTime);
+    const sourceSplitTime =
+      original.sourceStart + sourceProgress * (original.sourceEnd - original.sourceStart);
 
     const secondClip: Omit<Clip, "id" | "trackId"> = {
-      ...foundClip,
-      name: `${foundClip.name} (2)`,
+      ...original,
+      name: `${original.name} (2)`,
       startTime: splitTime,
       sourceStart: sourceSplitTime,
     };
 
-    get().updateClip(clipId, firstClip);
-    get().addClip(foundTrackId, secondClip);
+    get().batch("Split clip", () => {
+      get().updateClip(clipId, { endTime: splitTime, sourceEnd: sourceSplitTime });
+      get().addClip(trackId, secondClip);
+    });
   },
 
   duplicateClip: (clipId) => {
@@ -477,7 +583,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   selectClip: (clipId, addToSelection = false) => {
     set((state) => ({
       selectedClipIds: addToSelection
-        ? [...state.selectedClipIds, clipId]
+        ? state.selectedClipIds.includes(clipId)
+          ? state.selectedClipIds
+          : [...state.selectedClipIds, clipId]
         : [clipId],
     }));
   },
@@ -497,8 +605,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   deleteSelected: () => {
-    const { selectedClipIds, removeClip } = get();
-    selectedClipIds.forEach((id) => removeClip(id));
+    const { selectedClipIds, removeClips } = get();
+    removeClips(selectedClipIds);
   },
 
   // Playback actions
@@ -546,58 +654,38 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   // History actions
   undo: () => {
     const { history, historyIndex } = get();
-    if (historyIndex > 0) {
-      const entry = history[historyIndex - 1];
-      if (entry) {
-        // Restore the top-level `duration` slice too — it is derived from clips
-        // and must stay in sync with the restored project, otherwise the ruler /
-        // playhead math reads a stale duration after undo.
-        set({
-          project: entry.state,
-          duration: entry.state.duration,
-          historyIndex: historyIndex - 1,
-          isDirty: true,
-        });
-      }
+    const entry = history[historyIndex - 1];
+    if (historyIndex > 0 && entry) {
+      restore(entry, historyIndex - 1);
     }
   },
 
   redo: () => {
     const { history, historyIndex } = get();
-    if (historyIndex < history.length - 1) {
-      const entry = history[historyIndex + 1];
-      if (entry) {
-        set({
-          project: entry.state,
-          duration: entry.state.duration,
-          historyIndex: historyIndex + 1,
-          isDirty: true,
-        });
-      }
+    const entry = history[historyIndex + 1];
+    if (entry) {
+      restore(entry, historyIndex + 1);
     }
   },
 
-  // Commit the current project state as a single undoable history entry. Call
-  // this at the END of a continuous interaction (drag-trim, drag-move, slider
-  // release) so rapid intermediate updates collapse into one undo step instead
-  // of flooding the history stack.
+  // Call at the END of a continuous interaction (drag, slider release, blur)
+  // so the many intermediate updateClip() calls collapse into one undo step.
   commitHistory: (description) => {
     get().pushHistory(description);
   },
 
   pushHistory: (description) => {
+    if (historyBatchDepth > 0) return;
     const { project, history, historyIndex } = get();
     if (!project) return;
 
-    const entry: HistoryEntry = {
-      id: generateId(),
-      type: "edit",
-      description,
-      timestamp: Date.now(),
-      state: JSON.parse(JSON.stringify(project)) as EditorProject,
-    };
+    const entry = snapshot(project, description);
+    // Commits fired on blur/slider-release without an actual change would
+    // otherwise create undo steps that do nothing.
+    const current = history[historyIndex];
+    if (current && JSON.stringify(current.state) === JSON.stringify(entry.state)) return;
 
-    const newHistory = [...history.slice(0, historyIndex + 1), entry].slice(-50);
+    const newHistory = [...history.slice(0, historyIndex + 1), entry].slice(-MAX_HISTORY);
 
     set({
       history: newHistory,
@@ -606,7 +694,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   clearHistory: () => {
-    set({ history: [], historyIndex: -1 });
+    const { project } = get();
+    set(
+      project
+        ? { history: [snapshot(project, "Clear history")], historyIndex: 0 }
+        : { history: [], historyIndex: -1 }
+    );
+  },
+
+  batch: (description, fn) => {
+    historyBatchDepth += 1;
+    try {
+      return fn();
+    } finally {
+      historyBatchDepth -= 1;
+      if (historyBatchDepth === 0) get().pushHistory(description);
+    }
   },
 
   // Export actions
@@ -622,3 +725,21 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({ isExporting: false, exportProgress: 0 });
   },
 }));
+
+function restore(entry: HistoryEntry, index: number) {
+  const project = JSON.parse(JSON.stringify(entry.state)) as EditorProject;
+  const ids = new Set(project.tracks.flatMap((t) => t.clips.map((c) => c.id)));
+  const trackIds = new Set(project.tracks.map((t) => t.id));
+  useEditorStore.setState((state) => ({
+    project,
+    // `duration` is derived from clips; keep the top-level slice in sync so the
+    // ruler and playhead math never read a stale value after undo/redo.
+    duration: project.duration,
+    currentTime: Math.min(state.currentTime, project.duration),
+    historyIndex: index,
+    isDirty: true,
+    selectedClipIds: state.selectedClipIds.filter((id) => ids.has(id)),
+    selectedTrackId:
+      state.selectedTrackId && trackIds.has(state.selectedTrackId) ? state.selectedTrackId : null,
+  }));
+}
