@@ -94,7 +94,7 @@ pub async fn clear_temp(app: AppHandle) -> Result<()> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Os {
     Windows,
-    MacOs,
+    Mac,
     Linux,
 }
 
@@ -103,7 +103,7 @@ impl Os {
         if cfg!(target_os = "windows") {
             Os::Windows
         } else if cfg!(target_os = "macos") {
-            Os::MacOs
+            Os::Mac
         } else {
             Os::Linux
         }
@@ -135,7 +135,7 @@ impl ShellCommand {
 fn folder_command(os: Os, dir: &Path) -> ShellCommand {
     let program = match os {
         Os::Windows => "explorer",
-        Os::MacOs => "open",
+        Os::Mac => "open",
         Os::Linux => "xdg-open",
     };
     ShellCommand {
@@ -158,7 +158,7 @@ fn reveal_command(os: Os, target: &Path) -> ShellCommand {
                 args: vec![arg],
             }
         }
-        Os::MacOs => ShellCommand {
+        Os::Mac => ShellCommand {
             program: "open",
             args: vec!["-R".into(), target.as_os_str().to_owned()],
         },
@@ -253,7 +253,7 @@ mod tests {
         let dir = Path::new("/videos/My Clips");
         for (os, program) in [
             (Os::Windows, "explorer"),
-            (Os::MacOs, "open"),
+            (Os::Mac, "open"),
             (Os::Linux, "xdg-open"),
         ] {
             let cmd = folder_command(os, dir);
@@ -269,7 +269,7 @@ mod tests {
             reveal_command(Os::Windows, f).args,
             vec![OsString::from("/select,/videos/a, b.mp4")]
         );
-        let mac = reveal_command(Os::MacOs, f);
+        let mac = reveal_command(Os::Mac, f);
         assert_eq!(mac.program, "open");
         assert_eq!(
             mac.args,
@@ -290,7 +290,7 @@ mod tests {
         if cfg!(windows) {
             assert_eq!(os, Os::Windows);
         } else if cfg!(target_os = "macos") {
-            assert_eq!(os, Os::MacOs);
+            assert_eq!(os, Os::Mac);
         } else {
             assert_eq!(os, Os::Linux);
         }
@@ -302,7 +302,14 @@ mod tests {
         let video = dir.path().join("v.mp4");
         fs::write(&video, b"x").unwrap();
         assert!(validate_open_file(&s(&video)).is_ok());
-        for name in ["setup.exe", "run.bat", "link.lnk", "x.ps1", "x.sh", "x.html"] {
+        for name in [
+            "setup.exe",
+            "run.bat",
+            "link.lnk",
+            "x.ps1",
+            "x.sh",
+            "x.html",
+        ] {
             let p = dir.path().join(name);
             fs::write(&p, b"x").unwrap();
             assert!(validate_open_file(&s(&p)).is_err(), "{name}");
@@ -332,7 +339,9 @@ mod tests {
         assert!(open_folder(s(&exe)).await.is_err());
         assert!(open_folder("--help".into()).await.is_err());
         assert!(show_in_folder("http://x".into()).await.is_err());
-        assert!(show_in_folder(s(&dir.path().join("missing"))).await.is_err());
+        assert!(show_in_folder(s(&dir.path().join("missing")))
+            .await
+            .is_err());
     }
 
     #[test]

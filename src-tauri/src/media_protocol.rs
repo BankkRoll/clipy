@@ -357,7 +357,10 @@ fn serve_file(canon: &Path, range_header: Option<&str>, max_chunk: u64) -> Respo
                 .status(206)
                 .header("Content-Type", mime)
                 .header("Accept-Ranges", "bytes")
-                .header("Content-Range", format!("bytes {}-{}/{}", start, end, total))
+                .header(
+                    "Content-Range",
+                    format!("bytes {}-{}/{}", start, end, total),
+                )
                 .header("Content-Length", len.to_string())
                 .body(buf)
                 .unwrap()
@@ -464,9 +467,15 @@ mod tests {
 
     #[test]
     fn parse_range_variants() {
-        assert_eq!(parse_range("bytes=0-499"), Some(RangeSpec::From(0, Some(499))));
+        assert_eq!(
+            parse_range("bytes=0-499"),
+            Some(RangeSpec::From(0, Some(499)))
+        );
         assert_eq!(parse_range("bytes=500-"), Some(RangeSpec::From(500, None)));
-        assert_eq!(parse_range(" bytes= 1 - 2 "), Some(RangeSpec::From(1, Some(2))));
+        assert_eq!(
+            parse_range(" bytes= 1 - 2 "),
+            Some(RangeSpec::From(1, Some(2)))
+        );
         assert_eq!(
             parse_range("bytes=0-499,600-999"),
             Some(RangeSpec::From(0, Some(499)))
@@ -616,7 +625,12 @@ mod tests {
             Err(Denied::NotFound)
         );
         // Traversal out of the root is resolved before the root check.
-        let escape = root.join("sub").join("..").join("..").join("outside").join("o.mp4");
+        let escape = root
+            .join("sub")
+            .join("..")
+            .join("..")
+            .join("outside")
+            .join("o.mp4");
         assert_eq!(authorize(&escape, &roots, deny), Err(Denied::Forbidden));
         // ...but the same file is allowed when the extra predicate vouches.
         assert!(authorize(&escape, &roots, |_| true).is_ok());
@@ -689,7 +703,9 @@ mod tests {
         // Percent-encoded `..` traversal.
         let root_s = root.to_string_lossy().replace('\\', "/");
         let enc_root = percent_encode(root_s.as_bytes(), NON_ALPHANUMERIC).to_string();
-        let trav = format!("http://clipy-media.localhost/{enc_root}%2Fsub%2F%2e%2e%2F%2e%2e%2Foutside.mp4");
+        let trav = format!(
+            "http://clipy-media.localhost/{enc_root}%2Fsub%2F%2e%2e%2F%2e%2e%2Foutside.mp4"
+        );
         assert_eq!(respond(&req(&trav, None), &roots, deny).status(), 403);
 
         // Mixed separators still resolve to the same in-root file.
@@ -724,6 +740,9 @@ mod tests {
         assert_eq!(r.headers()["content-range"], "bytes 0-99/1000");
         let r = serve_file(&f, Some("bytes=950-"), 100);
         assert_eq!(r.body().len(), 50);
-        assert_eq!(serve_file(&dir.path().join("x.mp4"), None, 100).status(), 404);
+        assert_eq!(
+            serve_file(&dir.path().join("x.mp4"), None, 100).status(),
+            404
+        );
     }
 }

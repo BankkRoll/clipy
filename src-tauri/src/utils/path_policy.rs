@@ -111,8 +111,7 @@ pub fn looks_like_url(s: &str) -> bool {
     let mut chars = scheme.chars();
     let first_is_alpha = chars.next().is_some_and(|c| c.is_ascii_alphabetic());
     // ffmpeg's `subfile,,start,0,end,0,,:` uses commas in its prefix.
-    first_is_alpha
-        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.' | ','))
+    first_is_alpha && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.' | ','))
 }
 
 /// Whether `s` is a UNC (`\\host\share`), device (`\\.\`) or verbatim (`\\?\`)
@@ -258,7 +257,9 @@ fn ensure_file_where(raw: &str, type_ok: impl Fn(&Path) -> bool) -> Result<PathB
 fn ensure_existing_file(raw: &str) -> Result<PathBuf> {
     let canon = canonicalize(&validate_raw_path(raw)?)?;
     if !canon.is_file() {
-        return Err(ClipyError::InvalidPath(format!("not a regular file: {raw}")));
+        return Err(ClipyError::InvalidPath(format!(
+            "not a regular file: {raw}"
+        )));
     }
     Ok(canon)
 }
@@ -418,7 +419,14 @@ mod tests {
         ] {
             assert!(looks_like_url(url), "{url}");
         }
-        for path in ["C:\\a.mp4", "c:/a.mp4", "/home/a:b.mp4", "relative", "", ":x"] {
+        for path in [
+            "C:\\a.mp4",
+            "c:/a.mp4",
+            "/home/a:b.mp4",
+            "relative",
+            "",
+            ":x",
+        ] {
             assert!(!looks_like_url(path), "{path}");
         }
     }
