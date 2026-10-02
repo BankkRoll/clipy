@@ -186,6 +186,13 @@ describe("computeTrim", () => {
     ).toEqual({ endTime: 8, sourceEnd: 16 });
   });
 
+  it("treats a zero speed as 1x", () => {
+    const clip = makeClip({ startTime: 0, endTime: 10, sourceEnd: 10, properties: { speed: 0 } });
+    expect(
+      computeTrim({ clip, edge: "end", initialTime: 10, deltaTime: -1, snap: identity })
+    ).toEqual({ endTime: 9, sourceEnd: 9 });
+  });
+
   it("cannot extend a media clip before the start of its source", () => {
     const clip = makeClip({ startTime: 5, endTime: 10, sourceStart: 1, sourceEnd: 6 });
     const update = computeTrim({

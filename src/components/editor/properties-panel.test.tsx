@@ -3,6 +3,7 @@ import { useState } from "react";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PropertiesPanel, type PropertiesTab } from "@/components/editor/properties-panel";
+import { FiltersTab } from "@/components/editor/filters-tab";
 import { useEditorStore } from "@/stores/editorStore";
 import { allClips, loadEditor, makeClip, makeProject, makeTrack } from "@/test/editor-fixtures";
 import { createTextClip } from "@/lib/editor/clips";
@@ -47,6 +48,25 @@ describe("PropertiesPanel", () => {
     expect(screen.getByText("Select a clip to edit")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Hide properties panel" }));
     expect(onCollapse).toHaveBeenCalled();
+  });
+
+  it("treats a selection of a missing clip as no selection", () => {
+    act(() => useEditorStore.getState().selectClip("ghost"));
+    setup();
+    expect(screen.getByText("Select a clip to edit")).toBeInTheDocument();
+  });
+
+  it("filter edits on a clip that left the project are ignored", async () => {
+    const orphan = makeClip({
+      id: "orphan",
+      properties: {
+        filters: [{ id: "f", type: "blur", enabled: true, params: { value: 1 } }],
+      },
+    });
+    const user = userEvent.setup();
+    render(<FiltersTab clip={orphan} />);
+    await user.click(screen.getByRole("button", { name: "Remove Blur" }));
+    expect(allClips().some((c) => c.id === "orphan")).toBe(false);
   });
 
   it("falls back to the Props tab for non-text clips", () => {

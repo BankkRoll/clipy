@@ -425,6 +425,11 @@ describe("tracks", () => {
     expect(s.duration).toBe(0);
   });
 
+  it("removeTrack of an unknown id changes nothing", () => {
+    useEditorStore.getState().removeTrack("missing");
+    expect(useEditorStore.getState().project!.tracks).toHaveLength(2);
+  });
+
   it("removeTrack keeps an unrelated selected track", () => {
     const audio = useEditorStore.getState().project!.tracks[1]!.id;
     useEditorStore.getState().selectTrack(audio);
@@ -487,6 +492,7 @@ describe("misc actions", () => {
     s.splitClip("x", 1);
     s.pushHistory("nothing");
     expect(s.duplicateClip("x")).toBeNull();
+    expect(s.duplicateTrack("x")).toBeNull();
     expect(useEditorStore.getState().project).toBeNull();
     expect(useEditorStore.getState().history).toEqual([]);
   });

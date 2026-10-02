@@ -203,6 +203,47 @@ describe("useExport", () => {
   });
 });
 
+describe("error message fallbacks", () => {
+  const rejectEmpty = () => invoke.mockRejectedValueOnce("");
+
+  it("each hook substitutes a default message for an empty rejection", async () => {
+    rejectEmpty();
+    const meta = renderHook(() => useVideoMetadata()).result;
+    await act(async () => {
+      await meta.current.getMetadata("/a").catch(() => {});
+    });
+    expect(meta.current.error).toBe("Failed to get video metadata");
+
+    rejectEmpty();
+    const wave = renderHook(() => useWaveform()).result;
+    await act(async () => {
+      await wave.current.extractWaveform("/a", 10);
+    });
+    expect(wave.current.error).toBe("Failed to extract waveform");
+
+    rejectEmpty();
+    const proj = renderHook(() => useProject()).result;
+    await act(async () => {
+      await proj.current.loadProject("/p").catch(() => {});
+    });
+    expect(proj.current.error).toBe("Failed to load project");
+
+    rejectEmpty();
+    const exp = renderHook(() => useExport()).result;
+    await act(async () => {
+      await exp.current.startExport({} as Project, {} as ExportSettings).catch(() => {});
+    });
+    expect(exp.current.error).toBe("Export failed");
+  });
+
+  it("getExportStatus invokes get_export_status", async () => {
+    invoke.mockResolvedValueOnce("project-1");
+    const { result } = renderHook(() => useExport());
+    await expect(result.current.getExportStatus()).resolves.toBe("project-1");
+    expect(invoke).toHaveBeenCalledWith("get_export_status");
+  });
+});
+
 describe("useExportOptions", () => {
   it("loadOptions fetches formats and resolutions", async () => {
     invoke.mockResolvedValueOnce([{ id: "mp4" }]).mockResolvedValueOnce([{ id: "1080" }]);

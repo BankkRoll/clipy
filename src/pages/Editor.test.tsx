@@ -400,6 +400,25 @@ describe("Editor page: timeline + context menus", () => {
     expect(allClips().some((c) => c.id === "a")).toBe(true);
   });
 
+  it("toolbar Copy/Paste/Split/Delete act on the selection", async () => {
+    loadEditor(twoClipProject());
+    const { backend, user } = setup("/editor", { "plugin:dialog|ask": () => true });
+    await screen.findByTestId("clip-a");
+    act(() => {
+      useEditorStore.getState().selectClip("a");
+      useEditorStore.getState().seek(12);
+    });
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    await user.click(screen.getByRole("button", { name: "Paste" }));
+    expect(allClips().map((c) => c.name)).toContain("Alpha (pasted)");
+    act(() => useEditorStore.getState().selectClip("b"));
+    await user.click(screen.getByRole("button", { name: "Split at playhead" }));
+    expect(allClips().map((c) => c.name)).toContain("Bravo (2)");
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(backend.callsTo("plugin:dialog|ask")).toHaveLength(1));
+    await waitFor(() => expect(allClips().some((c) => c.id === "b")).toBe(false));
+  });
+
   it("does not delete when the confirmation is declined", async () => {
     loadEditor(twoClipProject());
     const { backend, user } = setup("/editor", { "plugin:dialog|ask": () => false });

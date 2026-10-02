@@ -222,6 +222,27 @@ describe("Timeline clip dragging", () => {
     expect(currentProject().tracks[1]!.clips.map((c) => c.id)).toEqual(["b"]);
   });
 
+  it("clicks on a clip or the lane playhead do not seek or clear the selection", () => {
+    setup();
+    act(() => {
+      useEditorStore.getState().selectClip("a");
+      useEditorStore.getState().seek(2);
+    });
+    fireEvent.click(screen.getByTestId("clip-a"), { clientX: 400 });
+    fireEvent.click(screen.getByTestId("lane-playhead-tv"), { clientX: 400 });
+    expect(useEditorStore.getState().currentTime).toBe(2);
+    expect(useEditorStore.getState().selectedClipIds).toEqual(["a"]);
+  });
+
+  it("stays on its own track when the pointer leaves every lane", () => {
+    setup();
+    stubRect(screen.getByTestId("lane-tv"), { top: 0, bottom: 64 });
+    stubRect(screen.getByTestId("lane-tv2"), { top: 64, bottom: 128 });
+    stubRect(screen.getByTestId("lane-ta"), { top: 128, bottom: 176 });
+    drag(screen.getByTestId("clip-b"), { x: 0, y: 10 }, { x: px(2), y: 900 });
+    expect(clip("b")).toMatchObject({ trackId: "tv", startTime: 12 });
+  });
+
   it("refuses to drop a video clip onto an audio track", () => {
     setup();
     stubRect(screen.getByTestId("lane-ta"), { top: 128, bottom: 176 });
@@ -307,6 +328,15 @@ describe("Timeline trimming", () => {
     unmount();
     fireEvent.mouseMove(window, { clientX: px(3) });
     expect(clip("a").endTime).toBe(10);
+  });
+
+  it("a trim survives the project closing mid-drag", () => {
+    setup();
+    fireEvent.mouseDown(screen.getByTestId("trim-start-b"), { button: 0, clientX: 0 });
+    act(() => useEditorStore.getState().closeProject());
+    fireEvent.mouseMove(window, { clientX: px(3) });
+    fireEvent.mouseUp(window);
+    expect(useEditorStore.getState().project).toBeNull();
   });
 
   it("a gesture whose clip disappears mid-drag is ignored", () => {
