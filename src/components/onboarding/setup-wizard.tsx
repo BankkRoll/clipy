@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
@@ -26,20 +27,17 @@ import {
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { useBinaryStatus, useFileSystem } from "@/hooks";
-import { useSettingsStore } from "@/stores/settingsStore";
+import { useBinaryStatus, useFileSystem, useSettings, type AppSettings } from "@/hooks";
 import { useUIStore } from "@/stores/uiStore";
-import {
-  VIDEO_QUALITIES,
-  VIDEO_FORMATS,
-  ENCODING_PRESETS,
-} from "@/lib/constants";
+import { VIDEO_QUALITIES, VIDEO_FORMATS, ENCODING_PRESETS } from "@/lib/constants";
 import { SUBTITLE_LANGUAGES } from "@/types/download";
 import { logger } from "@/lib/logger";
 import { cn } from "@/lib/utils";
 
-interface SetupWizardProps {
-  onComplete: () => void;
+/** Props for {@link SetupWizard}. */
+export interface SetupWizardProps {
+  /** Called after settings are saved and onboarding is marked complete. */
+  onComplete?: () => void;
 }
 
 type SetupStep = "welcome" | "binaries" | "basics" | "preferences" | "advanced" | "complete";
@@ -61,44 +59,70 @@ const BROWSERS = [
   { value: "brave", label: "Brave" },
 ] as const;
 
+/**
+ * First-run wizard: installs the required binaries and collects the initial
+ * download preferences, then writes them to the backend in one `update_settings`.
+ */
 export function SetupWizard({ onComplete }: SetupWizardProps) {
   const [currentStep, setCurrentStep] = useState<SetupStep>("welcome");
   const [isInstalling, setIsInstalling] = useState(false);
   const [installError, setInstallError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
-  const { status: binaryStatus, installFfmpeg, installYtdlp, refresh: refreshBinaries } = useBinaryStatus();
+  const {
+    status: binaryStatus,
+    loading: binaryLoading,
+    installFfmpeg,
+    installYtdlp,
+  } = useBinaryStatus();
   const { getDefaultDownloadPath } = useFileSystem();
-  const { updateDownloadSettings, updateAdvancedSettings, settings } = useSettingsStore();
+  const { settings } = useSettings();
   const completeOnboarding = useUIStore((state) => state.completeOnboarding);
 
-  // Basic settings
-  const [downloadPath, setDownloadPath] = useState(settings?.download?.downloadPath || "");
-  const [defaultQuality, setDefaultQuality] = useState(settings?.download?.defaultQuality || "1080");
-  const [defaultFormat, setDefaultFormat] = useState(settings?.download?.defaultFormat || "mp4");
+  const [downloadPath, setDownloadPath] = useState("");
+  const [defaultQuality, setDefaultQuality] = useState("1080");
+  const [defaultFormat, setDefaultFormat] = useState("mp4");
 
-  // Preference settings
-  const [embedThumbnail, setEmbedThumbnail] = useState(settings?.download?.embedThumbnail ?? true);
-  const [embedMetadata, setEmbedMetadata] = useState(settings?.download?.embedMetadata ?? true);
-  const [createChannelSubfolder, setCreateChannelSubfolder] = useState(
-    settings?.download?.createChannelSubfolder ?? false
-  );
-  const [downloadSubtitles, setDownloadSubtitles] = useState(settings?.download?.downloadSubtitles ?? false);
-  const [subtitleLanguage, setSubtitleLanguage] = useState(settings?.download?.subtitleLanguage || "en");
+  const [embedThumbnail, setEmbedThumbnail] = useState(true);
+  const [embedMetadata, setEmbedMetadata] = useState(true);
+  const [createChannelSubfolder, setCreateChannelSubfolder] = useState(false);
+  const [downloadSubtitles, setDownloadSubtitles] = useState(false);
+  const [subtitleLanguage, setSubtitleLanguage] = useState("en");
 
-  // Advanced settings
-  const [cookiesFromBrowser, setCookiesFromBrowser] = useState(settings?.download?.cookiesFromBrowser || "none");
-  const [hardwareAcceleration, setHardwareAcceleration] = useState(settings?.advanced?.hardwareAcceleration ?? true);
-  const [crfQuality, setCrfQuality] = useState(settings?.download?.crfQuality ?? 23);
-  const [encodingPreset, setEncodingPreset] = useState(settings?.download?.encodingPreset || "medium");
+  const [cookiesFromBrowser, setCookiesFromBrowser] = useState("none");
+  const [hardwareAcceleration, setHardwareAcceleration] = useState(true);
+  const [crfQuality, setCrfQuality] = useState(23);
+  const [encodingPreset, setEncodingPreset] = useState("medium");
 
-  // Get default download path on mount
+  // Seed the form from backend settings once they arrive (a factory reset or
+  // reinstall may already have values worth keeping).
+  const seededRef = useRef(false);
   useEffect(() => {
-    if (!downloadPath) {
-      getDefaultDownloadPath().then(setDownloadPath).catch((err) =>
-        logger.error("SetupWizard", "Failed to get default path:", err)
-      );
-    }
-  }, [downloadPath, getDefaultDownloadPath]);
+    if (!settings || seededRef.current) return;
+    seededRef.current = true;
+    const d = settings.download;
+    if (d.downloadPath) setDownloadPath(d.downloadPath);
+    setDefaultQuality(d.defaultQuality);
+    setDefaultFormat(d.defaultFormat);
+    setEmbedThumbnail(d.embedThumbnail);
+    setEmbedMetadata(d.embedMetadata);
+    setCreateChannelSubfolder(d.createChannelSubfolder);
+    setHardwareAcceleration(settings.advanced.hardwareAcceleration);
+    // Optional fields may be missing from configs written by older versions.
+    setDownloadSubtitles(d.downloadSubtitles ?? false);
+    setSubtitleLanguage(d.subtitleLanguage || "en");
+    setCookiesFromBrowser(d.cookiesFromBrowser || "none");
+    setCrfQuality(d.crfQuality ?? 23);
+    setEncodingPreset(d.encodingPreset || "medium");
+  }, [settings]);
+
+  // Only on mount: re-running whenever the field is empty would refill it the
+  // moment the user clears it to type their own path.
+  useEffect(() => {
+    getDefaultDownloadPath()
+      .then((path) => setDownloadPath((current) => current || path))
+      .catch((err) => logger.error("SetupWizard", "Failed to get default path:", err));
+  }, [getDefaultDownloadPath]);
 
   const currentStepIndex = STEPS.findIndex((s) => s.key === currentStep);
   const progress = ((currentStepIndex + 1) / STEPS.length) * 100;
@@ -108,20 +132,16 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     setInstallError(null);
 
     try {
-      if (!binaryStatus?.ffmpegInstalled) {
-        await installFfmpeg();
-      }
-      if (!binaryStatus?.ytdlpInstalled) {
-        await installYtdlp();
-      }
-      await refreshBinaries();
+      if (!binaryStatus?.ffmpegInstalled) await installFfmpeg();
+      if (!binaryStatus?.ytdlpInstalled) await installYtdlp();
       setCurrentStep("basics");
     } catch (err) {
-      setInstallError(err instanceof Error ? err.message : "Installation failed");
+      // useBinaryStatus rethrows backend failures as Error.
+      setInstallError((err as Error).message);
     } finally {
       setIsInstalling(false);
     }
-  }, [binaryStatus, installFfmpeg, installYtdlp, refreshBinaries]);
+  }, [binaryStatus, installFfmpeg, installYtdlp]);
 
   const handleBrowseFolder = useCallback(async () => {
     try {
@@ -139,83 +159,71 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   }, []);
 
   const handleComplete = useCallback(async () => {
+    setIsSaving(true);
     try {
-      // Save all settings to Tauri backend
-      const settingsToSave = [
-        { key: "download.downloadPath", value: downloadPath },
-        { key: "download.defaultQuality", value: defaultQuality },
-        { key: "download.defaultFormat", value: defaultFormat },
-        { key: "download.embedThumbnail", value: embedThumbnail },
-        { key: "download.embedMetadata", value: embedMetadata },
-        { key: "download.createChannelSubfolder", value: createChannelSubfolder },
-        { key: "download.downloadSubtitles", value: downloadSubtitles },
-        { key: "download.subtitleLanguage", value: subtitleLanguage },
-        { key: "download.cookiesFromBrowser", value: cookiesFromBrowser === "none" ? "" : cookiesFromBrowser },
-        { key: "download.crfQuality", value: crfQuality },
-        { key: "download.encodingPreset", value: encodingPreset },
-        { key: "advanced.hardwareAcceleration", value: hardwareAcceleration },
-      ];
-
-      // Save each setting to Tauri backend
-      for (const { key, value } of settingsToSave) {
-        await invoke("update_setting", { key, value });
-      }
-
-      // Also update Zustand store for immediate UI sync
-      updateDownloadSettings({
-        downloadPath,
-        defaultQuality,
-        defaultFormat,
-        embedThumbnail,
-        embedMetadata,
-        createChannelSubfolder,
-        downloadSubtitles,
-        subtitleLanguage,
-        cookiesFromBrowser: cookiesFromBrowser === "none" ? "" : cookiesFromBrowser,
-        crfQuality,
-        encodingPreset,
-      });
-
-      updateAdvancedSettings({
-        hardwareAcceleration,
-      });
-
-      logger.info("SetupWizard", "All settings saved successfully");
+      // Read fresh rather than reuse the seeded copy so nothing written since
+      // mount is clobbered by the single update_settings below.
+      const current = await invoke<AppSettings>("get_settings");
+      const merged: AppSettings = {
+        ...current,
+        download: {
+          ...current.download,
+          downloadPath,
+          defaultQuality,
+          defaultFormat,
+          embedThumbnail,
+          embedMetadata,
+          createChannelSubfolder,
+          downloadSubtitles,
+          subtitleLanguage,
+          cookiesFromBrowser: cookiesFromBrowser === "none" ? "" : cookiesFromBrowser,
+          crfQuality,
+          encodingPreset,
+        },
+        advanced: { ...current.advanced, hardwareAcceleration },
+      };
+      await invoke("update_settings", { settings: merged });
+      logger.info("SetupWizard: settings saved");
     } catch (err) {
       logger.error("SetupWizard", "Failed to save settings:", err);
+      toast.error("Couldn't save your settings", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+      setIsSaving(false);
+      return;
     }
 
+    setIsSaving(false);
     completeOnboarding();
-    onComplete();
+    onComplete?.();
   }, [
-    downloadPath, defaultQuality, defaultFormat, embedThumbnail, embedMetadata,
-    createChannelSubfolder, downloadSubtitles, subtitleLanguage, cookiesFromBrowser,
-    crfQuality, encodingPreset, hardwareAcceleration, updateDownloadSettings,
-    updateAdvancedSettings, completeOnboarding, onComplete,
+    downloadPath,
+    defaultQuality,
+    defaultFormat,
+    embedThumbnail,
+    embedMetadata,
+    createChannelSubfolder,
+    downloadSubtitles,
+    subtitleLanguage,
+    cookiesFromBrowser,
+    crfQuality,
+    encodingPreset,
+    hardwareAcceleration,
+    completeOnboarding,
+    onComplete,
   ]);
 
-  const goNext = () => {
-    const nextIndex = currentStepIndex + 1;
-    const nextStep = STEPS[nextIndex];
-    if (nextStep) {
-      setCurrentStep(nextStep.key);
-    }
-  };
-
-  const goBack = () => {
-    const prevIndex = currentStepIndex - 1;
-    const prevStep = STEPS[prevIndex];
-    if (prevStep) {
-      setCurrentStep(prevStep.key);
-    }
-  };
+  // The first step has no Back button and the last has no Continue, so the
+  // neighbouring step always exists.
+  const goNext = () => setCurrentStep(STEPS[currentStepIndex + 1]!.key);
+  const goBack = () => setCurrentStep(STEPS[currentStepIndex - 1]!.key);
 
   const renderStep = () => {
     switch (currentStep) {
       case "welcome":
         return (
           <div className="space-y-8">
-            <div className="text-center space-y-3">
+            <div className="space-y-3 text-center">
               <h1 className="text-3xl font-bold tracking-tight">Welcome to Clipy</h1>
               <p className="text-muted-foreground">
                 Download and edit videos from YouTube and 1000+ sites
@@ -246,9 +254,10 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
 
       case "binaries": {
         const allInstalled = binaryStatus?.ffmpegInstalled && binaryStatus?.ytdlpInstalled;
+        const checking = binaryLoading && !binaryStatus;
         return (
           <div className="space-y-6">
-            <div className="text-center space-y-2">
+            <div className="space-y-2 text-center">
               <h2 className="text-2xl font-bold">Required Components</h2>
               <p className="text-sm text-muted-foreground">
                 Clipy needs these open-source tools to work
@@ -274,11 +283,11 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
               ].map((binary) => (
                 <div
                   key={binary.name}
+                  role="group"
+                  aria-label={binary.name}
                   className={cn(
                     "flex items-center justify-between rounded-lg border p-4",
-                    binary.installed
-                      ? "border-green-500/30 bg-green-500/5"
-                      : "border-border"
+                    binary.installed ? "border-green-500/30 bg-green-500/5" : "border-border"
                   )}
                 >
                   <div className="flex items-center gap-3">
@@ -294,7 +303,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                       <p className="text-xs text-muted-foreground">{binary.desc}</p>
                     </div>
                   </div>
-                  <span className="text-xs text-muted-foreground font-mono">
+                  <span className="font-mono text-xs text-muted-foreground">
                     {binary.installed ? binary.version || "Installed" : binary.size}
                   </span>
                 </div>
@@ -302,7 +311,10 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
             </div>
 
             {installError && (
-              <div className="flex items-center gap-2 rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive">
+              <div
+                role="alert"
+                className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+              >
                 <AlertTriangle className="h-4 w-4 shrink-0" />
                 {installError}
               </div>
@@ -313,28 +325,41 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Back
               </Button>
-              {allInstalled ? (
+              {checking ? (
+                <Button className="flex-1" disabled>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Checking components...
+                </Button>
+              ) : allInstalled ? (
                 <Button className="flex-1" onClick={goNext}>
                   Continue
                   <ArrowRight className="ml-2 h-4 w-4" />
                 </Button>
               ) : (
-                <Button
-                  className="flex-1"
-                  onClick={handleInstallBinaries}
-                  disabled={isInstalling}
-                >
+                <Button className="flex-1" onClick={handleInstallBinaries} disabled={isInstalling}>
                   {isInstalling ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       Installing...
                     </>
+                  ) : installError ? (
+                    "Retry Install"
                   ) : (
                     "Download & Install"
                   )}
                 </Button>
               )}
             </div>
+            {!allInstalled && !isInstalling && !checking && (
+              <div className="space-y-1">
+                <Button variant="ghost" size="sm" className="w-full" onClick={goNext}>
+                  Skip for now
+                </Button>
+                <p className="text-center text-xs text-muted-foreground">
+                  You can install them later from Settings → Advanced. Downloads need both.
+                </p>
+              </div>
+            )}
           </div>
         );
       }
@@ -342,11 +367,9 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       case "basics":
         return (
           <div className="space-y-6">
-            <div className="text-center space-y-2">
+            <div className="space-y-2 text-center">
               <h2 className="text-2xl font-bold">Basic Settings</h2>
-              <p className="text-sm text-muted-foreground">
-                Where and how to save your downloads
-              </p>
+              <p className="text-sm text-muted-foreground">Where and how to save your downloads</p>
             </div>
 
             <div className="space-y-5">
@@ -355,12 +378,18 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 <Label>Download Location</Label>
                 <div className="flex gap-2">
                   <Input
+                    aria-label="Download location"
                     value={downloadPath}
                     onChange={(e) => setDownloadPath(e.target.value)}
                     placeholder="Select a folder..."
                     className="flex-1 font-mono text-sm"
                   />
-                  <Button variant="outline" size="icon" onClick={handleBrowseFolder}>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={handleBrowseFolder}
+                    aria-label="Browse for folder"
+                  >
                     <FolderOpen className="h-4 w-4" />
                   </Button>
                 </div>
@@ -385,9 +414,9 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                       )}
                     >
                       <RadioGroupItem value={q.value} className="sr-only" />
-                      <span className="font-medium">{q.label.replace(/p$/, '')}</span>
+                      <span className="font-medium">{q.label.replace(/p$/, "")}</span>
                       {q.badge && (
-                        <Badge variant="secondary" className="ml-1.5 text-[9px] px-1 py-0">
+                        <Badge variant="secondary" className="ml-1.5 px-1 py-0 text-[9px]">
                           {q.badge}
                         </Badge>
                       )}
@@ -439,11 +468,9 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       case "preferences":
         return (
           <div className="space-y-6">
-            <div className="text-center space-y-2">
+            <div className="space-y-2 text-center">
               <h2 className="text-2xl font-bold">Preferences</h2>
-              <p className="text-sm text-muted-foreground">
-                Customize your download experience
-              </p>
+              <p className="text-sm text-muted-foreground">Customize your download experience</p>
             </div>
 
             <div className="space-y-1">
@@ -475,13 +502,17 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
               ].map((pref) => (
                 <div
                   key={pref.label}
-                  className="flex items-center justify-between py-3 border-b border-border/50 last:border-0"
+                  className="flex items-center justify-between border-b border-border/50 py-3 last:border-0"
                 >
                   <div>
-                    <p className="font-medium text-sm">{pref.label}</p>
+                    <p className="text-sm font-medium">{pref.label}</p>
                     <p className="text-xs text-muted-foreground">{pref.desc}</p>
                   </div>
-                  <Switch checked={pref.checked} onCheckedChange={pref.onChange} />
+                  <Switch
+                    aria-label={pref.label}
+                    checked={pref.checked}
+                    onCheckedChange={pref.onChange}
+                  />
                 </div>
               ))}
             </div>
@@ -490,7 +521,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
               <div className="flex items-center justify-between pt-2">
                 <Label className="text-sm">Subtitle Language</Label>
                 <Select value={subtitleLanguage} onValueChange={setSubtitleLanguage}>
-                  <SelectTrigger className="w-[140px] h-9">
+                  <SelectTrigger className="h-9 w-[140px]" aria-label="Subtitle language">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -520,31 +551,33 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       case "advanced":
         return (
           <div className="space-y-6">
-            <div className="text-center space-y-2">
+            <div className="space-y-2 text-center">
               <h2 className="text-2xl font-bold">Advanced Options</h2>
-              <p className="text-sm text-muted-foreground">
-                Fine-tune performance and access
-              </p>
+              <p className="text-sm text-muted-foreground">Fine-tune performance and access</p>
             </div>
 
             <div className="space-y-4">
               {/* Hardware Acceleration */}
               <div className="flex items-center justify-between py-2">
                 <div>
-                  <p className="font-medium text-sm">Hardware Acceleration</p>
+                  <p className="text-sm font-medium">Hardware Acceleration</p>
                   <p className="text-xs text-muted-foreground">Use GPU for faster encoding</p>
                 </div>
-                <Switch checked={hardwareAcceleration} onCheckedChange={setHardwareAcceleration} />
+                <Switch
+                  aria-label="Hardware Acceleration"
+                  checked={hardwareAcceleration}
+                  onCheckedChange={setHardwareAcceleration}
+                />
               </div>
 
               {/* Browser Cookies */}
               <div className="flex items-center justify-between py-2">
                 <div>
-                  <p className="font-medium text-sm">Browser Cookies</p>
+                  <p className="text-sm font-medium">Browser Cookies</p>
                   <p className="text-xs text-muted-foreground">For age-restricted videos</p>
                 </div>
                 <Select value={cookiesFromBrowser} onValueChange={setCookiesFromBrowser}>
-                  <SelectTrigger className="w-[120px] h-9">
+                  <SelectTrigger className="h-9 w-[120px]" aria-label="Browser cookies">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -560,11 +593,11 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
               {/* Encoding Preset */}
               <div className="flex items-center justify-between py-2">
                 <div>
-                  <p className="font-medium text-sm">Encoding Speed</p>
+                  <p className="text-sm font-medium">Encoding Speed</p>
                   <p className="text-xs text-muted-foreground">Speed vs quality tradeoff</p>
                 </div>
                 <Select value={encodingPreset} onValueChange={setEncodingPreset}>
-                  <SelectTrigger className="w-[120px] h-9">
+                  <SelectTrigger className="h-9 w-[120px]" aria-label="Encoding speed">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -581,14 +614,18 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
               <div className="space-y-3 py-2">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="font-medium text-sm">Quality Level (CRF)</p>
-                    <p className="text-xs text-muted-foreground">Lower = better quality, larger files</p>
+                    <p className="text-sm font-medium">Quality Level (CRF)</p>
+                    <p className="text-xs text-muted-foreground">
+                      Lower = better quality, larger files
+                    </p>
                   </div>
-                  <span className="text-sm font-mono tabular-nums">{crfQuality}</span>
+                  <span className="font-mono text-sm tabular-nums" data-testid="crf-value">
+                    {crfQuality}
+                  </span>
                 </div>
                 <Slider
                   value={[crfQuality]}
-                  onValueChange={(values) => setCrfQuality(values[0] ?? 23)}
+                  onValueChange={(values) => setCrfQuality(values[0]!)}
                   min={18}
                   max={28}
                   step={1}
@@ -623,26 +660,41 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
               </div>
               <div>
                 <h2 className="text-2xl font-bold">You're All Set</h2>
-                <p className="text-sm text-muted-foreground mt-1">
+                <p className="mt-1 text-sm text-muted-foreground">
                   Clipy is ready. Start by pasting a video URL.
                 </p>
               </div>
             </div>
 
-            <div className="text-left space-y-2 text-sm text-muted-foreground bg-muted/30 rounded-lg p-4">
+            <div className="space-y-2 rounded-lg bg-muted/30 p-4 text-left text-sm text-muted-foreground">
               <p className="font-medium text-foreground">Quick Tips</p>
               <ul className="space-y-1.5">
-                <li>• Press <kbd className="mx-0.5 rounded bg-muted px-1.5 py-0.5 text-xs font-mono">Ctrl+K</kbd> for command palette</li>
+                <li>
+                  • Press{" "}
+                  <kbd className="mx-0.5 rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
+                    Ctrl+K
+                  </kbd>{" "}
+                  for command palette
+                </li>
                 <li>• Paste URLs directly on the home screen</li>
-                <li>• Drag videos from library to editor</li>
                 <li>• All settings can be changed anytime</li>
               </ul>
             </div>
 
-            <Button size="lg" className="w-full" onClick={handleComplete}>
-              Start Using Clipy
-              <ArrowRight className="ml-2 h-4 w-4" />
-            </Button>
+            <div className="flex gap-3">
+              <Button variant="outline" size="lg" onClick={goBack} disabled={isSaving}>
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Back
+              </Button>
+              <Button size="lg" className="flex-1" onClick={handleComplete} disabled={isSaving}>
+                {isSaving ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <ArrowRight className="mr-2 h-4 w-4" />
+                )}
+                Start Using Clipy
+              </Button>
+            </div>
           </div>
         );
     }
@@ -682,9 +734,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         </div>
 
         {/* Content Card */}
-        <div className="rounded-xl border bg-card p-6">
-          {renderStep()}
-        </div>
+        <div className="rounded-xl border bg-card p-6">{renderStep()}</div>
       </div>
     </div>
   );
