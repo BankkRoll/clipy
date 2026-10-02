@@ -106,7 +106,7 @@ export function FiltersTab({ clip }: FiltersTabProps) {
                     onValueChange={([v]) => v !== undefined && setFilterValue(filter.id, v)}
                     onValueCommit={([v]) => {
                       // Keyboard commits arrive before onValueChange; apply first.
-                      if (v !== undefined) setFilterValue(filter.id, v);
+                      setFilterValue(filter.id, v!);
                       commitHistory("Adjust filter");
                     }}
                     min={preset.min}

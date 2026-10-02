@@ -33,8 +33,8 @@ import { useEditorShortcuts } from "@/components/editor/use-editor-shortcuts";
 import { usePlaybackClock } from "@/components/editor/use-playback-clock";
 
 function togglePanel(ref: React.RefObject<ImperativePanelHandle>) {
-  const panel = ref.current;
-  if (!panel) return;
+  // Both panels are always mounted, so the handle is set once rendered.
+  const panel = ref.current!;
   if (panel.isCollapsed()) panel.expand();
   else panel.collapse();
 }
@@ -88,7 +88,8 @@ export function Editor() {
   }, [importVideoId, project, libraryVideos, libraryLoading, navigate, addLibraryVideo]);
 
   const handleAddText = () => {
-    if (actions.addText()) setRightTab("text");
+    actions.addText();
+    setRightTab("text");
   };
 
   const { togglePlay, seek, seekRelative, undo, redo } = useEditorStore.getState();

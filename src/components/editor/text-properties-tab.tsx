@@ -95,7 +95,7 @@ export function TextPropertiesTab({ clip }: TextPropertiesTabProps) {
             onValueChange={([v]) => v !== undefined && patchText(clip.id, { fontSize: v })}
             onValueCommit={([v]) => {
               // Keyboard commits arrive before onValueChange; apply first.
-              if (v !== undefined) patchText(clip.id, { fontSize: v });
+              patchText(clip.id, { fontSize: v! });
               commitHistory("Change font size");
             }}
             min={12}

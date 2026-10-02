@@ -43,7 +43,7 @@ function PercentSlider({
           onValueCommit={([v]) => {
             // Radix fires the keyboard commit before onValueChange; apply first so
             // the history snapshot contains the new value.
-            if (v !== undefined) onChange(v / 100);
+            onChange(v! / 100);
             commitHistory(commit);
           }}
           min={min}
@@ -135,7 +135,7 @@ export function ClipPropertiesTab({ clip }: ClipPropertiesTabProps) {
           value={[p.fadeIn]}
           onValueChange={([v]) => v !== undefined && patchClipProperties(clip.id, { fadeIn: v })}
           onValueCommit={([v]) => {
-            if (v !== undefined) patchClipProperties(clip.id, { fadeIn: v });
+            patchClipProperties(clip.id, { fadeIn: v! });
             commitHistory("Change fade in");
           }}
           max={5}
@@ -149,7 +149,7 @@ export function ClipPropertiesTab({ clip }: ClipPropertiesTabProps) {
           value={[p.fadeOut]}
           onValueChange={([v]) => v !== undefined && patchClipProperties(clip.id, { fadeOut: v })}
           onValueCommit={([v]) => {
-            if (v !== undefined) patchClipProperties(clip.id, { fadeOut: v });
+            patchClipProperties(clip.id, { fadeOut: v! });
             commitHistory("Change fade out");
           }}
           max={5}

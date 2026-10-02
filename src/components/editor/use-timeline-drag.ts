@@ -12,6 +12,7 @@ import {
   useEffect,
   useRef,
   type MouseEvent as ReactMouseEvent,
+  type MutableRefObject,
   type RefObject,
 } from "react";
 import { useEditorStore } from "@/stores/editorStore";
@@ -49,7 +50,7 @@ export interface TimelineDrag {
  * @returns Mousedown handlers that start each gesture.
  */
 export function useTimelineDrag(
-  lanes: RefObject<Map<string, HTMLElement>>,
+  lanes: MutableRefObject<Map<string, HTMLElement>>,
   originRef: RefObject<HTMLElement>,
   snap: SnapPreferences
 ): TimelineDrag {
@@ -113,7 +114,7 @@ export function useTimelineDrag(
             clipDuration,
             snapper(clip.id)
           );
-          const overId = lanes.current ? trackIdAtY(lanes.current, ev.clientY) : null;
+          const overId = trackIdAtY(lanes.current, ev.clientY);
           const over = overId ? project.tracks.find((t) => t.id === overId) : undefined;
           target =
             over && isCompatibleDrop(clip.type, over, sourceTrack.id)
@@ -170,8 +171,8 @@ export function useTimelineDrag(
       e.stopPropagation();
       track(
         (ev) => {
-          const origin = originRef.current;
-          if (!origin) return;
+          // Listeners are removed on unmount, so the ruler is mounted here.
+          const origin = originRef.current!;
           const { zoom, duration, seek } = useEditorStore.getState();
           const x = ev.clientX - origin.getBoundingClientRect().left;
           seek(clampTime(pixelToTime(x, zoom), duration));

@@ -92,8 +92,7 @@ export function PreviewPlayer() {
   }, [visualClip, currentTime, isPlaying, volume, isMuted]);
 
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
+    const audio = audioRef.current!;
     if (audioClip) syncMediaElement(audio, audioClip, currentTime, isPlaying, volume, isMuted);
     else audio.pause();
   }, [audioClip, currentTime, isPlaying, volume, isMuted]);
@@ -103,7 +102,8 @@ export function PreviewPlayer() {
     ? {
         opacity: previewOpacity(visualClip, currentTime),
         filter: buildCssFilter(visualClip.properties.filters, visualClip.id) || undefined,
-        transform: canvas ? buildTransformCss(visualClip.properties.transform, canvas) : undefined,
+        // A visible clip implies a loaded project, so its canvas is known.
+        transform: buildTransformCss(visualClip.properties.transform, canvas!),
       }
     : undefined;
 
@@ -139,7 +139,7 @@ export function PreviewPlayer() {
           <>
             <video
               ref={videoRef}
-              src={videoSrc ?? undefined}
+              src={mediaSrc(visualClip.sourcePath)}
               className="h-full w-full object-contain"
               playsInline
               data-testid="preview-video"

@@ -275,7 +275,7 @@ export function ExportDialog({
                 <Slider
                   aria-label="Quality"
                   value={[crfQuality]}
-                  onValueChange={(v) => setCrfQuality(v[0] ?? 23)}
+                  onValueChange={([v]) => setCrfQuality(v!)}
                   min={CRF_MIN}
                   max={CRF_MAX}
                   step={1}

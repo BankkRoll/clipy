@@ -379,8 +379,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   duplicateTrack: (trackId) => {
-    const source = get().project?.tracks.find((t) => t.id === trackId);
-    if (!source) return null;
+    const project = get().project;
+    const index = project ? project.tracks.findIndex((t) => t.id === trackId) : -1;
+    if (!project || index < 0) return null;
+    const source = project.tracks[index]!;
 
     const newTrackId = generateId();
     const copy: Track = {
@@ -394,12 +396,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       })),
     };
 
-    set((state) => {
-      if (!state.project) return state;
-      const tracks = [...state.project.tracks];
-      tracks.splice(tracks.findIndex((t) => t.id === trackId) + 1, 0, copy);
-      return { project: { ...state.project, tracks }, isDirty: true };
-    });
+    const tracks = [...project.tracks];
+    tracks.splice(index + 1, 0, copy);
+    set({ project: { ...project, tracks }, isDirty: true });
 
     get().pushHistory("Duplicate track");
     return newTrackId;

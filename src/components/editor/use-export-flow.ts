@@ -68,7 +68,8 @@ export function useExportFlow(onFinished?: () => void): ExportFlow {
         succeed(path);
       } catch (err) {
         logger.error("Editor", "Export failed:", err);
-        fail(err instanceof Error ? err.message : String(err));
+        // useExport normalizes every failure to an Error.
+        fail((err as Error).message);
       }
     },
     [runExport, succeed, fail]
