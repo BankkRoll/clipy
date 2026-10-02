@@ -2,6 +2,7 @@ import "@testing-library/jest-dom";
 import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { resetBackend } from "./tauri";
+import { resetAppState } from "./state";
 
 // jsdom does not implement matchMedia; provide a minimal stub for hooks/components
 // that read prefers-color-scheme.
@@ -41,8 +42,29 @@ HTMLMediaElement.prototype.play = function () {
 HTMLMediaElement.prototype.pause = function () {};
 HTMLMediaElement.prototype.load = function () {};
 
-// Ensure React testing-library DOM and any fake backend are torn down between tests.
+// jsdom has no MediaError; the player reads its code constants.
+globalThis.MediaError ??= Object.assign(function MediaError() {}, {
+  MEDIA_ERR_ABORTED: 1,
+  MEDIA_ERR_NETWORK: 2,
+  MEDIA_ERR_DECODE: 3,
+  MEDIA_ERR_SRC_NOT_SUPPORTED: 4,
+}) as unknown as typeof MediaError;
+
+// Fullscreen / Picture-in-Picture are absent from jsdom. Tests that exercise
+// them override these per-test; the defaults just resolve.
+Element.prototype.requestFullscreen ??= function () {
+  return Promise.resolve();
+};
+document.exitFullscreen ??= () => Promise.resolve();
+HTMLVideoElement.prototype.requestPictureInPicture ??= function () {
+  return Promise.resolve({} as PictureInPictureWindow);
+};
+document.exitPictureInPicture ??= () => Promise.resolve();
+
+// Ensure React testing-library DOM, any fake backend, and app-wide state are
+// torn down between tests so nothing leaks across files run in one worker.
 afterEach(() => {
   cleanup();
   resetBackend();
+  resetAppState();
 });
