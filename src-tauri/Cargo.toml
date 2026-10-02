@@ -61,6 +61,10 @@ futures-util = "0.3"
 tempfile = "3"
 zip = "2"
 opener = "0.7"
+# Archive extraction for ffmpeg builds (tar.xz on Linux; also used in tests on
+# every platform).
+tar = "0.4"
+xz2 = "0.1"
 
 # Unix-specific
 [target.'cfg(unix)'.dependencies]

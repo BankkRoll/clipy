@@ -1,718 +1,1137 @@
-//! Binary management service for FFmpeg and yt-dlp
+//! Binary management service for FFmpeg and yt-dlp.
+//!
+//! Responsibilities:
+//! - Locating ffmpeg/ffprobe/yt-dlp (app binaries dir first, then `PATH`).
+//! - Installing them from upstream releases with integrity verification.
+//! - Shared verified-download and archive-extraction helpers (also used by the
+//!   captions service for whisper.cpp).
+//!
+//! ## Integrity model
+//!
+//! Every download is streamed to a temporary file in the destination
+//! directory, hashed while streaming, compared against an expected SHA-256 and
+//! only then atomically renamed into place. Expected hashes come from:
+//! - yt-dlp: the `SHA2-256SUMS` file of the *same* GitHub release tag (the tag
+//!   is resolved from the `releases/latest` redirect first, so the asset and
+//!   the sums file cannot come from different releases);
+//! - ffmpeg on Windows/Linux: BtbN's `checksums.sha256` from the same release;
+//! - ffmpeg on macOS: the `.sha256` file martin-riedl.de publishes next to each
+//!   versioned build (resolved from its `latest` redirect);
+//! - whisper.cpp / models: hashes pinned in the source (see `captions.rs`).
+//!
+//! SECURITY: checksums served from the same origin as the binary protect
+//! against corruption, truncation and tampering by mirrors/CDNs, but not
+//! against a compromise of the release origin itself. Pinned hashes (whisper)
+//! cover that case; for continuously released tools (yt-dlp, ffmpeg) pinning
+//! would freeze users on old versions.
 
 use crate::error::{ClipyError, Result};
 use crate::models::settings::BinaryStatus;
 use crate::utils::paths;
-use std::path::PathBuf;
+use futures_util::StreamExt;
+use sha2::{Digest, Sha256};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::AppHandle;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
+
+// -----------------------------------------------------------------------------
+// Locating binaries
+// -----------------------------------------------------------------------------
+
+/// Platform executable name for `stem` (`ffmpeg` -> `ffmpeg.exe` on Windows).
+fn exe_name(stem: &str) -> String {
+    if cfg!(windows) {
+        format!("{stem}.exe")
+    } else {
+        stem.to_string()
+    }
+}
+
+/// Resolve `name` on `PATH` via `where`/`which`, returning the first hit that
+/// exists.
+fn which(name: &str) -> Option<PathBuf> {
+    let output = Command::new(if cfg!(windows) { "where" } else { "which" })
+        .arg(name)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    first_existing_line(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// First line of `where`/`which` output that names an existing file.
+fn first_existing_line(output: &str) -> Option<PathBuf> {
+    output
+        .lines()
+        .map(|l| PathBuf::from(l.trim()))
+        .find(|p| !p.as_os_str().is_empty() && p.exists())
+}
+
+/// Locate `stem` in `binaries_dir`, falling back to `PATH`.
+fn find_binary(binaries_dir: &Path, stem: &str) -> Option<PathBuf> {
+    let local = binaries_dir.join(exe_name(stem));
+    if local.exists() {
+        return Some(local);
+    }
+    which(&exe_name(stem))
+}
+
+/// Run `path <arg>` and return stdout when it exits successfully.
+fn run_version(path: &Path, arg: &str) -> Option<String> {
+    let output = Command::new(path).arg(arg).output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Parse FFmpeg version from `ffmpeg -version` output.
+fn parse_ffmpeg_version(output: &str) -> Option<String> {
+    let first_line = output.lines().next()?;
+    if !first_line.starts_with("ffmpeg version") {
+        return None;
+    }
+    first_line.split_whitespace().nth(2).map(str::to_string)
+}
+
+/// Parse yt-dlp `--version` output (a single version line).
+fn parse_ytdlp_version(output: &str) -> Option<String> {
+    let v = output.trim();
+    (!v.is_empty()).then(|| v.to_string())
+}
+
+/// Installation status of one binary: (installed, version, path).
+type Probe = (bool, Option<String>, Option<PathBuf>);
+
+/// Probe a binary in `binaries_dir`/`PATH` with `version_arg` and `parse`.
+fn probe_binary(
+    binaries_dir: &Path,
+    stem: &str,
+    version_arg: &str,
+    parse: fn(&str) -> Option<String>,
+) -> Probe {
+    match find_binary(binaries_dir, stem) {
+        Some(path) => match run_version(&path, version_arg).and_then(|o| parse(&o)) {
+            Some(version) => (true, Some(version), Some(path)),
+            None => {
+                debug!("{stem} at {:?} did not report a version", path);
+                (false, None, None)
+            }
+        },
+        None => (false, None, None),
+    }
+}
+
+/// Build a [`BinaryStatus`] for the binaries in `binaries_dir` (or on `PATH`).
+fn check_binaries_in(binaries_dir: &Path) -> BinaryStatus {
+    let ffmpeg = probe_binary(binaries_dir, "ffmpeg", "-version", parse_ffmpeg_version);
+    let ytdlp = probe_binary(binaries_dir, "yt-dlp", "--version", parse_ytdlp_version);
+    BinaryStatus {
+        ffmpeg_installed: ffmpeg.0,
+        ffmpeg_version: ffmpeg.1,
+        ffmpeg_path: ffmpeg.2.map(|p| p.to_string_lossy().to_string()),
+        ytdlp_installed: ytdlp.0,
+        ytdlp_version: ytdlp.1,
+        ytdlp_path: ytdlp.2.map(|p| p.to_string_lossy().to_string()),
+    }
+}
 
 /// Check if required binaries are installed
 pub fn check_binaries(app: &AppHandle) -> Result<BinaryStatus> {
     info!("Checking binary status");
-
-    let binaries_dir = paths::get_binaries_dir(app)?;
-    debug!("Binaries directory: {:?}", binaries_dir);
-
-    debug!("Checking FFmpeg installation...");
-    let ffmpeg_status = check_ffmpeg(&binaries_dir);
-    debug!(
-        "FFmpeg status: installed={}, version={:?}",
-        ffmpeg_status.0, ffmpeg_status.1
-    );
-
-    debug!("Checking yt-dlp installation...");
-    let ytdlp_status = check_ytdlp(&binaries_dir);
-    debug!(
-        "yt-dlp status: installed={}, version={:?}",
-        ytdlp_status.0, ytdlp_status.1
-    );
-
-    let status = BinaryStatus {
-        ffmpeg_installed: ffmpeg_status.0,
-        ffmpeg_version: ffmpeg_status.1,
-        ffmpeg_path: ffmpeg_status.2.map(|p| p.to_string_lossy().to_string()),
-        ytdlp_installed: ytdlp_status.0,
-        ytdlp_version: ytdlp_status.1,
-        ytdlp_path: ytdlp_status.2.map(|p| p.to_string_lossy().to_string()),
-    };
-
+    let status = check_binaries_in(&paths::get_binaries_dir(app)?);
     debug!("Binary status: {:?}", status);
     Ok(status)
 }
 
-/// Check FFmpeg installation
-fn check_ffmpeg(binaries_dir: &PathBuf) -> (bool, Option<String>, Option<PathBuf>) {
-    // Check in binaries directory first
-    let local_path = binaries_dir.join(if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    });
-    debug!("Checking local FFmpeg path: {:?}", local_path);
-
-    if local_path.exists() {
-        debug!("Local FFmpeg binary exists, checking version");
-        if let Some(version) = get_ffmpeg_version(&local_path) {
-            debug!("Local FFmpeg version: {}", version);
-            return (true, Some(version), Some(local_path));
-        }
-        debug!("Failed to get FFmpeg version from local binary");
-    } else {
-        debug!("Local FFmpeg binary not found");
-    }
-
-    // Check system PATH
-    let system_cmd = if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    };
-    debug!("Checking system PATH for: {}", system_cmd);
-    if let Some(version) = get_ffmpeg_version_from_path(system_cmd) {
-        debug!("Found FFmpeg in PATH, version: {}", version);
-        // Find the actual path
-        if let Ok(output) = Command::new(if cfg!(windows) { "where" } else { "which" })
-            .arg(system_cmd)
-            .output()
-        {
-            if output.status.success() {
-                let path_str = String::from_utf8_lossy(&output.stdout);
-                let path = PathBuf::from(path_str.lines().next().unwrap_or("").trim());
-                debug!("FFmpeg path from system: {:?}", path);
-                return (true, Some(version), Some(path));
-            }
-        }
-        return (true, Some(version), None);
-    }
-
-    debug!("FFmpeg not found in local directory or system PATH");
-    (false, None, None)
-}
-
-/// Check yt-dlp installation
-fn check_ytdlp(binaries_dir: &PathBuf) -> (bool, Option<String>, Option<PathBuf>) {
-    // Check in binaries directory first
-    let local_path = binaries_dir.join(if cfg!(windows) {
-        "yt-dlp.exe"
-    } else {
-        "yt-dlp"
-    });
-    debug!("Checking local yt-dlp path: {:?}", local_path);
-
-    if local_path.exists() {
-        debug!("Local yt-dlp binary exists, checking version");
-        if let Some(version) = get_ytdlp_version(&local_path) {
-            debug!("Local yt-dlp version: {}", version);
-            return (true, Some(version), Some(local_path));
-        }
-        debug!("Failed to get yt-dlp version from local binary");
-    } else {
-        debug!("Local yt-dlp binary not found");
-    }
-
-    // Check system PATH
-    let system_cmd = if cfg!(windows) {
-        "yt-dlp.exe"
-    } else {
-        "yt-dlp"
-    };
-    debug!("Checking system PATH for: {}", system_cmd);
-    if let Some(version) = get_ytdlp_version_from_path(system_cmd) {
-        debug!("Found yt-dlp in PATH, version: {}", version);
-        if let Ok(output) = Command::new(if cfg!(windows) { "where" } else { "which" })
-            .arg(system_cmd)
-            .output()
-        {
-            if output.status.success() {
-                let path_str = String::from_utf8_lossy(&output.stdout);
-                let path = PathBuf::from(path_str.lines().next().unwrap_or("").trim());
-                debug!("yt-dlp path from system: {:?}", path);
-                return (true, Some(version), Some(path));
-            }
-        }
-        return (true, Some(version), None);
-    }
-
-    debug!("yt-dlp not found in local directory or system PATH");
-    (false, None, None)
-}
-
-/// Get FFmpeg version from a specific path
-fn get_ffmpeg_version(path: &PathBuf) -> Option<String> {
-    let output = Command::new(path).arg("-version").output().ok()?;
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        parse_ffmpeg_version(&stdout)
-    } else {
-        None
-    }
-}
-
-/// Get FFmpeg version from system PATH
-fn get_ffmpeg_version_from_path(cmd: &str) -> Option<String> {
-    let output = Command::new(cmd).arg("-version").output().ok()?;
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        parse_ffmpeg_version(&stdout)
-    } else {
-        None
-    }
-}
-
-/// Parse FFmpeg version from output
-fn parse_ffmpeg_version(output: &str) -> Option<String> {
-    // Output format: "ffmpeg version X.X.X ..."
-    let first_line = output.lines().next()?;
-    if first_line.contains("ffmpeg version") {
-        let parts: Vec<&str> = first_line.split_whitespace().collect();
-        if parts.len() >= 3 {
-            return Some(parts[2].to_string());
-        }
-    }
-    None
-}
-
-/// Get yt-dlp version from a specific path
-fn get_ytdlp_version(path: &PathBuf) -> Option<String> {
-    let output = Command::new(path).arg("--version").output().ok()?;
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Some(stdout.trim().to_string())
-    } else {
-        None
-    }
-}
-
-/// Get yt-dlp version from system PATH
-fn get_ytdlp_version_from_path(cmd: &str) -> Option<String> {
-    let output = Command::new(cmd).arg("--version").output().ok()?;
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Some(stdout.trim().to_string())
-    } else {
-        None
-    }
-}
-
 /// Get the path to FFmpeg binary
 pub fn get_ffmpeg_path(app: &AppHandle) -> Result<PathBuf> {
-    debug!("Getting FFmpeg path");
-    let binaries_dir = paths::get_binaries_dir(app)?;
-    let local_path = binaries_dir.join(if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    });
-
-    if local_path.exists() {
-        debug!("Using local FFmpeg: {:?}", local_path);
-        return Ok(local_path);
-    }
-
-    // Try system PATH
-    let system_cmd = if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    };
-    debug!("Local FFmpeg not found, checking system PATH");
-    if let Ok(output) = Command::new(if cfg!(windows) { "where" } else { "which" })
-        .arg(system_cmd)
-        .output()
-    {
-        if output.status.success() {
-            let path_str = String::from_utf8_lossy(&output.stdout);
-            let path = PathBuf::from(path_str.lines().next().unwrap_or("").trim());
-            if path.exists() {
-                debug!("Using system FFmpeg: {:?}", path);
-                return Ok(path);
-            }
-        }
-    }
-
-    debug!("FFmpeg not found anywhere");
-    Err(ClipyError::BinaryNotFound("FFmpeg not found".into()))
+    find_binary(&paths::get_binaries_dir(app)?, "ffmpeg")
+        .ok_or_else(|| ClipyError::BinaryNotFound("FFmpeg not found".into()))
 }
 
 /// Get the path to yt-dlp binary
 pub fn get_ytdlp_path(app: &AppHandle) -> Result<PathBuf> {
-    debug!("Getting yt-dlp path");
-    let binaries_dir = paths::get_binaries_dir(app)?;
-    let local_path = binaries_dir.join(if cfg!(windows) {
-        "yt-dlp.exe"
-    } else {
-        "yt-dlp"
-    });
-
-    if local_path.exists() {
-        debug!("Using local yt-dlp: {:?}", local_path);
-        return Ok(local_path);
-    }
-
-    // Try system PATH
-    let system_cmd = if cfg!(windows) {
-        "yt-dlp.exe"
-    } else {
-        "yt-dlp"
-    };
-    debug!("Local yt-dlp not found, checking system PATH");
-    if let Ok(output) = Command::new(if cfg!(windows) { "where" } else { "which" })
-        .arg(system_cmd)
-        .output()
-    {
-        if output.status.success() {
-            let path_str = String::from_utf8_lossy(&output.stdout);
-            let path = PathBuf::from(path_str.lines().next().unwrap_or("").trim());
-            if path.exists() {
-                debug!("Using system yt-dlp: {:?}", path);
-                return Ok(path);
-            }
-        }
-    }
-
-    debug!("yt-dlp not found anywhere");
-    Err(ClipyError::BinaryNotFound("yt-dlp not found".into()))
+    find_binary(&paths::get_binaries_dir(app)?, "yt-dlp")
+        .ok_or_else(|| ClipyError::BinaryNotFound("yt-dlp not found".into()))
 }
 
 /// Get the path to FFprobe binary (comes bundled with FFmpeg)
 pub fn get_ffprobe_path(app: &AppHandle) -> Result<PathBuf> {
-    debug!("Getting FFprobe path");
-    let binaries_dir = paths::get_binaries_dir(app)?;
-    let local_path = binaries_dir.join(if cfg!(windows) {
-        "ffprobe.exe"
-    } else {
-        "ffprobe"
-    });
-
-    if local_path.exists() {
-        debug!("Using local FFprobe: {:?}", local_path);
-        return Ok(local_path);
-    }
-
-    // Try system PATH
-    let system_cmd = if cfg!(windows) {
-        "ffprobe.exe"
-    } else {
-        "ffprobe"
-    };
-    debug!("Local FFprobe not found, checking system PATH");
-    if let Ok(output) = Command::new(if cfg!(windows) { "where" } else { "which" })
-        .arg(system_cmd)
-        .output()
-    {
-        if output.status.success() {
-            let path_str = String::from_utf8_lossy(&output.stdout);
-            let path = PathBuf::from(path_str.lines().next().unwrap_or("").trim());
-            if path.exists() {
-                debug!("Using system FFprobe: {:?}", path);
-                return Ok(path);
-            }
-        }
-    }
-
-    // If FFprobe not found, check if it's next to FFmpeg
-    debug!("FFprobe not in PATH, checking alongside FFmpeg");
-    if let Ok(ffmpeg_path) = get_ffmpeg_path(app) {
-        if let Some(parent) = ffmpeg_path.parent() {
-            let ffprobe_path = parent.join(if cfg!(windows) {
-                "ffprobe.exe"
-            } else {
-                "ffprobe"
-            });
-            debug!("Checking FFprobe next to FFmpeg: {:?}", ffprobe_path);
-            if ffprobe_path.exists() {
-                debug!("Found FFprobe next to FFmpeg: {:?}", ffprobe_path);
-                return Ok(ffprobe_path);
-            }
-        }
-    }
-
-    debug!("FFprobe not found anywhere");
-    Err(ClipyError::BinaryNotFound("FFprobe not found".into()))
+    let dir = paths::get_binaries_dir(app)?;
+    find_binary(&dir, "ffprobe")
+        .or_else(|| {
+            let ffmpeg = find_binary(&dir, "ffmpeg")?;
+            let beside = ffmpeg.parent()?.join(exe_name("ffprobe"));
+            beside.exists().then_some(beside)
+        })
+        .ok_or_else(|| ClipyError::BinaryNotFound("FFprobe not found".into()))
 }
 
-/// Download and install FFmpeg
-pub async fn install_ffmpeg(app: &AppHandle) -> Result<PathBuf> {
-    info!("Installing FFmpeg");
+// -----------------------------------------------------------------------------
+// Checksums
+// -----------------------------------------------------------------------------
 
-    let binaries_dir = paths::get_binaries_dir(app)?;
-    let target_path = binaries_dir.join(if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    });
-    debug!("FFmpeg target path: {:?}", target_path);
-
-    #[cfg(target_os = "windows")]
-    {
-        let download_url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip";
-        download_and_extract_ffmpeg(download_url, &binaries_dir, &target_path).await?;
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let download_url = "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip";
-        download_and_extract_ffmpeg(download_url, &binaries_dir, &target_path).await?;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let download_url =
-            "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz";
-        download_and_extract_ffmpeg(download_url, &binaries_dir, &target_path).await?;
-    }
-
-    info!("FFmpeg installed to {:?}", target_path);
-    Ok(target_path)
+/// Whether `s` is a 64-character hex SHA-256 digest.
+pub(crate) fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// Download and install yt-dlp
-pub async fn install_ytdlp(app: &AppHandle) -> Result<PathBuf> {
-    info!("Installing yt-dlp");
-
-    let binaries_dir = paths::get_binaries_dir(app)?;
-    let target_path = binaries_dir.join(if cfg!(windows) {
-        "yt-dlp.exe"
-    } else {
-        "yt-dlp"
-    });
-    debug!("yt-dlp target path: {:?}", target_path);
-
-    #[cfg(target_os = "windows")]
-    let download_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
-
-    #[cfg(target_os = "macos")]
-    let download_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos";
-
-    #[cfg(target_os = "linux")]
-    let download_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
-
-    download_binary(download_url, &target_path).await?;
-
-    // Make executable on Unix
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&target_path)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&target_path, perms)?;
-    }
-
-    info!("yt-dlp installed to {:?}", target_path);
-    Ok(target_path)
-}
-
-/// Download a binary file
-async fn download_binary(url: &str, target_path: &PathBuf) -> Result<()> {
-    debug!("Downloading binary from {}", url);
-
-    let response = reqwest::get(url)
-        .await
-        .map_err(|e| ClipyError::Other(format!("Failed to download: {}", e)))?;
-
-    if !response.status().is_success() {
-        return Err(ClipyError::Other(format!(
-            "Download failed with status: {}",
-            response.status()
-        )));
-    }
-
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| ClipyError::Other(format!("Failed to read response: {}", e)))?;
-
-    std::fs::write(target_path, &bytes)
-        .map_err(|e| ClipyError::Other(format!("Failed to write binary: {}", e)))?;
-
-    Ok(())
-}
-
-/// Download and extract FFmpeg (platform-specific).
-///
-/// Downloads the archive at `url` to a temp file inside `binaries_dir`, then
-/// extracts the `ffmpeg` (and `ffprobe`) binaries into `binaries_dir`, placing
-/// the ffmpeg binary at `target_path`. The archives are nested, so entries are
-/// matched by basename rather than full path.
-///
-/// - Windows/macOS: `.zip` archives, extracted via the `zip` crate.
-/// - Linux: `.tar.xz` archive, decompressed with `xz2` then untarred with `tar`.
-async fn download_and_extract_ffmpeg(
-    url: &str,
-    binaries_dir: &PathBuf,
-    target_path: &PathBuf,
-) -> Result<()> {
-    // Download the archive
-    debug!("Downloading FFmpeg from {}", url);
-
-    let response = reqwest::get(url)
-        .await
-        .map_err(|e| ClipyError::Other(format!("Failed to download: {}", e)))?;
-
-    if !response.status().is_success() {
-        return Err(ClipyError::Other(format!(
-            "Download failed with status: {}",
-            response.status()
-        )));
-    }
-
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| ClipyError::Other(format!("Failed to read response: {}", e)))?;
-
-    // Write to temp file (memory-friendly: extraction streams from this file)
-    let ext = if cfg!(target_os = "linux") {
-        "tar.xz"
-    } else {
-        "zip"
-    };
-    let temp_archive = binaries_dir.join(format!("ffmpeg_temp.{}", ext));
-    std::fs::write(&temp_archive, &bytes)
-        .map_err(|e| ClipyError::Other(format!("Failed to write archive: {}", e)))?;
-    drop(bytes);
-
-    // Extract on a blocking thread (zip/tar are synchronous, blocking I/O).
-    let temp_archive_extract = temp_archive.clone();
-    let binaries_dir_extract = binaries_dir.clone();
-    let target_path_extract = target_path.clone();
-    let extract_result = tokio::task::spawn_blocking(move || {
-        extract_ffmpeg_archive(
-            &temp_archive_extract,
-            &binaries_dir_extract,
-            &target_path_extract,
-        )
+/// Find the SHA-256 for `file_name` in a `sha256sum`-style listing
+/// (`<hash>  <name>` or `<hash> *<name>`, one per line). Paths in the listing
+/// are compared by basename. Returns the lowercase digest.
+pub(crate) fn parse_checksum_file(listing: &str, file_name: &str) -> Option<String> {
+    listing.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let hash = parts.next()?;
+        let name = parts.next()?.trim_start_matches('*');
+        let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+        (base == file_name && is_sha256_hex(hash)).then(|| hash.to_ascii_lowercase())
     })
-    .await
-    .map_err(|e| ClipyError::Other(format!("Extraction task failed: {}", e)))?;
+}
 
-    // Clean up temp archive regardless of extraction outcome.
-    let _ = std::fs::remove_file(&temp_archive);
+/// Compare a computed digest with the expected one (case-insensitive).
+pub(crate) fn verify_sha256(actual: &str, expected: &str, what: &str) -> Result<()> {
+    if is_sha256_hex(expected) && actual.eq_ignore_ascii_case(expected) {
+        Ok(())
+    } else {
+        Err(ClipyError::Other(format!(
+            "Checksum mismatch for {what}: expected {expected}, got {actual}"
+        )))
+    }
+}
 
-    extract_result?;
+/// SHA-256 of a file on disk, as lowercase hex.
+#[cfg(test)]
+pub(crate) fn sha256_file(path: &Path) -> Result<String> {
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)?;
+    Ok(hex::encode(hasher.finalize()))
+}
 
-    if !target_path.exists() {
-        return Err(ClipyError::Other(
-            "FFmpeg binary not found in downloaded archive".into(),
-        ));
+// -----------------------------------------------------------------------------
+// Download helpers
+// -----------------------------------------------------------------------------
+
+/// Upper bound for a downloaded binary or archive.
+const MAX_BINARY_DOWNLOAD: u64 = 512 * 1024 * 1024;
+
+/// Shared HTTP client (redirects followed; GitHub requires a User-Agent).
+pub(crate) fn http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .user_agent(concat!("Clipy/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| ClipyError::Other(format!("HTTP client error: {e}")))
+}
+
+/// Fetch a small text resource (checksum listings).
+async fn fetch_text(client: &reqwest::Client, url: &str) -> Result<String> {
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| ClipyError::Other(format!("Failed to fetch {url}: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(ClipyError::Other(format!(
+            "Failed to fetch {url}: HTTP {}",
+            resp.status()
+        )));
+    }
+    resp.text()
+        .await
+        .map_err(|e| ClipyError::Other(format!("Failed to read {url}: {e}")))
+}
+
+/// Return the `Location` of a redirect at `url` without following it.
+async fn resolve_redirect(url: &str) -> Result<String> {
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("Clipy/", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| ClipyError::Other(format!("HTTP client error: {e}")))?;
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| ClipyError::Other(format!("Failed to resolve {url}: {e}")))?;
+    resp.headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            ClipyError::Other(format!(
+                "Expected a redirect from {url}, got HTTP {}",
+                resp.status()
+            ))
+        })
+}
+
+/// Stream `url` into a temp file inside `dir`, hashing as it goes. Returns the
+/// temp file (deleted on drop unless persisted) and its SHA-256.
+async fn download_to_temp(
+    client: &reqwest::Client,
+    url: &str,
+    dir: &Path,
+    max_bytes: u64,
+) -> Result<(tempfile::NamedTempFile, String)> {
+    std::fs::create_dir_all(dir)?;
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| ClipyError::Other(format!("Failed to download {url}: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(ClipyError::Other(format!(
+            "Download of {url} failed: HTTP {}",
+            resp.status()
+        )));
+    }
+    if resp.content_length().is_some_and(|len| len > max_bytes) {
+        return Err(ClipyError::Other(format!(
+            "{url} exceeds {max_bytes} bytes"
+        )));
     }
 
-    info!("FFmpeg extracted to {:?}", target_path);
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".clipy-download-")
+        .tempfile_in(dir)?;
+    let mut hasher = Sha256::new();
+    let mut written: u64 = 0;
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| ClipyError::Other(format!("Download interrupted: {e}")))?;
+        written += chunk.len() as u64;
+        if written > max_bytes {
+            return Err(ClipyError::Other(format!(
+                "{url} exceeds {max_bytes} bytes"
+            )));
+        }
+        hasher.update(&chunk);
+        tmp.write_all(&chunk)?;
+    }
+    tmp.as_file().sync_all()?;
+    Ok((tmp, hex::encode(hasher.finalize())))
+}
+
+/// Download `url` to `dest`, verifying its SHA-256 before atomically moving it
+/// into place. Nothing is written at `dest` if verification fails.
+pub(crate) async fn download_verified(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+    expected_sha256: &str,
+    max_bytes: u64,
+) -> Result<()> {
+    let dir = dest
+        .parent()
+        .ok_or_else(|| ClipyError::Other(format!("No parent for {}", dest.display())))?;
+    debug!("Downloading {} -> {:?}", url, dest);
+    let (tmp, actual) = download_to_temp(client, url, dir, max_bytes).await?;
+    verify_sha256(&actual, expected_sha256, url)?;
+    tmp.persist(dest)
+        .map_err(|e| ClipyError::Other(format!("Failed to install {}: {}", dest.display(), e)))?;
     Ok(())
 }
 
-/// Synchronous extraction of the ffmpeg/ffprobe binaries from a downloaded archive.
-#[cfg(not(target_os = "linux"))]
-fn extract_ffmpeg_archive(
-    archive: &PathBuf,
-    binaries_dir: &PathBuf,
-    target_path: &PathBuf,
-) -> Result<()> {
-    extract_ffmpeg_zip(archive, binaries_dir, target_path)
-}
-
-/// Synchronous extraction of the ffmpeg/ffprobe binaries from a downloaded archive.
-#[cfg(target_os = "linux")]
-fn extract_ffmpeg_archive(
-    archive: &PathBuf,
-    binaries_dir: &PathBuf,
-    target_path: &PathBuf,
-) -> Result<()> {
-    extract_ffmpeg_tar_xz(archive, binaries_dir, target_path)
-}
-
-/// Return true if `name` is the basename `ffmpeg`/`ffmpeg.exe` or `ffprobe`/`ffprobe.exe`.
-/// Returns the destination filename to use, or None if this entry is not wanted.
-fn ffmpeg_entry_dest(name: &str) -> Option<&'static str> {
-    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
-    match base {
-        "ffmpeg" | "ffmpeg.exe" => Some(if cfg!(windows) {
-            "ffmpeg.exe"
-        } else {
-            "ffmpeg"
-        }),
-        "ffprobe" | "ffprobe.exe" => Some(if cfg!(windows) {
-            "ffprobe.exe"
-        } else {
-            "ffprobe"
-        }),
-        _ => None,
-    }
-}
-
-/// Set 0o755 permissions on an extracted unix binary.
+/// Set 0o755 permissions on an installed unix binary.
 #[cfg(unix)]
-fn set_executable(path: &PathBuf) -> Result<()> {
+fn set_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    let mut perms = std::fs::metadata(path)?.permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(path, perms)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn set_executable(_path: &PathBuf) -> Result<()> {
+fn set_executable(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Extract ffmpeg/ffprobe from a `.zip` archive (Windows/macOS).
-#[cfg(not(target_os = "linux"))]
-fn extract_ffmpeg_zip(
-    archive: &PathBuf,
-    binaries_dir: &PathBuf,
-    target_path: &PathBuf,
-) -> Result<()> {
-    let file = std::fs::File::open(archive)
-        .map_err(|e| ClipyError::Other(format!("Failed to open archive: {}", e)))?;
+// -----------------------------------------------------------------------------
+// Archive extraction
+// -----------------------------------------------------------------------------
+
+/// Decides which archive entries to keep: maps an entry's path inside the
+/// archive to the basename to write, or `None` to skip it.
+pub(crate) type EntrySelector<'a> = &'a dyn Fn(&str) -> Option<String>;
+
+/// Write one archive entry to `dest_dir/name` atomically (temp + rename).
+fn write_entry(reader: &mut dyn std::io::Read, dest_dir: &Path, name: &str) -> Result<PathBuf> {
+    // SECURITY: `name` comes from the selector, which only returns fixed
+    // basenames; reject anything with separators or traversal regardless.
+    if name.is_empty() || name.contains(['/', '\\']) || name == "." || name == ".." {
+        return Err(ClipyError::Other(format!(
+            "Unsafe archive entry name {name:?}"
+        )));
+    }
+    let dest = dest_dir.join(name);
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".clipy-extract-")
+        .tempfile_in(dest_dir)?;
+    std::io::copy(reader, &mut tmp)?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(&dest)
+        .map_err(|e| ClipyError::Other(format!("Failed to install {}: {}", dest.display(), e)))?;
+    set_executable(&dest)?;
+    Ok(dest)
+}
+
+/// Extract selected regular-file entries of a zip archive into `dest_dir`.
+///
+/// Directory and symlink entries are ignored, and every output is written by
+/// basename only, so `../` (zip-slip) entries cannot escape `dest_dir`.
+pub(crate) fn extract_zip(
+    archive: &Path,
+    dest_dir: &Path,
+    select: EntrySelector,
+) -> Result<Vec<PathBuf>> {
+    let file = std::fs::File::open(archive)?;
     let mut zip = zip::ZipArchive::new(file)
         .map_err(|e| ClipyError::Other(format!("Failed to read zip archive: {}", e)))?;
-
-    let mut found_ffmpeg = false;
+    let mut written = Vec::new();
     for i in 0..zip.len() {
         let mut entry = zip
             .by_index(i)
             .map_err(|e| ClipyError::Other(format!("Failed to read zip entry: {}", e)))?;
-
-        if !entry.is_file() {
+        if !entry.is_file() || entry.is_symlink() {
             continue;
         }
-
-        let entry_name = entry.name().to_string();
-        let dest_name = match ffmpeg_entry_dest(&entry_name) {
-            Some(name) => name,
-            None => continue,
+        let Some(name) = select(entry.name()) else {
+            continue;
         };
-
-        let dest_path = if dest_name
-            == target_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-        {
-            target_path.clone()
-        } else {
-            binaries_dir.join(dest_name)
-        };
-
-        debug!("Extracting {} -> {:?}", entry_name, dest_path);
-        let mut out = std::fs::File::create(&dest_path)
-            .map_err(|e| ClipyError::Other(format!("Failed to create {:?}: {}", dest_path, e)))?;
-        std::io::copy(&mut entry, &mut out)
-            .map_err(|e| ClipyError::Other(format!("Failed to extract {}: {}", entry_name, e)))?;
-        drop(out);
-
-        set_executable(&dest_path)?;
-
-        if dest_name.starts_with("ffmpeg") {
-            found_ffmpeg = true;
-        }
+        written.push(write_entry(&mut entry, dest_dir, &name)?);
     }
-
-    if !found_ffmpeg {
-        return Err(ClipyError::Other(
-            "ffmpeg binary not found inside zip archive".into(),
-        ));
-    }
-
-    Ok(())
+    Ok(written)
 }
 
-/// Extract ffmpeg/ffprobe from a `.tar.xz` archive (Linux).
-#[cfg(target_os = "linux")]
-fn extract_ffmpeg_tar_xz(
-    archive: &PathBuf,
-    binaries_dir: &PathBuf,
-    target_path: &PathBuf,
-) -> Result<()> {
-    let file = std::fs::File::open(archive)
-        .map_err(|e| ClipyError::Other(format!("Failed to open archive: {}", e)))?;
-    let decompressor = xz2::read::XzDecoder::new(std::io::BufReader::new(file));
-    let mut tar = tar::Archive::new(decompressor);
-
-    let mut found_ffmpeg = false;
-    let entries = tar
+/// Extract selected regular-file entries of a `.tar.xz` archive into
+/// `dest_dir`, with the same guarantees as [`extract_zip`] (symlinks, hard
+/// links and devices are skipped).
+pub(crate) fn extract_tar_xz(
+    archive: &Path,
+    dest_dir: &Path,
+    select: EntrySelector,
+) -> Result<Vec<PathBuf>> {
+    let file = std::fs::File::open(archive)?;
+    let mut tar = tar::Archive::new(xz2::read::XzDecoder::new(std::io::BufReader::new(file)));
+    let mut written = Vec::new();
+    for entry in tar
         .entries()
-        .map_err(|e| ClipyError::Other(format!("Failed to read tar entries: {}", e)))?;
-
-    for entry in entries {
+        .map_err(|e| ClipyError::Other(format!("Failed to read tar entries: {}", e)))?
+    {
         let mut entry =
             entry.map_err(|e| ClipyError::Other(format!("Failed to read tar entry: {}", e)))?;
-
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
         let path = entry
             .path()
-            .map_err(|e| ClipyError::Other(format!("Failed to read tar entry path: {}", e)))?;
-        let entry_name = path.to_string_lossy().to_string();
-
-        let dest_name = match ffmpeg_entry_dest(&entry_name) {
-            Some(name) => name,
-            None => continue,
+            .map_err(|e| ClipyError::Other(format!("Bad tar entry path: {}", e)))?
+            .to_string_lossy()
+            .into_owned();
+        let Some(name) = select(&path) else {
+            continue;
         };
+        written.push(write_entry(&mut entry, dest_dir, &name)?);
+    }
+    Ok(written)
+}
 
-        let dest_path = if dest_name
-            == target_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-        {
-            target_path.clone()
-        } else {
-            binaries_dir.join(dest_name)
-        };
+/// Basename of an archive entry path (either separator).
+pub(crate) fn entry_basename(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
+}
 
-        debug!("Extracting {} -> {:?}", entry_name, dest_path);
-        let mut out = std::fs::File::create(&dest_path)
-            .map_err(|e| ClipyError::Other(format!("Failed to create {:?}: {}", dest_path, e)))?;
-        std::io::copy(&mut entry, &mut out)
-            .map_err(|e| ClipyError::Other(format!("Failed to extract {}: {}", entry_name, e)))?;
-        drop(out);
+/// Selector for ffmpeg archives: keeps `ffmpeg` and `ffprobe` (any platform
+/// suffix) and renames them for the current platform.
+fn ffmpeg_entry_dest(name: &str) -> Option<String> {
+    match entry_basename(name) {
+        "ffmpeg" | "ffmpeg.exe" => Some(exe_name("ffmpeg")),
+        "ffprobe" | "ffprobe.exe" => Some(exe_name("ffprobe")),
+        _ => None,
+    }
+}
 
-        set_executable(&dest_path)?;
+// -----------------------------------------------------------------------------
+// Download sources
+// -----------------------------------------------------------------------------
 
-        if dest_name.starts_with("ffmpeg") {
-            found_ffmpeg = true;
+const YTDLP_RELEASES: &str = "https://github.com/yt-dlp/yt-dlp/releases";
+const BTBN_LATEST: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest";
+const MARTIN_RIEDL: &str = "https://ffmpeg.martin-riedl.de";
+
+/// yt-dlp release asset for an OS/arch (`std::env::consts` values).
+///
+/// Linux uses the standalone `yt-dlp_linux*` builds rather than the `yt-dlp`
+/// zipapp, which needs a system Python.
+fn ytdlp_asset_name(os: &str, arch: &str) -> Option<&'static str> {
+    match (os, arch) {
+        ("windows", "x86_64") => Some("yt-dlp.exe"),
+        ("windows", "aarch64") => Some("yt-dlp_arm64.exe"),
+        ("windows", "x86") => Some("yt-dlp_x86.exe"),
+        ("macos", _) => Some("yt-dlp_macos"),
+        ("linux", "x86_64") => Some("yt-dlp_linux"),
+        ("linux", "aarch64") => Some("yt-dlp_linux_aarch64"),
+        _ => None,
+    }
+}
+
+/// Extract the tag from a GitHub `releases/latest` redirect target
+/// (`.../releases/tag/<tag>`).
+fn parse_release_tag(location: &str) -> Option<String> {
+    let tag = location.split("/releases/tag/").nth(1)?;
+    let tag = tag.split(['?', '#', '/']).next()?;
+    let ok = !tag.is_empty()
+        && tag
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'));
+    ok.then(|| tag.to_string())
+}
+
+/// Where to obtain ffmpeg/ffprobe for a platform.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FfmpegSource {
+    /// One BtbN archive containing both binaries, verified with the release's
+    /// `checksums.sha256`.
+    BtbN { asset: &'static str },
+    /// martin-riedl.de: separate `ffmpeg.zip`/`ffprobe.zip` per arch, each
+    /// with a `.sha256` next to the resolved versioned URL.
+    MartinRiedl { arch: &'static str },
+}
+
+/// Select the ffmpeg source for an OS/arch (`std::env::consts` values).
+fn ffmpeg_source(os: &str, arch: &str) -> Option<FfmpegSource> {
+    let btbn = |asset| Some(FfmpegSource::BtbN { asset });
+    match (os, arch) {
+        ("windows", "x86_64") => btbn("ffmpeg-master-latest-win64-gpl.zip"),
+        ("windows", "aarch64") => btbn("ffmpeg-master-latest-winarm64-gpl.zip"),
+        ("linux", "x86_64") => btbn("ffmpeg-master-latest-linux64-gpl.tar.xz"),
+        ("linux", "aarch64") => btbn("ffmpeg-master-latest-linuxarm64-gpl.tar.xz"),
+        ("macos", "x86_64") => Some(FfmpegSource::MartinRiedl { arch: "amd64" }),
+        ("macos", "aarch64") => Some(FfmpegSource::MartinRiedl { arch: "arm64" }),
+        _ => None,
+    }
+}
+
+/// martin-riedl.de redirect URL for the latest release build of `tool`.
+fn martin_riedl_latest_url(arch: &str, tool: &str) -> String {
+    format!("{MARTIN_RIEDL}/redirect/latest/macos/{arch}/release/{tool}.zip")
+}
+
+/// Absolute download URL for a martin-riedl.de redirect `Location`, which may
+/// be relative (`/download/...`). Only that host is accepted.
+fn martin_riedl_resolve(location: &str) -> Option<String> {
+    let base = url::Url::parse(MARTIN_RIEDL).ok()?;
+    let resolved = base.join(location).ok()?;
+    (resolved.scheme() == "https" && resolved.host_str() == base.host_str())
+        .then(|| resolved.to_string())
+}
+
+// -----------------------------------------------------------------------------
+// Installers
+// -----------------------------------------------------------------------------
+
+/// Download and install FFmpeg
+pub async fn install_ffmpeg(app: &AppHandle) -> Result<PathBuf> {
+    let dir = paths::get_binaries_dir(app)?;
+    install_ffmpeg_into(&dir, std::env::consts::OS, std::env::consts::ARCH).await
+}
+
+/// Install ffmpeg + ffprobe for `os`/`arch` into `binaries_dir`.
+async fn install_ffmpeg_into(binaries_dir: &Path, os: &str, arch: &str) -> Result<PathBuf> {
+    info!("Installing FFmpeg for {os}/{arch}");
+    std::fs::create_dir_all(binaries_dir)?;
+    let source = ffmpeg_source(os, arch).ok_or_else(|| {
+        ClipyError::Other(format!(
+            "No verified FFmpeg build for {os}/{arch}; install ffmpeg on PATH"
+        ))
+    })?;
+    let client = http_client()?;
+
+    match source {
+        FfmpegSource::BtbN { asset } => {
+            let sums = fetch_text(&client, &format!("{BTBN_LATEST}/checksums.sha256")).await?;
+            let expected = parse_checksum_file(&sums, asset).ok_or_else(|| {
+                ClipyError::Other(format!("{asset} missing from checksums.sha256"))
+            })?;
+            let archive = download_archive(
+                &client,
+                &format!("{BTBN_LATEST}/{asset}"),
+                binaries_dir,
+                &expected,
+            )
+            .await?;
+            let is_zip = asset.ends_with(".zip");
+            let dir = binaries_dir.to_path_buf();
+            let path = archive.path().to_path_buf();
+            let written = tokio::task::spawn_blocking(move || {
+                if is_zip {
+                    extract_zip(&path, &dir, &ffmpeg_entry_dest)
+                } else {
+                    extract_tar_xz(&path, &dir, &ffmpeg_entry_dest)
+                }
+            })
+            .await
+            .map_err(|e| ClipyError::Other(format!("Extraction task failed: {}", e)))??;
+            debug!("Extracted {:?}", written);
+        }
+        FfmpegSource::MartinRiedl { arch } => {
+            for tool in ["ffmpeg", "ffprobe"] {
+                let location = resolve_redirect(&martin_riedl_latest_url(arch, tool)).await?;
+                let url = martin_riedl_resolve(&location).ok_or_else(|| {
+                    ClipyError::Other(format!("Unexpected FFmpeg redirect: {location}"))
+                })?;
+                let sums = fetch_text(&client, &format!("{url}.sha256")).await?;
+                let zip_name = format!("{tool}.zip");
+                let expected = parse_checksum_file(&sums, &zip_name).ok_or_else(|| {
+                    ClipyError::Other(format!("No checksum for {zip_name} at {url}.sha256"))
+                })?;
+                let archive = download_archive(&client, &url, binaries_dir, &expected).await?;
+                let dir = binaries_dir.to_path_buf();
+                let path = archive.path().to_path_buf();
+                tokio::task::spawn_blocking(move || extract_zip(&path, &dir, &ffmpeg_entry_dest))
+                    .await
+                    .map_err(|e| ClipyError::Other(format!("Extraction task failed: {}", e)))??;
+            }
         }
     }
 
-    if !found_ffmpeg {
+    let target = binaries_dir.join(exe_name("ffmpeg"));
+    if !target.exists() {
         return Err(ClipyError::Other(
-            "ffmpeg binary not found inside tar.xz archive".into(),
+            "FFmpeg binary not found in downloaded archive".into(),
         ));
     }
-
-    Ok(())
+    info!("FFmpeg installed to {:?}", target);
+    Ok(target)
 }
 
-/// Update yt-dlp to latest version
+/// Download an archive into a verified temp file inside `dir` (removed when
+/// the returned handle drops).
+async fn download_archive(
+    client: &reqwest::Client,
+    url: &str,
+    dir: &Path,
+    expected_sha256: &str,
+) -> Result<tempfile::NamedTempFile> {
+    let (tmp, actual) = download_to_temp(client, url, dir, MAX_BINARY_DOWNLOAD).await?;
+    verify_sha256(&actual, expected_sha256, url)?;
+    Ok(tmp)
+}
+
+/// Download and install yt-dlp
+pub async fn install_ytdlp(app: &AppHandle) -> Result<PathBuf> {
+    let dir = paths::get_binaries_dir(app)?;
+    install_ytdlp_into(&dir, std::env::consts::OS, std::env::consts::ARCH).await
+}
+
+/// Install the latest verified yt-dlp for `os`/`arch` into `binaries_dir`.
+async fn install_ytdlp_into(binaries_dir: &Path, os: &str, arch: &str) -> Result<PathBuf> {
+    info!("Installing yt-dlp for {os}/{arch}");
+    std::fs::create_dir_all(binaries_dir)?;
+    let asset = ytdlp_asset_name(os, arch).ok_or_else(|| {
+        ClipyError::Other(format!(
+            "No yt-dlp build for {os}/{arch}; install it on PATH"
+        ))
+    })?;
+    let client = http_client()?;
+
+    let location = resolve_redirect(&format!("{YTDLP_RELEASES}/latest")).await?;
+    let tag = parse_release_tag(&location)
+        .ok_or_else(|| ClipyError::Other(format!("Unexpected yt-dlp redirect: {location}")))?;
+    let sums = fetch_text(
+        &client,
+        &format!("{YTDLP_RELEASES}/download/{tag}/SHA2-256SUMS"),
+    )
+    .await?;
+    let expected = parse_checksum_file(&sums, asset)
+        .ok_or_else(|| ClipyError::Other(format!("{asset} missing from SHA2-256SUMS ({tag})")))?;
+
+    let target = binaries_dir.join(exe_name("yt-dlp"));
+    download_verified(
+        &client,
+        &format!("{YTDLP_RELEASES}/download/{tag}/{asset}"),
+        &target,
+        &expected,
+        MAX_BINARY_DOWNLOAD,
+    )
+    .await?;
+    set_executable(&target)?;
+    info!("yt-dlp {} installed to {:?}", tag, target);
+    Ok(target)
+}
+
+/// Update yt-dlp to latest version.
+///
+/// NOTE: delegates to `yt-dlp -U`, whose updater verifies the release's
+/// `SHA2-256SUMS` itself.
 pub async fn update_ytdlp(app: &AppHandle) -> Result<String> {
     info!("Updating yt-dlp to latest version");
     let ytdlp_path = get_ytdlp_path(app)?;
-    debug!("Running yt-dlp update from: {:?}", ytdlp_path);
-
-    let output = Command::new(&ytdlp_path).arg("-U").output().map_err(|e| {
-        ClipyError::BinaryExecutionFailed(format!("Failed to update yt-dlp: {}", e))
-    })?;
-
+    let output = tokio::process::Command::new(&ytdlp_path)
+        .arg("-U")
+        .output()
+        .await
+        .map_err(|e| {
+            ClipyError::BinaryExecutionFailed(format!("Failed to update yt-dlp: {}", e))
+        })?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-
     debug!("yt-dlp update stdout: {}", stdout);
-    debug!("yt-dlp update stderr: {}", stderr);
-    debug!("yt-dlp update exit code: {:?}", output.status.code());
-
     if output.status.success() {
         info!("yt-dlp updated successfully");
         Ok(stdout.to_string())
     } else {
-        debug!("yt-dlp update failed");
+        warn!("yt-dlp update failed: {}", stderr);
         Err(ClipyError::BinaryExecutionFailed(format!(
             "Update failed: {}",
             stderr
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    const HASH_A: &str = "1fa6733c37ea6fb51c99ad8fe785e7b7e5f3246c9b980230329d4fb72ed8d4d6";
+    const HASH_B: &str = "66674953FE251B89F4D08C5F0E35E0728679BD67AB3D7D05C0562AF101DD3E7A";
+
+    #[test]
+    fn checksum_listing_parsing() {
+        let listing = format!(
+            "{HASH_A}  yt-dlp\n{HASH_B} *yt-dlp.exe\nnot-a-hash  yt-dlp_macos\n\n{HASH_A}  dir/sub/ffmpeg.zip\n"
+        );
+        assert_eq!(
+            parse_checksum_file(&listing, "yt-dlp").as_deref(),
+            Some(HASH_A)
+        );
+        assert_eq!(
+            parse_checksum_file(&listing, "yt-dlp.exe"),
+            Some(HASH_B.to_ascii_lowercase())
+        );
+        assert_eq!(parse_checksum_file(&listing, "yt-dlp_macos"), None);
+        assert_eq!(parse_checksum_file(&listing, "yt-dlp_linux"), None);
+        assert_eq!(
+            parse_checksum_file(&listing, "ffmpeg.zip").as_deref(),
+            Some(HASH_A)
+        );
+        assert_eq!(parse_checksum_file("", "x"), None);
+        assert_eq!(parse_checksum_file(HASH_A, "x"), None);
+    }
+
+    #[test]
+    fn sha256_helpers() {
+        assert!(is_sha256_hex(HASH_A));
+        assert!(is_sha256_hex(HASH_B));
+        assert!(!is_sha256_hex(&HASH_A[1..]));
+        assert!(!is_sha256_hex(&format!("{}z", &HASH_A[1..])));
+        assert!(verify_sha256(HASH_A, HASH_A, "x").is_ok());
+        assert!(verify_sha256(&HASH_B.to_lowercase(), HASH_B, "x").is_ok());
+        assert!(verify_sha256(HASH_A, HASH_B, "x").is_err());
+        assert!(verify_sha256("", "", "x").is_err());
+
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("abc");
+        std::fs::write(&f, b"abc").unwrap();
+        assert_eq!(
+            sha256_file(&f).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert!(sha256_file(&dir.path().join("missing")).is_err());
+    }
+
+    #[test]
+    fn release_tag_parsing() {
+        assert_eq!(
+            parse_release_tag("https://github.com/yt-dlp/yt-dlp/releases/tag/2026.08.19")
+                .as_deref(),
+            Some("2026.08.19")
+        );
+        assert_eq!(
+            parse_release_tag("/yt-dlp/yt-dlp/releases/tag/v1.2-rc_1?x=1").as_deref(),
+            Some("v1.2-rc_1")
+        );
+        assert_eq!(parse_release_tag("https://github.com/x/releases"), None);
+        assert_eq!(parse_release_tag("https://x/releases/tag/"), None);
+        assert_eq!(parse_release_tag("https://x/releases/tag/..%2f"), None);
+        assert_eq!(parse_release_tag("https://x/releases/tag/a b"), None);
+    }
+
+    #[test]
+    fn ytdlp_asset_selection() {
+        assert_eq!(ytdlp_asset_name("windows", "x86_64"), Some("yt-dlp.exe"));
+        assert_eq!(
+            ytdlp_asset_name("windows", "aarch64"),
+            Some("yt-dlp_arm64.exe")
+        );
+        assert_eq!(ytdlp_asset_name("windows", "x86"), Some("yt-dlp_x86.exe"));
+        assert_eq!(ytdlp_asset_name("macos", "aarch64"), Some("yt-dlp_macos"));
+        assert_eq!(ytdlp_asset_name("macos", "x86_64"), Some("yt-dlp_macos"));
+        assert_eq!(ytdlp_asset_name("linux", "x86_64"), Some("yt-dlp_linux"));
+        assert_eq!(
+            ytdlp_asset_name("linux", "aarch64"),
+            Some("yt-dlp_linux_aarch64")
+        );
+        assert_eq!(ytdlp_asset_name("linux", "riscv64"), None);
+        assert_eq!(ytdlp_asset_name("freebsd", "x86_64"), None);
+        assert!(ytdlp_asset_name(std::env::consts::OS, std::env::consts::ARCH).is_some());
+    }
+
+    #[test]
+    fn ffmpeg_source_selection() {
+        assert_eq!(
+            ffmpeg_source("windows", "x86_64"),
+            Some(FfmpegSource::BtbN {
+                asset: "ffmpeg-master-latest-win64-gpl.zip"
+            })
+        );
+        assert_eq!(
+            ffmpeg_source("windows", "aarch64"),
+            Some(FfmpegSource::BtbN {
+                asset: "ffmpeg-master-latest-winarm64-gpl.zip"
+            })
+        );
+        assert_eq!(
+            ffmpeg_source("linux", "x86_64"),
+            Some(FfmpegSource::BtbN {
+                asset: "ffmpeg-master-latest-linux64-gpl.tar.xz"
+            })
+        );
+        assert_eq!(
+            ffmpeg_source("linux", "aarch64"),
+            Some(FfmpegSource::BtbN {
+                asset: "ffmpeg-master-latest-linuxarm64-gpl.tar.xz"
+            })
+        );
+        assert_eq!(
+            ffmpeg_source("macos", "aarch64"),
+            Some(FfmpegSource::MartinRiedl { arch: "arm64" })
+        );
+        assert_eq!(
+            ffmpeg_source("macos", "x86_64"),
+            Some(FfmpegSource::MartinRiedl { arch: "amd64" })
+        );
+        assert_eq!(ffmpeg_source("windows", "x86"), None);
+        assert_eq!(ffmpeg_source("linux", "arm"), None);
+        assert!(ffmpeg_source(std::env::consts::OS, std::env::consts::ARCH).is_some());
+    }
+
+    #[test]
+    fn martin_riedl_urls() {
+        assert_eq!(
+            martin_riedl_latest_url("arm64", "ffprobe"),
+            "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffprobe.zip"
+        );
+        assert_eq!(
+            martin_riedl_resolve("/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip").as_deref(),
+            Some("https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip")
+        );
+        assert_eq!(
+            martin_riedl_resolve("https://evil.example/ffmpeg.zip"),
+            None
+        );
+        assert_eq!(
+            martin_riedl_resolve("http://ffmpeg.martin-riedl.de/x.zip"),
+            None
+        );
+    }
+
+    #[test]
+    fn version_parsing() {
+        assert_eq!(
+            parse_ffmpeg_version("ffmpeg version 8.0.1-full_build Copyright\nmore"),
+            Some("8.0.1-full_build".into())
+        );
+        assert_eq!(parse_ffmpeg_version("something else"), None);
+        assert_eq!(parse_ffmpeg_version("ffmpeg version"), None);
+        assert_eq!(parse_ffmpeg_version(""), None);
+        assert_eq!(
+            parse_ytdlp_version("2026.08.19\n"),
+            Some("2026.08.19".into())
+        );
+        assert_eq!(parse_ytdlp_version("  \n"), None);
+    }
+
+    #[test]
+    fn locating_binaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join(exe_name("clipy-fake-tool"));
+        std::fs::write(&local, b"").unwrap();
+        assert_eq!(
+            find_binary(dir.path(), "clipy-fake-tool"),
+            Some(local.clone())
+        );
+        assert_eq!(
+            find_binary(dir.path(), "clipy-definitely-missing-tool"),
+            None
+        );
+        assert_eq!(run_version(&dir.path().join("nope"), "--version"), None);
+        let probe = probe_binary(dir.path(), "clipy-fake-tool", "-v", parse_ytdlp_version);
+        assert_eq!(probe, (false, None, None));
+
+        let listing = format!("\n{}\nC:/nope\n", local.display());
+        assert_eq!(first_existing_line(&listing), Some(local));
+        assert_eq!(first_existing_line("/no/such\n"), None);
+
+        // Exercises the PATH fallback; the result depends on the host.
+        let status = check_binaries_in(dir.path());
+        assert_eq!(status.ffmpeg_installed, status.ffmpeg_path.is_some());
+    }
+
+    #[test]
+    fn ffmpeg_entry_selection() {
+        assert_eq!(
+            ffmpeg_entry_dest("ffmpeg-master/bin/ffmpeg.exe"),
+            Some(exe_name("ffmpeg"))
+        );
+        assert_eq!(
+            ffmpeg_entry_dest("x\\bin\\ffprobe"),
+            Some(exe_name("ffprobe"))
+        );
+        assert_eq!(ffmpeg_entry_dest("bin/ffplay.exe"), None);
+        assert_eq!(ffmpeg_entry_dest("doc/ffmpeg.html"), None);
+        assert_eq!(entry_basename("a/b\\c"), "c");
+        assert_eq!(entry_basename("plain"), "plain");
+    }
+
+    // ---- archive extraction with in-test archives ----
+
+    fn build_zip(entries: &[(&str, &[u8])], symlink: Option<(&str, &str)>) -> Vec<u8> {
+        use zip::write::SimpleFileOptions;
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, data) in entries {
+            if name.ends_with('/') {
+                w.add_directory(*name, SimpleFileOptions::default())
+                    .unwrap();
+            } else {
+                w.start_file(*name, SimpleFileOptions::default()).unwrap();
+                w.write_all(data).unwrap();
+            }
+        }
+        if let Some((name, target)) = symlink {
+            w.add_symlink(name, target, SimpleFileOptions::default())
+                .unwrap();
+        }
+        w.finish().unwrap().into_inner()
+    }
+
+    fn build_tar_xz(
+        dir: &Path,
+        entries: &[(&str, &[u8])],
+        symlink: Option<(&str, &str)>,
+    ) -> PathBuf {
+        let path = dir.join("a.tar.xz");
+        let file = std::fs::File::create(&path).unwrap();
+        let enc = xz2::write::XzEncoder::new(file, 1);
+        let mut b = tar::Builder::new(enc);
+        for (name, data) in entries {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(data.len() as u64);
+            h.set_mode(0o644);
+            h.set_entry_type(tar::EntryType::Regular);
+            // `append_data` validates paths; write the raw name to model a
+            // malicious archive with `..` components.
+            let name_bytes = name.as_bytes();
+            h.as_old_mut().name[..name_bytes.len()].copy_from_slice(name_bytes);
+            h.set_cksum();
+            b.append(&h, *data).unwrap();
+        }
+        if let Some((name, target)) = symlink {
+            let mut h = tar::Header::new_gnu();
+            h.set_entry_type(tar::EntryType::Symlink);
+            h.set_size(0);
+            b.append_link(&mut h, name, target).unwrap();
+        }
+        b.into_inner().unwrap().finish().unwrap();
+        path
+    }
+
+    fn dir_names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn zip_extraction_keeps_only_selected_basenames() {
+        let work = tempfile::tempdir().unwrap();
+        let out = work.path().join("out");
+        std::fs::create_dir(&out).unwrap();
+        let archive = work.path().join("a.zip");
+        std::fs::write(
+            &archive,
+            build_zip(
+                &[
+                    ("ffmpeg-x/", b""),
+                    ("ffmpeg-x/bin/ffmpeg.exe", b"FFMPEG"),
+                    ("ffmpeg-x/bin/ffprobe.exe", b"FFPROBE"),
+                    ("ffmpeg-x/bin/ffplay.exe", b"no"),
+                    ("../../evil/ffmpeg", b"SLIP"),
+                ],
+                Some(("ffmpeg-x/bin/ffprobe", "/etc/passwd")),
+            ),
+        )
+        .unwrap();
+        let written = extract_zip(&archive, &out, &ffmpeg_entry_dest).unwrap();
+        assert_eq!(written.len(), 3);
+        let mut expect = vec![exe_name("ffmpeg"), exe_name("ffprobe")];
+        expect.sort();
+        assert_eq!(dir_names(&out), expect);
+        // The zip-slip entry was written by basename inside `out`, last wins.
+        assert_eq!(
+            std::fs::read(out.join(exe_name("ffmpeg"))).unwrap(),
+            b"SLIP"
+        );
+        assert_eq!(
+            std::fs::read(out.join(exe_name("ffprobe"))).unwrap(),
+            b"FFPROBE"
+        );
+        assert!(!work.path().join("evil").exists());
+    }
+
+    #[test]
+    fn tar_xz_extraction_skips_symlinks_and_contains_traversal() {
+        let work = tempfile::tempdir().unwrap();
+        let out = work.path().join("out");
+        std::fs::create_dir(&out).unwrap();
+        let archive = build_tar_xz(
+            work.path(),
+            &[
+                ("ffmpeg-linux64/bin/ffmpeg", b"FFMPEG"),
+                ("ffmpeg-linux64/doc/readme.txt", b"doc"),
+                ("../../ffprobe", b"SLIP"),
+            ],
+            Some(("ffmpeg-linux64/bin/ffprobe", "/etc/shadow")),
+        );
+        let written = extract_tar_xz(&archive, &out, &ffmpeg_entry_dest).unwrap();
+        assert_eq!(written.len(), 2);
+        assert_eq!(
+            std::fs::read(out.join(exe_name("ffprobe"))).unwrap(),
+            b"SLIP"
+        );
+        assert_eq!(
+            std::fs::read(out.join(exe_name("ffmpeg"))).unwrap(),
+            b"FFMPEG"
+        );
+        assert!(!work.path().join("ffprobe").exists());
+        assert!(!work.path().parent().unwrap().join("ffprobe").exists());
+    }
+
+    #[test]
+    fn extraction_errors() {
+        let work = tempfile::tempdir().unwrap();
+        let junk = work.path().join("junk.zip");
+        std::fs::write(&junk, b"not an archive").unwrap();
+        assert!(extract_zip(&junk, work.path(), &ffmpeg_entry_dest).is_err());
+        assert!(extract_tar_xz(&junk, work.path(), &ffmpeg_entry_dest).is_err());
+        assert!(extract_zip(
+            &work.path().join("missing"),
+            work.path(),
+            &ffmpeg_entry_dest
+        )
+        .is_err());
+
+        // A selector that returns an unsafe name is refused at write time.
+        let archive = work.path().join("a.zip");
+        std::fs::write(&archive, build_zip(&[("x", b"1")], None)).unwrap();
+        for bad in ["../x", "a/b", "a\\b", "..", ".", ""] {
+            let sel = move |_: &str| Some(bad.to_string());
+            assert!(extract_zip(&archive, work.path(), &sel).is_err(), "{bad:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn download_rejects_unreachable_and_bad_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = http_client().unwrap();
+        let dest = dir.path().join("x");
+        // Port 9 on localhost is the discard service; nothing listens there.
+        assert!(
+            download_verified(&client, "http://127.0.0.1:9/x", &dest, HASH_A, 10)
+                .await
+                .is_err()
+        );
+        assert!(fetch_text(&client, "http://127.0.0.1:9/x").await.is_err());
+        assert!(resolve_redirect("http://127.0.0.1:9/x").await.is_err());
+        assert!(!dest.exists());
+        assert!(
+            download_verified(&client, "http://127.0.0.1:9/x", Path::new(""), HASH_A, 10)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn installers_refuse_unsupported_platforms() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(install_ffmpeg_into(dir.path(), "plan9", "mips")
+            .await
+            .is_err());
+        assert!(install_ytdlp_into(dir.path(), "plan9", "mips")
+            .await
+            .is_err());
+    }
+
+    // ---- network: real upstream downloads ----
+
+    #[tokio::test]
+    #[ignore = "network: downloads and verifies the real yt-dlp release"]
+    async fn network_install_ytdlp_verified() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = install_ytdlp_into(dir.path(), std::env::consts::OS, std::env::consts::ARCH)
+            .await
+            .unwrap();
+        let version = run_version(&path, "--version").and_then(|o| parse_ytdlp_version(&o));
+        assert!(version.is_some(), "installed yt-dlp did not run");
+        let leftovers: Vec<_> = dir_names(dir.path())
+            .into_iter()
+            .filter(|n| n.starts_with(".clipy-"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "network: downloads and verifies a real ffmpeg build (~100 MB)"]
+    async fn network_install_ffmpeg_verified() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = install_ffmpeg_into(dir.path(), std::env::consts::OS, std::env::consts::ARCH)
+            .await
+            .unwrap();
+        assert!(run_version(&path, "-version")
+            .and_then(|o| parse_ffmpeg_version(&o))
+            .is_some());
+        assert!(dir.path().join(exe_name("ffprobe")).exists());
+    }
+
+    #[tokio::test]
+    #[ignore = "network: fetches the real yt-dlp SHA2-256SUMS"]
+    async fn network_wrong_hash_is_rejected_and_nothing_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = http_client().unwrap();
+        let location = resolve_redirect(&format!("{YTDLP_RELEASES}/latest"))
+            .await
+            .unwrap();
+        let tag = parse_release_tag(&location).unwrap();
+        let dest = dir.path().join("SUMS");
+        let err = download_verified(
+            &client,
+            &format!("{YTDLP_RELEASES}/download/{tag}/SHA2-256SUMS"),
+            &dest,
+            HASH_A,
+            1024 * 1024,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("Checksum mismatch"), "{err}");
+        assert!(!dest.exists());
+        assert!(dir_names(dir.path()).is_empty());
     }
 }
