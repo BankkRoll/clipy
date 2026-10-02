@@ -91,3 +91,6 @@ secrets.json
 
 # Husky
 .husky/_/
+
+# Local-only signing keys (updater minisign key). Never commit.
+.secrets/
