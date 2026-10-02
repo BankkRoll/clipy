@@ -14,7 +14,14 @@ import {
   extractYouTubeVideoId,
   sanitizeFilename,
   isNewerVersion,
+  compareVersions,
+  normalizeUrl,
+  thumbnailSrc,
+  isRemoteSource,
+  isEditableTarget,
+  mediaSrc,
 } from "@/lib/utils";
+import { mockConvertFileSrc } from "@tauri-apps/api/mocks";
 
 describe("cn", () => {
   it("merges class names", () => {
@@ -215,22 +222,96 @@ describe("isValidUrl", () => {
     expect(isValidUrl("youtube.com/watch?v=abc")).toBe(true);
   });
 
+  it("accepts bare hosts with a port and localhost", () => {
+    expect(isValidUrl("example.com:8080/v")).toBe(true);
+    expect(isValidUrl("localhost:3000/v")).toBe(true);
+  });
+
   it("rejects clearly invalid input", () => {
     expect(isValidUrl("")).toBe(false);
     expect(isValidUrl(" ")).toBe(false);
+    expect(isValidUrl("hello")).toBe(false);
+    expect(isValidUrl("two words.com")).toBe(false);
+    expect(isValidUrl("https://")).toBe(false);
+    expect(isValidUrl("http://exa mple.com")).toBe(false);
   });
 
-  it("rejects an explicit http: scheme that is not http/https", () => {
-    // `httpx://...` starts with "http", so it is NOT re-prefixed and parses
-    // with protocol "httpx:", which is rejected.
-    expect(isValidUrl("httpx://example.com")).toBe(false);
+  it.each([
+    "httpx://example.com",
+    "ftp://example.com",
+    "file:///C:/video.mp4",
+    "file:/etc/passwd",
+    "javascript:alert(1)",
+    "mailto:me@example.com",
+    "data:text/html,hi",
+    "https:/example.com",
+  ])("rejects non-http(s) or malformed scheme %s", (url) => {
+    expect(isValidUrl(url)).toBe(false);
+  });
+});
+
+describe("normalizeUrl", () => {
+  it("prefixes https only for bare domains", () => {
+    expect(normalizeUrl("youtube.com/watch?v=x")).toBe("https://youtube.com/watch?v=x");
+    expect(normalizeUrl("  http://example.com/a ")).toBe("http://example.com/a");
   });
 
-  // QUIRK: a non-http scheme like "ftp://..." does NOT start with "http", so the
-  // helper prepends "https://" -> "https://ftp://example.com", which parses as a
-  // valid https URL. This documents the current (lenient) behavior.
-  it("treats a leading ftp:// scheme as valid due to https prefixing", () => {
-    expect(isValidUrl("ftp://example.com")).toBe(true);
+  it("returns null for unusable input", () => {
+    expect(normalizeUrl("ftp://example.com")).toBeNull();
+    expect(normalizeUrl("[::1")).toBeNull();
+  });
+});
+
+describe("thumbnailSrc", () => {
+  it("returns null when there is no thumbnail", () => {
+    expect(thumbnailSrc("")).toBeNull();
+    expect(thumbnailSrc("   ")).toBeNull();
+    expect(thumbnailSrc(null)).toBeNull();
+    expect(thumbnailSrc(undefined)).toBeNull();
+  });
+
+  it("keeps https, data and blob URLs from any site", () => {
+    expect(thumbnailSrc("https://vimeo.com/t.jpg")).toBe("https://vimeo.com/t.jpg");
+    expect(thumbnailSrc("data:image/png;base64,AA")).toBe("data:image/png;base64,AA");
+    expect(thumbnailSrc("blob:x")).toBe("blob:x");
+  });
+
+  it("upgrades http and protocol-relative URLs to https", () => {
+    expect(thumbnailSrc("http://cdn.site/t.jpg")).toBe("https://cdn.site/t.jpg");
+    expect(thumbnailSrc("//cdn.site/t.jpg")).toBe("https://cdn.site/t.jpg");
+  });
+
+  it("routes local files through the media protocol", () => {
+    mockConvertFileSrc("windows");
+    expect(thumbnailSrc("C:\\thumbs\\a (1).jpg")).toBe(mediaSrc("C:\\thumbs\\a (1).jpg"));
+    expect(thumbnailSrc("C:\\thumbs\\a.jpg")).toMatch(/clipy-media/);
+  });
+});
+
+describe("isRemoteSource", () => {
+  it("distinguishes URLs from local paths", () => {
+    expect(isRemoteSource("https://a/b.mp4")).toBe(true);
+    expect(isRemoteSource("HTTP://a/b.mp4")).toBe(true);
+    expect(isRemoteSource("blob:abc")).toBe(true);
+    expect(isRemoteSource("data:video/mp4;base64,")).toBe(true);
+    expect(isRemoteSource("httpdocs/video.mp4")).toBe(false);
+    expect(isRemoteSource("C:\\v.mp4")).toBe(false);
+  });
+});
+
+describe("isEditableTarget", () => {
+  it("detects text-entry controls", () => {
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    const child = document.createElement("span");
+    editable.appendChild(child);
+    expect(isEditableTarget(document.createElement("input"))).toBe(true);
+    expect(isEditableTarget(document.createElement("textarea"))).toBe(true);
+    expect(isEditableTarget(document.createElement("select"))).toBe(true);
+    expect(isEditableTarget(child)).toBe(true);
+    expect(isEditableTarget(document.createElement("button"))).toBe(false);
+    expect(isEditableTarget(null)).toBe(false);
+    expect(isEditableTarget(window)).toBe(false);
   });
 });
 
@@ -246,21 +327,17 @@ describe("extractYouTubeVideoId", () => {
   });
 
   it("extracts from embed urls", () => {
-    expect(extractYouTubeVideoId("https://www.youtube.com/embed/dQw4w9WgXcQ")).toBe(
-      "dQw4w9WgXcQ"
-    );
+    expect(extractYouTubeVideoId("https://www.youtube.com/embed/dQw4w9WgXcQ")).toBe("dQw4w9WgXcQ");
   });
 
   it("extracts from shorts urls", () => {
-    expect(extractYouTubeVideoId("https://www.youtube.com/shorts/dQw4w9WgXcQ")).toBe(
-      "dQw4w9WgXcQ"
-    );
+    expect(extractYouTubeVideoId("https://www.youtube.com/shorts/dQw4w9WgXcQ")).toBe("dQw4w9WgXcQ");
   });
 
   it("extracts from watch urls with extra query params", () => {
-    expect(
-      extractYouTubeVideoId("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s")
-    ).toBe("dQw4w9WgXcQ");
+    expect(extractYouTubeVideoId("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s")).toBe(
+      "dQw4w9WgXcQ"
+    );
   });
 
   it("returns null for non-youtube urls", () => {
@@ -387,8 +464,48 @@ describe("isNewerVersion", () => {
     expect(isNewerVersion("v2.1.0", "2.0.0")).toBe(true);
     expect(isNewerVersion("2.0.0-beta.1", "2.0.0")).toBe(false);
   });
+  it("treats a release as newer than its own prerelease", () => {
+    expect(isNewerVersion("2.0.0", "2.0.0-rc.1")).toBe(true);
+    expect(isNewerVersion("2.0.1-alpha", "2.0.0")).toBe(true);
+  });
   it("handles missing segments", () => {
     expect(isNewerVersion("2.1", "2.0.5")).toBe(true);
     expect(isNewerVersion("2", "2.0.0")).toBe(false);
+  });
+});
+
+describe("compareVersions", () => {
+  // The semver 2.0 spec's own precedence example, ascending.
+  const ordered = [
+    "1.0.0-alpha",
+    "1.0.0-alpha.1",
+    "1.0.0-alpha.beta",
+    "1.0.0-beta",
+    "1.0.0-beta.2",
+    "1.0.0-beta.11",
+    "1.0.0-rc.1",
+    "1.0.0",
+  ];
+
+  it.each(ordered.slice(1).map((v, i) => [ordered[i]!, v]))("%s < %s", (lower, higher) => {
+    expect(compareVersions(lower, higher)).toBeLessThan(0);
+    expect(compareVersions(higher, lower)).toBeGreaterThan(0);
+  });
+
+  it("treats equal versions, build metadata and a leading v as equal", () => {
+    expect(compareVersions("v1.2.3", "1.2.3")).toBe(0);
+    expect(compareVersions("1.2.3+build.5", "1.2.3")).toBe(0);
+    expect(compareVersions("1.0.0-rc.1", "1.0.0-rc.1")).toBe(0);
+  });
+
+  it("pads missing segments on either side with zeros", () => {
+    expect(compareVersions("2.0.1", "2")).toBeGreaterThan(0);
+    expect(compareVersions("2", "2.0.1")).toBeLessThan(0);
+    expect(compareVersions("2", "2.0.0")).toBe(0);
+  });
+
+  it("orders numeric identifiers before alphanumeric ones", () => {
+    expect(compareVersions("1.0.0-1", "1.0.0-a")).toBeLessThan(0);
+    expect(compareVersions("1.0.0-a", "1.0.0-1")).toBeGreaterThan(0);
   });
 });
