@@ -9,17 +9,20 @@ import {
   VideoListRow,
   EmptyLibrary,
   RenameDialog,
+  DeleteVideosDialog,
   VIDEO_EXTENSIONS,
+  type DeleteChoice,
   type ViewMode,
   type SortOption,
 } from "@/components/library";
 import { useLibrary, useLibraryStats, useFileSystem, useTauriEvent } from "@/hooks";
 import { toast } from "sonner";
-import { open, ask, save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import type { LibraryVideo } from "@/hooks/useLibrary";
 import { logger } from "@/lib/logger";
 
+/** Library page: browse, play, rename, import/export and remove downloaded videos. */
 export function Library() {
   const navigate = useNavigate();
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
@@ -28,6 +31,7 @@ export function Library() {
   const [playingVideo, setPlayingVideo] = useState<LibraryVideo | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [renameTarget, setRenameTarget] = useState<LibraryVideo | null>(null);
+  const [deleteTargets, setDeleteTargets] = useState<string[]>([]);
 
   const { showInFolder } = useFileSystem();
   const { videos, loading, refresh, deleteVideo, importVideo, renameVideo, bulkDelete } =
@@ -47,10 +51,7 @@ export function Library() {
       .filter((v) => {
         if (!searchQuery.trim()) return true;
         const query = searchQuery.toLowerCase();
-        return (
-          v.title.toLowerCase().includes(query) ||
-          v.channel.toLowerCase().includes(query)
-        );
+        return v.title.toLowerCase().includes(query) || v.channel.toLowerCase().includes(query);
       })
       .sort((a, b) => {
         const [field, order] = sortOption.split("-");
@@ -75,9 +76,7 @@ export function Library() {
   const selectionMode = selectedIds.length > 0;
 
   const toggleSelect = useCallback((id: string) => {
-    setSelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }, []);
 
   const clearSelection = useCallback(() => setSelectedIds([]), []);
@@ -94,67 +93,74 @@ export function Library() {
     setPlayingVideo(null);
   }, []);
 
-  const handleOpenInEditor = useCallback((videoId: string) => {
-    navigate(`/editor?import=${videoId}`);
-  }, [navigate]);
+  const handleOpenInEditor = useCallback(
+    (videoId: string) => {
+      navigate(`/editor?import=${videoId}`);
+    },
+    [navigate]
+  );
 
-  const handleOpenFolder = useCallback(async (filePath: string) => {
-    try {
-      await showInFolder(filePath);
-    } catch (err) {
-      logger.error("Library", "Failed to open folder:", err);
-      toast.error("Failed to show file in folder");
-    }
-  }, [showInFolder]);
-
-  const handleDelete = useCallback(async (videoId: string) => {
-    const confirmed = await ask("Are you sure you want to remove this video from your library?", {
-      title: "Remove Video",
-      kind: "warning",
-    });
-
-    if (confirmed) {
+  const handleOpenFolder = useCallback(
+    async (filePath: string) => {
       try {
-        await deleteVideo(videoId, false);
-        setSelectedIds((prev) => prev.filter((id) => id !== videoId));
-        await refreshStats();
-        toast.success("Video removed from library");
-      } catch {
-        toast.error("Failed to delete video");
+        await showInFolder(filePath);
+      } catch (err) {
+        logger.error("Library", "Failed to open folder:", err);
+        toast.error("Failed to show file in folder");
       }
-    }
-  }, [deleteVideo, refreshStats]);
+    },
+    [showInFolder]
+  );
+
+  const handleDelete = useCallback((videoId: string) => {
+    setDeleteTargets([videoId]);
+  }, []);
 
   const handleRename = useCallback((video: LibraryVideo) => {
     setRenameTarget(video);
   }, []);
 
-  const handleConfirmRename = useCallback(async (newTitle: string) => {
-    if (!renameTarget) return;
-    try {
-      await renameVideo(renameTarget.id, newTitle);
-      toast.success("Video renamed");
-    } catch {
-      toast.error("Failed to rename video");
-    }
-  }, [renameTarget, renameVideo]);
+  const handleConfirmRename = useCallback(
+    async (id: string, newTitle: string) => {
+      try {
+        await renameVideo(id, newTitle);
+        toast.success("Video renamed");
+      } catch {
+        toast.error("Failed to rename video");
+      }
+    },
+    [renameVideo]
+  );
 
-  const handleBulkDelete = useCallback(async () => {
-    if (selectedIds.length === 0) return;
-    const deleteFiles = await ask(
-      `Remove ${selectedIds.length} video(s) from your library?\n\nClick "Yes" to also delete the files from disk, or "No" to only remove the library entries.`,
-      { title: "Delete selected", kind: "warning" }
-    );
-    // ask() is yes/no; treat "yes" as delete-files. Still confirm removal happens either way.
-    try {
-      const count = await bulkDelete(selectedIds, deleteFiles);
-      setSelectedIds([]);
-      await refreshStats();
-      toast.success(`Removed ${count} video(s) from library`);
-    } catch {
-      toast.error("Failed to delete selected videos");
-    }
-  }, [selectedIds, bulkDelete, refreshStats]);
+  const handleBulkDelete = useCallback(() => {
+    setDeleteTargets(selectedIds);
+  }, [selectedIds]);
+
+  const handleDeleteChoice = useCallback(
+    async (choice: DeleteChoice) => {
+      const targets = deleteTargets;
+      setDeleteTargets([]);
+      if (choice === "cancel") return;
+
+      const deleteFiles = choice === "files";
+      try {
+        if (targets.length === 1) {
+          await deleteVideo(targets[0]!, deleteFiles);
+        } else {
+          await bulkDelete(targets, deleteFiles);
+        }
+        setSelectedIds((prev) => prev.filter((id) => !targets.includes(id)));
+        await refreshStats();
+        toast.success(
+          `${deleteFiles ? "Deleted" : "Removed"} ${targets.length} video${targets.length === 1 ? "" : "s"}${deleteFiles ? "" : " from library"}`
+        );
+      } catch (err) {
+        logger.error("Library", "Delete failed:", err);
+        toast.error("Failed to delete videos");
+      }
+    },
+    [deleteTargets, deleteVideo, bulkDelete, refreshStats]
+  );
 
   const handleImport = useCallback(async () => {
     try {
@@ -223,7 +229,12 @@ export function Library() {
       {selectionMode && (
         <div className="flex items-center justify-between border-b border-border bg-accent/40 px-6 py-2">
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" onClick={clearSelection}>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={clearSelection}
+              aria-label="Clear selection"
+            >
               <X className="h-4 w-4" />
             </Button>
             <span className="text-sm font-medium">{selectedIds.length} selected</span>
@@ -289,14 +300,17 @@ export function Library() {
         )}
       </div>
 
-      <RenameDialog
-        open={renameTarget !== null}
-        initialTitle={renameTarget?.title ?? ""}
-        onOpenChange={(o) => {
-          if (!o) setRenameTarget(null);
-        }}
-        onConfirm={handleConfirmRename}
-      />
+      {renameTarget && (
+        // The dialog has no trigger, so every open-state change is a close.
+        <RenameDialog
+          open
+          initialTitle={renameTarget.title}
+          onOpenChange={() => setRenameTarget(null)}
+          onConfirm={(title) => handleConfirmRename(renameTarget.id, title)}
+        />
+      )}
+
+      <DeleteVideosDialog count={deleteTargets.length} onChoose={handleDeleteChoice} />
 
       {playingVideo && (
         <VideoPlayer

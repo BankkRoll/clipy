@@ -41,6 +41,7 @@ interface LibraryHeaderProps {
   onViewModeChange: (mode: ViewMode) => void;
 }
 
+/** Library toolbar: stats, import/export, refresh, search, sort and view mode. */
 export function LibraryHeader({
   stats,
   loading,
@@ -86,7 +87,13 @@ export function LibraryHeader({
           Export library
         </Button>
 
-        <Button variant="ghost" size="icon" onClick={onRefresh} disabled={loading}>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onRefresh}
+          disabled={loading}
+          aria-label="Refresh library"
+        >
           <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
         </Button>
 
@@ -94,6 +101,7 @@ export function LibraryHeader({
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder="Search videos..."
+            aria-label="Search videos"
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             className="w-64 pl-9"
@@ -101,7 +109,7 @@ export function LibraryHeader({
         </div>
 
         <Select value={sortOption} onValueChange={(v) => onSortChange(v as SortOption)}>
-          <SelectTrigger className="w-40">
+          <SelectTrigger className="w-40" aria-label="Sort videos">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -119,6 +127,8 @@ export function LibraryHeader({
             size="icon"
             className="h-9 w-9 rounded-r-none"
             onClick={() => onViewModeChange("grid")}
+            aria-label="Grid view"
+            aria-pressed={viewMode === "grid"}
           >
             <Grid3X3 className="h-4 w-4" />
           </Button>
@@ -127,6 +137,8 @@ export function LibraryHeader({
             size="icon"
             className="h-9 w-9 rounded-l-none"
             onClick={() => onViewModeChange("list")}
+            aria-label="List view"
+            aria-pressed={viewMode === "list"}
           >
             <List className="h-4 w-4" />
           </Button>

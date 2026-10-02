@@ -3,20 +3,10 @@ import { Play, Pencil, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatBytes, formatDuration, formatRelativeTime, cn } from "@/lib/utils";
 import { VideoActionsMenu } from "./video-actions-menu";
-import type { LibraryVideo } from "@/hooks/useLibrary";
+import { VideoThumbnail } from "./video-thumbnail";
+import type { VideoItemProps } from "./video-grid-card";
 
-interface VideoListRowProps {
-  video: LibraryVideo;
-  onPlay: () => void;
-  onEdit: () => void;
-  onOpenFolder: () => void;
-  onDelete: () => void;
-  onRename: () => void;
-  selectionMode?: boolean;
-  selected?: boolean;
-  onToggleSelect?: () => void;
-}
-
+/** Library list row. */
 export const VideoListRow = memo(function VideoListRow({
   video,
   onPlay,
@@ -27,12 +17,13 @@ export const VideoListRow = memo(function VideoListRow({
   selectionMode = false,
   selected = false,
   onToggleSelect,
-}: VideoListRowProps) {
+}: VideoItemProps) {
   return (
     <div
+      data-testid={`video-${video.id}`}
       className={cn(
         "group flex items-center gap-4 rounded-lg border bg-card p-3",
-        "transition-colors hover:bg-accent/50 hover:border-primary/50",
+        "transition-colors hover:border-primary/50 hover:bg-accent/50",
         selected ? "border-primary ring-1 ring-primary" : "border-border"
       )}
     >
@@ -44,28 +35,17 @@ export const VideoListRow = memo(function VideoListRow({
           onClick={onToggleSelect}
           className={cn(
             "flex h-5 w-5 flex-shrink-0 items-center justify-center rounded border transition-colors",
-            selected
-              ? "border-primary bg-primary text-primary-foreground"
-              : "border-border"
+            selected ? "border-primary bg-primary text-primary-foreground" : "border-border"
           )}
         >
           {selected && <Check className="h-3.5 w-3.5" />}
         </button>
       )}
-      {/* Thumbnail */}
       <div
-        className="relative h-16 w-28 flex-shrink-0 overflow-hidden rounded bg-muted cursor-pointer"
+        className="relative h-16 w-28 flex-shrink-0 cursor-pointer overflow-hidden rounded bg-muted"
         onClick={onPlay}
       >
-        <img
-          src={video.thumbnail}
-          alt={video.title}
-          className="h-full w-full object-cover"
-          onError={(e) => {
-            (e.target as HTMLImageElement).src = "";
-            (e.target as HTMLImageElement).classList.add("hidden");
-          }}
-        />
+        <VideoThumbnail src={video.thumbnail} alt={video.title} />
         <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100">
           <Play className="h-6 w-6 text-white" />
         </div>
@@ -74,25 +54,22 @@ export const VideoListRow = memo(function VideoListRow({
         </div>
       </div>
 
-      {/* Info */}
-      <div className="flex-1 min-w-0">
+      <div className="min-w-0 flex-1">
         <h3 className="truncate font-medium">{video.title}</h3>
-        <p className="text-sm text-muted-foreground truncate">{video.channel}</p>
+        <p className="truncate text-sm text-muted-foreground">{video.channel}</p>
       </div>
 
-      {/* Meta */}
       <div className="flex items-center gap-6 text-sm text-muted-foreground">
         <span className="w-20 text-right">{formatBytes(video.fileSize)}</span>
         <span className="w-16">{video.resolution}</span>
         <span className="w-24">{formatRelativeTime(video.downloadedAt)}</span>
       </div>
 
-      {/* Actions */}
       <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-        <Button size="icon" variant="ghost" onClick={onPlay}>
+        <Button size="icon" variant="ghost" onClick={onPlay} aria-label="Play">
           <Play className="h-4 w-4" />
         </Button>
-        <Button size="icon" variant="ghost" onClick={onEdit}>
+        <Button size="icon" variant="ghost" onClick={onEdit} aria-label="Edit">
           <Pencil className="h-4 w-4" />
         </Button>
         <VideoActionsMenu
@@ -101,6 +78,7 @@ export const VideoListRow = memo(function VideoListRow({
           onOpenFolder={onOpenFolder}
           onDelete={onDelete}
           onRename={onRename}
+          onSelect={selected ? undefined : onToggleSelect}
           showPlayEdit={false}
         />
       </div>

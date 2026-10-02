@@ -42,6 +42,27 @@ describe("useLibrary", () => {
     expect(result.current.error).toBe("nope");
   });
 
+  it("falls back to generic messages for empty rejections", async () => {
+    invoke.mockRejectedValue("");
+    const library = renderHook(() => useLibrary());
+    const stats = renderHook(() => useLibraryStats());
+    await waitFor(() => expect(library.result.current.error).toBe("Failed to fetch library"));
+    await waitFor(() => expect(stats.result.current.error).toBe("Failed to fetch library stats"));
+  });
+
+  it("bulkDelete keeps files by default", async () => {
+    const { result } = renderHook(() => useLibrary());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    invoke.mockResolvedValueOnce(1).mockResolvedValue([VIDEO]);
+    await act(async () => {
+      await result.current.bulkDelete(["a"]);
+    });
+    expect(invoke).toHaveBeenCalledWith("bulk_delete_library_videos", {
+      ids: ["a"],
+      deleteFiles: false,
+    });
+  });
+
   it("addVideo invokes add_library_video then refreshes", async () => {
     const { result } = renderHook(() => useLibrary());
     await waitFor(() => expect(result.current.loading).toBe(false));
