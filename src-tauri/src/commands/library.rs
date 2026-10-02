@@ -3,6 +3,7 @@
 use crate::error::{ClipyError, Result};
 use crate::models::library::LibraryVideo;
 use crate::services::database;
+use crate::utils::path_policy;
 use std::path::Path;
 use tracing::{debug, info};
 
@@ -25,7 +26,28 @@ pub fn add_library_video(video: LibraryVideo) -> Result<()> {
         "Video details: id={}, channel={}, path={}, size={} bytes",
         video.id, video.channel, video.file_path, video.file_size
     );
+    // SECURITY: the stored path is later played, revealed and possibly deleted,
+    // so only accept an existing local audio/video file.
+    let canon = path_policy::ensure_media_file(&video.file_path)?;
+    crate::media_protocol::grant(&canon);
     database::add_library_video(&video)
+}
+
+/// Delete the on-disk file behind a library entry.
+///
+/// A file that is already gone is not an error (the entry is still removed),
+/// but anything that is not a regular audio/video file is refused.
+fn delete_video_file(file_path: &str) -> Result<()> {
+    let raw = path_policy::validate_raw_path(file_path)?;
+    if std::fs::symlink_metadata(&raw).is_err() {
+        debug!("File does not exist, skipping deletion: {:?}", raw);
+        return Ok(());
+    }
+    let path = path_policy::ensure_deletable_media_file(file_path)?;
+    std::fs::remove_file(&path)
+        .map_err(|e| ClipyError::Other(format!("Failed to delete file: {}", e)))?;
+    info!("Deleted file: {}", path.display());
+    Ok(())
 }
 
 /// Delete a video from the library
@@ -41,16 +63,7 @@ pub fn delete_library_video(id: String, delete_file: bool) -> Result<()> {
         debug!("Looking up video to delete file: {}", id);
         let videos = database::get_library_videos()?;
         if let Some(video) = videos.iter().find(|v| v.id == id) {
-            let path = Path::new(&video.file_path);
-            debug!("Video file path: {:?}", path);
-            if path.exists() {
-                debug!("File exists, deleting: {:?}", path);
-                std::fs::remove_file(path)
-                    .map_err(|e| ClipyError::Other(format!("Failed to delete file: {}", e)))?;
-                info!("Deleted file: {}", video.file_path);
-            } else {
-                debug!("File does not exist, skipping deletion: {:?}", path);
-            }
+            delete_video_file(&video.file_path)?;
         } else {
             debug!("Video not found in library: {}", id);
         }
@@ -84,14 +97,22 @@ pub async fn import_video(
 ) -> Result<LibraryVideo> {
     info!("Importing video: {}", file_path);
     debug!("Import options: title={:?}, channel={:?}", title, channel);
+    let video = prepare_import(&file_path, title, channel)?;
+    database::add_library_video(&video)?;
+    crate::media_protocol::grant(Path::new(&video.file_path));
+    info!("Video imported successfully: {}", video.title);
+    Ok(video)
+}
 
-    let path = Path::new(&file_path);
-    if !path.exists() {
-        debug!("File does not exist: {}", file_path);
-        return Err(ClipyError::Other("File does not exist".into()));
-    }
+/// Validate an import source and build its library entry.
+fn prepare_import(
+    file_path: &str,
+    title: Option<String>,
+    channel: Option<String>,
+) -> Result<LibraryVideo> {
+    let path = path_policy::ensure_media_file(file_path)?;
+    let path = path.as_path();
 
-    // Get file metadata
     let metadata = std::fs::metadata(path)
         .map_err(|e| ClipyError::Other(format!("Failed to read file metadata: {}", e)))?;
 
@@ -119,7 +140,7 @@ pub async fn import_video(
         String::new(), // No thumbnail for imports
         0,             // Duration will be 0 until we implement FFprobe
         channel.unwrap_or_else(|| "Local Import".to_string()),
-        file_path,
+        path.to_string_lossy().into_owned(),
         metadata.len(),
         extension,
         "unknown".to_string(), // Resolution unknown without FFprobe
@@ -130,16 +151,13 @@ pub async fn import_video(
         "Created library entry: id={}, title={}",
         video.id, video.title
     );
-    database::add_library_video(&video)?;
-
-    info!("Video imported successfully: {}", video.title);
     Ok(video)
 }
 
 /// Check if a video file exists
 #[tauri::command]
 pub fn check_video_exists(file_path: String) -> bool {
-    let exists = Path::new(&file_path).exists();
+    let exists = path_policy::ensure_media_file(&file_path).is_ok();
     debug!("Video file exists check: {} = {}", file_path, exists);
     exists
 }
@@ -148,7 +166,8 @@ pub fn check_video_exists(file_path: String) -> bool {
 #[tauri::command]
 pub fn get_video_file_size(file_path: String) -> Result<u64> {
     debug!("Getting file size for: {}", file_path);
-    let metadata = std::fs::metadata(&file_path)
+    let path = path_policy::ensure_media_file(&file_path)?;
+    let metadata = std::fs::metadata(path)
         .map_err(|e| ClipyError::Other(format!("Failed to read file metadata: {}", e)))?;
     let size = metadata.len();
     debug!("File size: {} bytes ({} MB)", size, size / (1024 * 1024));
@@ -273,9 +292,142 @@ pub fn export_library_json() -> Result<String> {
 #[tauri::command]
 pub fn export_library_to_file(path: String) -> Result<()> {
     info!("Exporting library to file: {}", path);
+    let target = path_policy::ensure_output_path(&path, path_policy::JSON_EXTENSIONS)?;
     let json = export_library_json()?;
-    std::fs::write(&path, json)
-        .map_err(|e| ClipyError::Library(format!("Failed to write library file: {}", e)))?;
-    info!("Library exported to {}", path);
+    write_library_export(&target, &json)?;
+    info!("Library exported to {}", target.display());
     Ok(())
+}
+
+fn write_library_export(target: &Path, json: &str) -> Result<()> {
+    std::fs::write(target, json)
+        .map_err(|e| ClipyError::Library(format!("Failed to write library file: {}", e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn s(p: &Path) -> String {
+        p.to_string_lossy().into_owned()
+    }
+
+    fn entry(file_path: &str) -> LibraryVideo {
+        LibraryVideo::new(
+            "vid".into(),
+            "t".into(),
+            String::new(),
+            0,
+            "c".into(),
+            file_path.into(),
+            0,
+            "mp4".into(),
+            "1080p".into(),
+            String::new(),
+        )
+    }
+
+    #[test]
+    fn prepare_import_builds_entry_from_media_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("My Clip.MKV");
+        fs::write(&f, b"12345").unwrap();
+        let v = prepare_import(&s(&f), None, None).unwrap();
+        assert_eq!(v.title, "My Clip");
+        assert_eq!(v.channel, "Local Import");
+        assert_eq!(v.file_size, 5);
+        assert_eq!(v.format, "MKV");
+        assert_eq!(
+            Path::new(&v.file_path),
+            path_policy::canonicalize(&f).unwrap()
+        );
+        let v = prepare_import(&s(&f), Some("T".into()), Some("C".into())).unwrap();
+        assert_eq!((v.title.as_str(), v.channel.as_str()), ("T", "C"));
+    }
+
+    #[test]
+    fn prepare_import_rejects_non_media_and_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("x.exe");
+        fs::write(&exe, b"MZ").unwrap();
+        assert!(prepare_import(&s(&exe), None, None).is_err());
+        assert!(prepare_import(&s(&dir.path().join("none.mp4")), None, None).is_err());
+        assert!(prepare_import("https://x/y.mp4", None, None).is_err());
+    }
+
+    #[test]
+    fn delete_video_file_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let v = dir.path().join("v.mp4");
+        fs::write(&v, b"x").unwrap();
+        delete_video_file(&s(&v)).unwrap();
+        assert!(!v.exists());
+        // Already gone: not an error.
+        delete_video_file(&s(&v)).unwrap();
+
+        let doc = dir.path().join("important.docx");
+        fs::write(&doc, b"x").unwrap();
+        assert!(delete_video_file(&s(&doc)).is_err());
+        assert!(doc.exists());
+
+        let sub = dir.path().join("folder.mp4");
+        fs::create_dir(&sub).unwrap();
+        assert!(delete_video_file(&s(&sub)).is_err());
+        assert!(sub.exists());
+
+        assert!(delete_video_file("relative.mp4").is_err());
+    }
+
+    #[test]
+    fn exists_and_size_only_for_media() {
+        let dir = tempfile::tempdir().unwrap();
+        let v = dir.path().join("v.webm");
+        fs::write(&v, b"abc").unwrap();
+        let secret = dir.path().join("secret.key");
+        fs::write(&secret, b"abc").unwrap();
+        assert!(check_video_exists(s(&v)));
+        assert!(!check_video_exists(s(&secret)));
+        assert!(!check_video_exists(s(&dir.path().join("no.mp4"))));
+        assert_eq!(get_video_file_size(s(&v)).unwrap(), 3);
+        assert!(get_video_file_size(s(&secret)).is_err());
+    }
+
+    #[test]
+    fn add_and_export_reject_bad_paths_before_touching_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("x.exe");
+        fs::write(&exe, b"MZ").unwrap();
+        assert!(matches!(
+            add_library_video(entry(&s(&exe))),
+            Err(ClipyError::InvalidPath(_))
+        ));
+        assert!(matches!(
+            add_library_video(entry("relative.mp4")),
+            Err(ClipyError::InvalidPath(_))
+        ));
+        for bad in ["evil.bat", "evil.exe", "lib.txt"] {
+            assert!(matches!(
+                export_library_to_file(s(&dir.path().join(bad))),
+                Err(ClipyError::InvalidPath(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn import_video_rejects_before_touching_db() {
+        assert!(matches!(
+            import_video("ftp://x/y.mp4".into(), None, None).await,
+            Err(ClipyError::InvalidPath(_))
+        ));
+    }
+
+    #[test]
+    fn write_library_export_writes_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("lib.json");
+        write_library_export(&out, "[]").unwrap();
+        assert_eq!(fs::read_to_string(&out).unwrap(), "[]");
+        assert!(write_library_export(&dir.path().join("no/such/dir.json"), "[]").is_err());
+    }
 }
