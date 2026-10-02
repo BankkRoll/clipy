@@ -81,9 +81,23 @@ export interface TextProperties {
    * seconds, relative to the clip start) so the preview can highlight the
    * active word karaoke-style. `highlightColor` is the active-word color.
    */
-  captionWords?: { text: string; start: number; end: number }[];
+  captionWords?: CaptionWordTiming[];
   highlightColor?: string;
+  /** How the active caption word is emphasised; defaults to a color change. */
+  highlightStyle?: CaptionHighlightStyle;
+  /** Glyph outline color for captions; omitted or "transparent" means no outline. */
+  outlineColor?: string;
 }
+
+/** One caption word with timing in seconds relative to its clip's start. */
+export interface CaptionWordTiming {
+  text: string;
+  start: number;
+  end: number;
+}
+
+/** Emphasis applied to the currently spoken caption word. */
+export type CaptionHighlightStyle = "color" | "box" | "scale" | "none";
 
 export interface Filter {
   id: string;
