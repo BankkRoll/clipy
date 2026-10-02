@@ -26,6 +26,7 @@ const navItems = [
   { path: "/settings", icon: Settings, label: "Settings" },
 ] as const;
 
+/** App sidebar: logo, command menu trigger, navigation and collapse toggle. */
 export function Sidebar() {
   const location = useLocation();
   const collapsed = useUIStore((state) => state.sidebarCollapsed);
@@ -85,6 +86,8 @@ export function Sidebar() {
             const linkContent = (
               <NavLink
                 to={item.path}
+                aria-label={item.label}
+                aria-current={isActive ? "page" : undefined}
                 className={cn(
                   "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
                   isActive
@@ -126,6 +129,7 @@ export function Sidebar() {
             variant="ghost"
             size="sm"
             onClick={toggleSidebar}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             className={cn("w-full", collapsed && "px-2")}
           >
             {collapsed ? (
