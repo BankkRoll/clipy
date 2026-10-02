@@ -75,6 +75,14 @@ xz2 = "0.1"
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["winuser", "shellapi"] }
 
+[dev-dependencies]
+# `test` exposes tauri::test::{mock_app, mock_builder} (MockRuntime) so path,
+# tray and command code can run without a real webview.
+tauri = { version = "2", features = ["tray-icon", "image-png", "protocol-asset", "test"] }
+filetime = "0.2"
+# test-util enables tokio::time::pause() for timeout-path tests.
+tokio = { version = "1", features = ["full", "test-util"] }
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

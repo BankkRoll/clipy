@@ -536,6 +536,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "dirs 5.0.1",
+ "filetime",
  "futures-util",
  "hex",
  "libc",
