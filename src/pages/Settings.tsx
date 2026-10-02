@@ -1,19 +1,24 @@
+/**
+ * Settings page: every backend setting grouped into tabs, plus maintenance
+ * actions (binaries, cache, reset) and the update check.
+ */
 import { useEffect, useState, useCallback } from "react";
 import { RefreshCw, Loader2, AlertCircle, ChevronRight } from "lucide-react";
-import { cn, isNewerVersion } from "@/lib/utils";
-import { open as openUrl } from "@tauri-apps/plugin-shell";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { invoke } from "@tauri-apps/api/core";
+import { open, ask } from "@tauri-apps/plugin-dialog";
+import { toast } from "sonner";
+import { cn, isNewerVersion } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { APP_VERSION } from "@/lib/constants";
-import { useSettings, useCacheStats, useBinaryStatus } from "@/hooks";
+import { useSettings, useCacheStats, useBinaryStatus, useAppVersion } from "@/hooks";
 import { useThemeStore } from "@/stores/settingsStore";
-import { open, ask } from "@tauri-apps/plugin-dialog";
-import { toast } from "sonner";
 import { logger } from "@/lib/logger";
 import {
   SETTINGS_TABS,
+  LATEST_RELEASE_API,
+  RELEASES_URL_PREFIX,
   GeneralTab,
   DownloadsTab,
   QualityTab,
@@ -24,6 +29,18 @@ import {
   AboutTab,
 } from "@/components/settings";
 
+function useSystemPrefersDark(): boolean {
+  const [dark, setDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = (e: MediaQueryListEvent) => setDark(e.matches);
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
+  }, []);
+  return dark;
+}
+
+/** Settings page component. */
 export function Settings() {
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [activeTab, setActiveTab] = useState("general");
@@ -32,102 +49,115 @@ export function Settings() {
   const [installingYtdlp, setInstallingYtdlp] = useState(false);
 
   const theme = useThemeStore((state) => state.theme);
+  const systemIsDark = useSystemPrefersDark();
+  const isDark = theme === "dark" || (theme === "system" && systemIsDark);
+  const appVersion = useAppVersion();
 
-  // Track system theme changes when theme is set to "system"
-  const [systemIsDark, setSystemIsDark] = useState(
-    window.matchMedia("(prefers-color-scheme: dark)").matches
+  const { settings, loading, error, refresh, updateSetting, resetSettings } = useSettings();
+  const { stats: cacheStats, clearCache, refresh: refreshCache } = useCacheStats();
+  const {
+    status: binaryStatus,
+    loading: binaryLoading,
+    installFfmpeg,
+    installYtdlp,
+    updateYtdlp,
+    refresh: refreshBinaries,
+  } = useBinaryStatus();
+
+  const runBinaryTask = useCallback(
+    async (
+      setBusy: (busy: boolean) => void,
+      task: () => Promise<void>,
+      success: string,
+      failure: string
+    ) => {
+      setBusy(true);
+      try {
+        await task();
+        toast.success(success);
+      } catch (err) {
+        logger.error("Settings", failure, err);
+        // useBinaryStatus rethrows backend failures as Error.
+        toast.error(failure, { description: (err as Error).message });
+      } finally {
+        setBusy(false);
+      }
+    },
+    []
   );
 
-  useEffect(() => {
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleChange = (e: MediaQueryListEvent) => setSystemIsDark(e.matches);
-    mediaQuery.addEventListener("change", handleChange);
-    return () => mediaQuery.removeEventListener("change", handleChange);
-  }, []);
-
-  const isDark = theme === "dark" || (theme === "system" && systemIsDark);
-
-  const {
-    settings,
-    loading,
-    error,
-    refresh,
-    updateSetting,
-    resetSettings: resetToDefaults
-  } = useSettings();
-
-  const { stats: cacheStats, clearCache, refresh: refreshCache } = useCacheStats();
-  const { status: binaryStatus, loading: binaryLoading, installFfmpeg, installYtdlp, updateYtdlp, refresh: refreshBinaries } = useBinaryStatus();
-
-  const handleUpdateYtdlp = useCallback(async () => {
-    setUpdatingYtdlp(true);
-    try {
-      await updateYtdlp();
-      toast.success("yt-dlp updated successfully");
-      await refreshBinaries();
-    } catch {
-      toast.error("Failed to update yt-dlp");
-    } finally {
-      setUpdatingYtdlp(false);
-    }
-  }, [updateYtdlp, refreshBinaries]);
-
-  const handleInstallFfmpeg = useCallback(async () => {
-    setInstallingFfmpeg(true);
-    try {
-      await installFfmpeg();
-      toast.success("FFmpeg installed successfully");
-      await refreshBinaries();
-    } catch {
-      toast.error("Failed to install FFmpeg");
-    } finally {
-      setInstallingFfmpeg(false);
-    }
-  }, [installFfmpeg, refreshBinaries]);
-
-  const handleInstallYtdlp = useCallback(async () => {
-    setInstallingYtdlp(true);
-    try {
-      await installYtdlp();
-      toast.success("yt-dlp installed successfully");
-      await refreshBinaries();
-    } catch {
-      toast.error("Failed to install yt-dlp");
-    } finally {
-      setInstallingYtdlp(false);
-    }
-  }, [installYtdlp, refreshBinaries]);
+  const handleUpdateYtdlp = useCallback(
+    () =>
+      runBinaryTask(
+        setUpdatingYtdlp,
+        updateYtdlp,
+        "yt-dlp updated successfully",
+        "Failed to update yt-dlp"
+      ),
+    [runBinaryTask, updateYtdlp]
+  );
+  const handleInstallFfmpeg = useCallback(
+    () =>
+      runBinaryTask(
+        setInstallingFfmpeg,
+        installFfmpeg,
+        "FFmpeg installed successfully",
+        "Failed to install FFmpeg"
+      ),
+    [runBinaryTask, installFfmpeg]
+  );
+  const handleInstallYtdlp = useCallback(
+    () =>
+      runBinaryTask(
+        setInstallingYtdlp,
+        installYtdlp,
+        "yt-dlp installed successfully",
+        "Failed to install yt-dlp"
+      ),
+    [runBinaryTask, installYtdlp]
+  );
 
   const handleCheckForUpdates = useCallback(async () => {
     setCheckingUpdates(true);
     try {
-      // Real update check: compare against the latest published GitHub release.
-      const res = await fetch(
-        "https://api.github.com/repos/BankkRoll/clipy/releases/latest",
-        { headers: { Accept: "application/vnd.github+json" } }
-      );
-      if (!res.ok) {
-        throw new Error(`GitHub API returned ${res.status}`);
-      }
-      const data = (await res.json()) as { tag_name?: string; html_url?: string };
-      const latest = (data.tag_name ?? "").replace(/^v/i, "").trim();
-      if (!latest) {
-        throw new Error("No release tag found");
+      const res = await fetch(LATEST_RELEASE_API, {
+        headers: { Accept: "application/vnd.github+json" },
+      });
+      if (!res.ok) throw new Error(`GitHub API returned ${res.status}`);
+
+      const data = (await res.json()) as { tag_name?: unknown; html_url?: unknown };
+      const latest =
+        typeof data.tag_name === "string" ? data.tag_name.replace(/^v/i, "").trim() : "";
+      if (!latest) throw new Error("No release tag found");
+
+      if (!isNewerVersion(latest, appVersion)) {
+        toast.success("You're up to date!", {
+          description: `Clipy ${appVersion} is the latest version.`,
+        });
+        return;
       }
 
-      if (isNewerVersion(latest, APP_VERSION)) {
-        toast.info(`Update available: v${latest}`, {
-          description: `You have ${APP_VERSION}. Click to view the release.`,
-          action: data.html_url
-            ? { label: "View", onClick: () => { void openUrl(data.html_url as string); } }
-            : undefined,
-          duration: 10000,
-        });
-      } else {
-        toast.success("You're up to date!", {
-          description: `Clipy ${APP_VERSION} is the latest version.`,
-        });
-      }
+      // SECURITY: the URL comes from a network response and is handed to the
+      // OS shell, so only ever open this repository's own release pages.
+      const releaseUrl =
+        typeof data.html_url === "string" && data.html_url.startsWith(RELEASES_URL_PREFIX)
+          ? data.html_url
+          : null;
+
+      toast.info(`Update available: v${latest}`, {
+        description: `You have ${appVersion}.`,
+        action: releaseUrl
+          ? {
+              label: "View",
+              onClick: () => {
+                openExternal(releaseUrl).catch((err: unknown) =>
+                  logger.error("Settings", "Failed to open release page", err)
+                );
+              },
+            }
+          : undefined,
+        duration: 10000,
+      });
     } catch (err) {
       logger.error("Settings", "Update check failed", err);
       toast.error("Failed to check for updates", {
@@ -136,13 +166,18 @@ export function Settings() {
     } finally {
       setCheckingUpdates(false);
     }
-  }, []);
+  }, [appVersion]);
 
-  // Wrap updateSetting so a few keys also take effect on the LIVE backend
-  // immediately (not just persisted to config and applied on next launch).
   const handleUpdateSetting = useCallback(
     async (path: string, value: unknown) => {
-      await updateSetting(path, value);
+      try {
+        await updateSetting(path, value);
+      } catch (err) {
+        logger.error("Settings", `Failed to save ${path}`, err);
+        toast.error("Failed to save setting", { description: String(err) });
+        return;
+      }
+      // Concurrency is read by the live queue, not just on next launch.
       if (path === "download.maxConcurrentDownloads") {
         try {
           await invoke("set_max_concurrent_downloads", { max: Number(value) });
@@ -167,6 +202,7 @@ export function Settings() {
       }
     } catch (err) {
       logger.error("Settings", "Failed to select folder:", err);
+      toast.error("Failed to update download location");
     }
   }, [updateSetting]);
 
@@ -175,82 +211,57 @@ export function Settings() {
       title: "Clear Cache",
       kind: "warning",
     });
-    if (confirmed) {
-      try {
-        await clearCache();
-        await refreshCache();
-        toast.success("Cache cleared successfully");
-      } catch (err) {
-        logger.error("Settings", "Failed to clear cache:", err);
-        toast.error("Failed to clear cache");
-      }
+    if (!confirmed) return;
+    try {
+      await clearCache();
+      toast.success("Cache cleared successfully");
+    } catch (err) {
+      logger.error("Settings", "Failed to clear cache:", err);
+      toast.error("Failed to clear cache");
     }
-  }, [clearCache, refreshCache]);
+  }, [clearCache]);
 
   const handleResetSettings = useCallback(async () => {
-    const confirmed = await ask("This will reset all settings to their default values. This action cannot be undone.", {
-      title: "Reset All Settings",
-      kind: "warning",
-    });
-    if (confirmed) {
-      try {
-        await resetToDefaults();
-        toast.success("Settings reset to defaults");
-      } catch (err) {
-        logger.error("Settings", "Failed to reset settings:", err);
-        toast.error("Failed to reset settings");
-      }
+    const confirmed = await ask(
+      "This will reset all settings to their default values. This action cannot be undone.",
+      { title: "Reset All Settings", kind: "warning" }
+    );
+    if (!confirmed) return;
+    try {
+      await resetSettings();
+      toast.success("Settings reset to defaults");
+    } catch (err) {
+      logger.error("Settings", "Failed to reset settings:", err);
+      toast.error("Failed to reset settings");
     }
-  }, [resetToDefaults]);
+  }, [resetSettings]);
 
   const handleFactoryReset = useCallback(async () => {
     const confirmed = await ask(
-      "This will completely reset the application to its original state. All settings, download history, library data, and cached files will be permanently deleted. This action cannot be undone.\n\nAre you absolutely sure you want to continue?",
-      {
-        title: "Factory Reset",
-        kind: "warning",
-      }
+      "This will reset every setting to its default, clear cached thumbnails and temporary files, and restart the setup wizard. Your library and downloaded files are not affected.\n\nContinue?",
+      { title: "Factory Reset", kind: "warning" }
     );
-    if (confirmed) {
-      // Double confirmation for destructive action
-      const doubleConfirmed = await ask(
-        "This is your last chance to cancel. All your data will be permanently deleted.",
-        {
-          title: "Confirm Factory Reset",
-          kind: "warning",
-        }
-      );
-      if (doubleConfirmed) {
-        try {
-          // Clear all local storage
-          localStorage.clear();
-          sessionStorage.clear();
+    if (!confirmed) return;
 
-          // Reset settings to defaults
-          await resetToDefaults();
+    const doubleConfirmed = await ask("This cannot be undone. Reset Clipy now?", {
+      title: "Confirm Factory Reset",
+      kind: "warning",
+    });
+    if (!doubleConfirmed) return;
 
-          // Clear cache
-          await clearCache();
-
-          toast.success("Factory reset complete. Restarting...");
-
-          // Reload the app after a short delay
-          setTimeout(() => {
-            window.location.reload();
-          }, 1500);
-        } catch (err) {
-          logger.error("Settings", "Failed to factory reset:", err);
-          toast.error("Failed to complete factory reset");
-        }
-      }
+    try {
+      await resetSettings();
+      await clearCache();
+      // Clears the onboarding flag and local caches so the wizard runs again.
+      localStorage.clear();
+      sessionStorage.clear();
+      toast.success("Factory reset complete. Restarting...");
+      setTimeout(() => window.location.reload(), 1500);
+    } catch (err) {
+      logger.error("Settings", "Failed to factory reset:", err);
+      toast.error("Failed to complete factory reset");
     }
-  }, [resetToDefaults, clearCache]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  // Theme is applied globally in App.tsx - no need for duplicate effect here
+  }, [resetSettings, clearCache]);
 
   if (loading && !settings) {
     return (
@@ -263,13 +274,13 @@ export function Settings() {
     );
   }
 
-  if (error) {
+  if (error || !settings) {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="text-center">
           <AlertCircle className="mx-auto h-8 w-8 text-destructive" />
           <p className="mt-4 text-sm text-destructive">Failed to load settings</p>
-          <p className="text-xs text-muted-foreground mt-1">{error}</p>
+          {error && <p className="mt-1 text-xs text-muted-foreground">{error}</p>}
           <Button onClick={refresh} className="mt-4" variant="outline">
             Try Again
           </Button>
@@ -278,18 +289,23 @@ export function Settings() {
     );
   }
 
-  if (!settings) return null;
-
   return (
     <div className="flex h-full flex-col bg-background">
-      {/* Header */}
-      <header className="flex h-14 items-center justify-between border-b border-border px-6 bg-background/80 backdrop-blur-sm sticky top-0 z-10">
+      <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-border bg-background/80 px-6 backdrop-blur-sm">
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-semibold">Settings</h1>
-          <Badge variant="secondary" className="text-[10px]">v{APP_VERSION}</Badge>
+          <Badge variant="secondary" className="text-[10px]">
+            v{appVersion}
+          </Badge>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={refresh}
+            disabled={loading}
+            aria-label="Reload settings"
+          >
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
           </Button>
           <Button variant="outline" size="sm" onClick={handleResetSettings}>
@@ -298,12 +314,10 @@ export function Settings() {
         </div>
       </header>
 
-      {/* Content */}
       <div className="flex-1 overflow-hidden">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex h-full">
-          {/* Sidebar Navigation */}
           <div className="w-48 flex-shrink-0 border-r border-border bg-muted/30 p-3">
-            <TabsList className="flex flex-col h-auto w-full bg-transparent gap-1">
+            <TabsList className="flex h-auto w-full flex-col gap-1 bg-transparent">
               {SETTINGS_TABS.map((tab) => (
                 <TabsTrigger
                   key={tab.value}
@@ -317,7 +331,6 @@ export function Settings() {
             </TabsList>
           </div>
 
-          {/* Tab Content */}
           <div className="flex-1 overflow-auto">
             <div className="max-w-2xl p-6">
               <TabsContent value="general" className="mt-0">
@@ -371,6 +384,7 @@ export function Settings() {
               <TabsContent value="about" className="mt-0">
                 <AboutTab
                   isDark={isDark}
+                  version={appVersion}
                   checkingUpdates={checkingUpdates}
                   onCheckForUpdates={handleCheckForUpdates}
                 />

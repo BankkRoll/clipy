@@ -1,14 +1,25 @@
 /**
- * Settings-related Tauri hooks
+ * Settings hooks. The backend (`get_settings` / `update_setting`) is the single
+ * source of truth for settings.
+ *
+ * Responsibilities:
+ * - load and update backend settings ({@link useSettings})
+ * - push values with app-wide side effects (theme, debug logging) to their
+ *   consumers whenever settings load ({@link applyBackendSettings})
+ * - change the theme from anywhere ({@link useTheme})
  */
 
-import { invoke } from '@tauri-apps/api/core';
-import { useCallback, useEffect, useState } from 'react';
+import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useState } from "react";
+import { logger } from "@/lib/logger";
+import { useThemeStore } from "@/stores/settingsStore";
+import type { Theme } from "@/types/settings";
 
 // ============================================================================
 // Types
 // ============================================================================
 
+/** Backend settings; mirrors `AppSettings` in `src-tauri/src/models/settings.rs`. */
 export interface AppSettings {
   general: GeneralSettings;
   download: DownloadSettings;
@@ -17,6 +28,7 @@ export interface AppSettings {
   advanced: AdvancedSettings;
 }
 
+/** `general.*` settings. */
 export interface GeneralSettings {
   language: string;
   launchOnStartup: boolean;
@@ -26,6 +38,7 @@ export interface GeneralSettings {
   autoUpdateBinaries: boolean;
 }
 
+/** `download.*` settings. Optional fields have backend serde defaults. */
 export interface DownloadSettings {
   downloadPath: string;
   defaultQuality: string;
@@ -37,58 +50,37 @@ export interface DownloadSettings {
   embedMetadata: boolean;
   autoRetry: boolean;
   retryAttempts: number;
-
-  // Filename template
   filenameTemplate?: string;
-
-  // Audio settings
   audioFormat?: string;
   audioBitrate?: string;
   audioCodec?: string;
-
-  // Video settings
   videoCodec?: string;
   crfQuality?: number;
   encodingPreset?: string;
-
-  // Subtitle settings
   downloadSubtitles?: boolean;
   autoSubtitles?: boolean;
   embedSubtitles?: boolean;
   subtitleFormat?: string;
   subtitleLanguage?: string;
-
-  // SponsorBlock settings
   sponsorBlock?: boolean;
   sponsorBlockCategories?: string[];
-
-  // Chapter settings
   downloadChapters?: boolean;
   splitByChapters?: boolean;
-
-  // Playlist settings
   playlistStart?: number;
   playlistEnd?: number;
   playlistItems?: string;
-
-  // Network/Performance settings
   rateLimit?: string;
   concurrentFragments?: number;
   cookiesFromBrowser?: string;
-
-  // File handling settings
   restrictFilenames?: boolean;
   useDownloadArchive?: boolean;
-
-  // Write metadata files
   writeInfoJson?: boolean;
   writeDescription?: boolean;
   writeThumbnail?: boolean;
-
-  // Geo-bypass settings
   geoBypass?: boolean;
 }
 
+/** `editor.*` settings. */
 export interface EditorSettings {
   defaultProjectWidth: number;
   defaultProjectHeight: number;
@@ -101,13 +93,15 @@ export interface EditorSettings {
   defaultTransitionDuration: number;
 }
 
+/** `appearance.*` settings. */
 export interface AppearanceSettings {
-  theme: 'light' | 'dark' | 'system';
+  theme: Theme;
   accentColor: string;
-  fontSize: 'small' | 'medium' | 'large';
+  fontSize: "small" | "medium" | "large";
   reducedMotion: boolean;
 }
 
+/** `advanced.*` settings. */
 export interface AdvancedSettings {
   ffmpegPath: string;
   ytdlpPath: string;
@@ -121,73 +115,93 @@ export interface AdvancedSettings {
 }
 
 // ============================================================================
+// Side effects
+// ============================================================================
+
+/**
+ * Push the parts of freshly loaded backend settings that other modules cache:
+ * the logger's debug flag and the theme store (kept for first-paint only).
+ *
+ * @param settings - Settings as returned by the backend.
+ */
+export function applyBackendSettings(settings: AppSettings): void {
+  logger.setDebugMode(Boolean(settings.advanced?.debugMode));
+  const theme = settings.appearance?.theme;
+  if (theme && useThemeStore.getState().theme !== theme) {
+    useThemeStore.getState().setTheme(theme);
+  }
+}
+
+// ============================================================================
 // Settings Hook
 // ============================================================================
 
+/**
+ * Load backend settings on mount and expose update commands.
+ *
+ * Update commands reject on backend failure; callers decide how to report it.
+ *
+ * @returns Settings (null until loaded), loading/error state and commands.
+ */
 export function useSettings() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Load settings
+  const accept = useCallback((next: AppSettings) => {
+    setSettings(next);
+    applyBackendSettings(next);
+  }, []);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await invoke<AppSettings>('get_settings');
-      setSettings(result);
+      accept(await invoke<AppSettings>("get_settings"));
       setError(null);
     } catch (e) {
-      setError(e?.toString() || 'Failed to load settings');
+      setError(e?.toString() || "Failed to load settings");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [accept]);
 
-  // Initial load
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  // Update all settings
   const updateSettings = useCallback(
     async (newSettings: AppSettings) => {
-      await invoke('update_settings', { settings: newSettings });
-      setSettings(newSettings);
+      await invoke("update_settings", { settings: newSettings });
+      accept(newSettings);
     },
-    []
+    [accept]
   );
 
-  // Update a single setting
   const updateSetting = useCallback(
     async <T>(key: string, value: T) => {
-      await invoke('update_setting', { key, value });
-      // Refresh to get the updated settings
+      await invoke("update_setting", { key, value });
       await refresh();
     },
     [refresh]
   );
 
-  // Get a single setting
   const getSetting = useCallback(async <T>(key: string): Promise<T> => {
-    return invoke<T>('get_setting', { key });
+    return invoke<T>("get_setting", { key });
   }, []);
 
-  // Reset to defaults
   const resetSettings = useCallback(async () => {
-    const defaultSettings = await invoke<AppSettings>('reset_settings');
-    setSettings(defaultSettings);
-    return defaultSettings;
-  }, []);
+    const defaults = await invoke<AppSettings>("reset_settings");
+    accept(defaults);
+    return defaults;
+  }, [accept]);
 
-  // Export settings
   const exportSettings = useCallback(async () => {
-    return invoke<string>('export_settings');
+    return invoke<string>("export_settings");
   }, []);
 
-  // Import settings
   const importSettings = useCallback(
     async (json: string) => {
-      await invoke('import_settings', { json });
+      await invoke("import_settings", { json });
       await refresh();
     },
     [refresh]
@@ -211,127 +225,29 @@ export function useSettings() {
 // Theme Hook
 // ============================================================================
 
+/**
+ * Read and change the theme without loading all settings.
+ *
+ * `setTheme` applies the theme immediately via the theme store, then persists
+ * it to the backend; if the backend rejects, the previous theme is restored and
+ * the error rethrown.
+ *
+ * @returns The current theme and a `setTheme` command.
+ */
 export function useTheme() {
-  const { settings, updateSetting } = useSettings();
+  const theme = useThemeStore((state) => state.theme);
 
-  const theme = settings?.appearance.theme || 'system';
-  const accentColor = settings?.appearance.accentColor || '#3b82f6';
-  const fontSize = settings?.appearance.fontSize || 'medium';
-  const reducedMotion = settings?.appearance.reducedMotion || false;
-
-  const setTheme = useCallback(
-    async (newTheme: 'light' | 'dark' | 'system') => {
-      await updateSetting('appearance.theme', newTheme);
-    },
-    [updateSetting]
-  );
-
-  const setAccentColor = useCallback(
-    async (color: string) => {
-      await updateSetting('appearance.accentColor', color);
-    },
-    [updateSetting]
-  );
-
-  const setFontSize = useCallback(
-    async (size: 'small' | 'medium' | 'large') => {
-      await updateSetting('appearance.fontSize', size);
-    },
-    [updateSetting]
-  );
-
-  const setReducedMotion = useCallback(
-    async (reduced: boolean) => {
-      await updateSetting('appearance.reducedMotion', reduced);
-    },
-    [updateSetting]
-  );
-
-  // Apply theme to document
-  useEffect(() => {
-    const root = document.documentElement;
-
-    // Determine actual theme
-    let actualTheme = theme;
-    if (theme === 'system') {
-      actualTheme = window.matchMedia('(prefers-color-scheme: dark)').matches
-        ? 'dark'
-        : 'light';
+  const setTheme = useCallback(async (next: Theme) => {
+    const store = useThemeStore.getState();
+    const previous = store.theme;
+    store.setTheme(next);
+    try {
+      await invoke("update_setting", { key: "appearance.theme", value: next });
+    } catch (err) {
+      useThemeStore.getState().setTheme(previous);
+      throw err;
     }
+  }, []);
 
-    // Apply theme class
-    root.classList.remove('light', 'dark');
-    root.classList.add(actualTheme);
-
-    // Apply accent color
-    root.style.setProperty('--accent-color', accentColor);
-
-    // Apply font size
-    const fontSizeMap = { small: '14px', medium: '16px', large: '18px' };
-    root.style.setProperty('--base-font-size', fontSizeMap[fontSize]);
-
-    // Apply reduced motion
-    if (reducedMotion) {
-      root.classList.add('reduce-motion');
-    } else {
-      root.classList.remove('reduce-motion');
-    }
-  }, [theme, accentColor, fontSize, reducedMotion]);
-
-  return {
-    theme,
-    accentColor,
-    fontSize,
-    reducedMotion,
-    setTheme,
-    setAccentColor,
-    setFontSize,
-    setReducedMotion,
-  };
-}
-
-// ============================================================================
-// Download Settings Hook
-// ============================================================================
-
-export function useDownloadSettings() {
-  const { settings, updateSetting } = useSettings();
-
-  const downloadSettings = settings?.download;
-
-  const setDownloadPath = useCallback(
-    async (path: string) => {
-      await updateSetting('download.downloadPath', path);
-    },
-    [updateSetting]
-  );
-
-  const setDefaultQuality = useCallback(
-    async (quality: string) => {
-      await updateSetting('download.defaultQuality', quality);
-    },
-    [updateSetting]
-  );
-
-  const setDefaultFormat = useCallback(
-    async (format: string) => {
-      await updateSetting('download.defaultFormat', format);
-    },
-    [updateSetting]
-  );
-
-  const setMaxConcurrent = useCallback(
-    async (max: number) => {
-      await updateSetting('download.maxConcurrentDownloads', max);
-    },
-    [updateSetting]
-  );
-
-  return {
-    settings: downloadSettings,
-    setDownloadPath,
-    setDefaultQuality,
-    setDefaultFormat,
-    setMaxConcurrent,
-  };
+  return { theme, setTheme };
 }

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -23,17 +24,32 @@ import type { AppSettings } from "@/hooks/useSettings";
 // Consistent width for all select triggers
 const SELECT_WIDTH = "w-[180px]";
 
-interface QualityTabProps {
+/** Props for {@link QualityTab}. */
+export interface QualityTabProps {
   settings: AppSettings;
   onUpdateSetting: (path: string, value: unknown) => void;
 }
 
+/** Settings tab: default resolution, container, codecs, encoding and audio quality. */
 export function QualityTab({ settings, onUpdateSetting }: QualityTabProps) {
+  const savedCrf = settings.download.crfQuality ?? 23;
+  // Dragging updates only the label; the backend is written once on release.
+  const [crf, setCrf] = useState(savedCrf);
+  useEffect(() => setCrf(savedCrf), [savedCrf]);
+
   // Get current values for display
-  const currentFormat = AUDIO_FORMATS.find(f => f.value === (settings.download.audioFormat || "m4a"));
-  const currentPreset = ENCODING_PRESETS.find(p => p.value === (settings.download.encodingPreset || "medium"));
-  const currentVideoCodec = VIDEO_CODECS.find(c => c.value === (settings.download.videoCodec || "auto"));
-  const currentAudioCodec = AUDIO_CODECS.find(c => c.value === (settings.download.audioCodec || "auto"));
+  const currentFormat = AUDIO_FORMATS.find(
+    (f) => f.value === (settings.download.audioFormat || "m4a")
+  );
+  const currentPreset = ENCODING_PRESETS.find(
+    (p) => p.value === (settings.download.encodingPreset || "medium")
+  );
+  const currentVideoCodec = VIDEO_CODECS.find(
+    (c) => c.value === (settings.download.videoCodec || "auto")
+  );
+  const currentAudioCodec = AUDIO_CODECS.find(
+    (c) => c.value === (settings.download.audioCodec || "auto")
+  );
 
   return (
     <div className="space-y-6">
@@ -49,10 +65,10 @@ export function QualityTab({ settings, onUpdateSetting }: QualityTabProps) {
             <SelectContent>
               {VIDEO_QUALITIES.map((q) => (
                 <SelectItem key={q.value} value={q.value}>
-                  <span className="flex items-center justify-between w-full gap-2">
+                  <span className="flex w-full items-center justify-between gap-2">
                     <span>{q.label}</span>
                     {q.badge && (
-                      <Badge variant="secondary" className="text-[9px] px-1.5 shrink-0">
+                      <Badge variant="secondary" className="shrink-0 px-1.5 text-[9px]">
                         {q.badge}
                       </Badge>
                     )}
@@ -94,7 +110,7 @@ export function QualityTab({ settings, onUpdateSetting }: QualityTabProps) {
                 {currentVideoCodec && (
                   <span className="flex flex-col items-start">
                     <span className="truncate">{currentVideoCodec.label}</span>
-                    <span className="text-xs text-muted-foreground truncate">
+                    <span className="truncate text-xs text-muted-foreground">
                       {currentVideoCodec.description}
                     </span>
                   </span>
@@ -116,26 +132,26 @@ export function QualityTab({ settings, onUpdateSetting }: QualityTabProps) {
       </SettingGroup>
 
       <SettingGroup title="Encoding Settings" description="Advanced video encoding options">
-        <SettingItem
-          label="CRF Quality"
-          description="Lower = better quality, larger file"
-          vertical
-        >
+        <SettingItem label="CRF Quality" description="Lower = better quality, larger file" vertical>
           <div className="space-y-3">
             <div className="flex items-center gap-4">
               <Slider
-                value={[settings.download.crfQuality ?? 23]}
-                onValueChange={([v]) => onUpdateSetting("download.crfQuality", v)}
+                aria-label="CRF quality"
+                value={[crf]}
+                onValueChange={(values) => setCrf(values[0]!)}
+                onValueCommit={(values) => {
+                  if (values[0] !== savedCrf) onUpdateSetting("download.crfQuality", values[0]);
+                }}
                 min={0}
                 max={51}
                 step={1}
                 className="flex-1"
               />
-              <span className="w-10 text-center font-mono text-sm tabular-nums bg-muted rounded px-2 py-1">
-                {settings.download.crfQuality ?? 23}
+              <span className="w-10 rounded bg-muted px-2 py-1 text-center font-mono text-sm tabular-nums">
+                {crf}
               </span>
             </div>
-            <div className="flex justify-between text-[10px] text-muted-foreground px-1">
+            <div className="flex justify-between px-1 text-[10px] text-muted-foreground">
               <span>Lossless (0)</span>
               <span>Typical (18-28)</span>
               <span>Worst (51)</span>
@@ -153,7 +169,7 @@ export function QualityTab({ settings, onUpdateSetting }: QualityTabProps) {
                 {currentPreset && (
                   <span className="flex flex-col items-start">
                     <span className="truncate">{currentPreset.label}</span>
-                    <span className="text-xs text-muted-foreground truncate">
+                    <span className="truncate text-xs text-muted-foreground">
                       {currentPreset.description}
                     </span>
                   </span>
@@ -185,7 +201,7 @@ export function QualityTab({ settings, onUpdateSetting }: QualityTabProps) {
                 {currentFormat && (
                   <span className="flex flex-col items-start">
                     <span className="truncate">{currentFormat.label}</span>
-                    <span className="text-xs text-muted-foreground truncate">
+                    <span className="truncate text-xs text-muted-foreground">
                       {currentFormat.description}
                     </span>
                   </span>
@@ -236,7 +252,7 @@ export function QualityTab({ settings, onUpdateSetting }: QualityTabProps) {
                 {currentAudioCodec && (
                   <span className="flex flex-col items-start">
                     <span className="truncate">{currentAudioCodec.label}</span>
-                    <span className="text-xs text-muted-foreground truncate">
+                    <span className="truncate text-xs text-muted-foreground">
                       {currentAudioCodec.description}
                     </span>
                   </span>

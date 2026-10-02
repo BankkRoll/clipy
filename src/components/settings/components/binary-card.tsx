@@ -2,7 +2,8 @@ import { Download, Loader2, CheckCircle, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-interface BinaryCardProps {
+/** Props for {@link BinaryCard}. */
+export interface BinaryCardProps {
   name: string;
   version?: string | null | undefined;
   installed: boolean;
@@ -13,6 +14,7 @@ interface BinaryCardProps {
   canUpdate?: boolean;
 }
 
+/** Install status of one external tool, with Install / Update actions. */
 export function BinaryCard({
   name,
   version,
@@ -24,12 +26,18 @@ export function BinaryCard({
   canUpdate = false,
 }: BinaryCardProps) {
   return (
-    <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
+    <div
+      role="group"
+      aria-label={name}
+      className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3"
+    >
       <div className="flex items-center gap-3">
-        <div className={cn(
-          "flex h-8 w-8 items-center justify-center rounded-full",
-          loading ? "bg-muted" : installed ? "bg-green-500/10" : "bg-destructive/10"
-        )}>
+        <div
+          className={cn(
+            "flex h-8 w-8 items-center justify-center rounded-full",
+            loading ? "bg-muted" : installed ? "bg-green-500/10" : "bg-destructive/10"
+          )}
+        >
           {loading ? (
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
           ) : installed ? (
@@ -48,16 +56,17 @@ export function BinaryCard({
       {!loading && (
         <div className="flex gap-2">
           {installed ? (
-            canUpdate && onUpdate && (
+            canUpdate &&
+            onUpdate && (
               <Button variant="outline" size="sm" onClick={onUpdate} disabled={installing}>
-                {installing && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
+                {installing && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
                 Update
               </Button>
             )
           ) : (
             <Button size="sm" onClick={onInstall} disabled={installing}>
-              {installing && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
-              <Download className="h-3.5 w-3.5 mr-1.5" />
+              {installing && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+              <Download className="mr-1.5 h-3.5 w-3.5" />
               Install
             </Button>
           )}

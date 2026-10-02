@@ -5,6 +5,8 @@ const invoke = vi.fn();
 const listen = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: (...a: unknown[]) => listen(...a) }));
+const getVersion = vi.fn();
+vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => getVersion() }));
 
 import {
   useSystemInfo,
@@ -12,12 +14,108 @@ import {
   useCacheStats,
   useFileSystem,
   useTauriEvent,
+  useNavigationEvent,
+  useAppVersion,
 } from "@/hooks/useTauri";
+import { APP_VERSION } from "@/lib/constants";
 
 beforeEach(() => {
   invoke.mockReset();
   listen.mockReset();
   listen.mockResolvedValue(() => {});
+  getVersion.mockReset();
+});
+
+describe("useAppVersion", () => {
+  it("starts with the bundled version and switches to the runtime one", async () => {
+    getVersion.mockResolvedValue("9.9.9");
+    const { result } = renderHook(() => useAppVersion());
+    expect(result.current).toBe(APP_VERSION);
+    await waitFor(() => expect(result.current).toBe("9.9.9"));
+  });
+
+  it("keeps the bundled version when the plugin fails or returns nothing", async () => {
+    getVersion.mockRejectedValueOnce(new Error("no plugin"));
+    const failing = renderHook(() => useAppVersion());
+    getVersion.mockResolvedValueOnce("");
+    const empty = renderHook(() => useAppVersion());
+    await waitFor(() => expect(getVersion).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+    expect(failing.result.current).toBe(APP_VERSION);
+    expect(empty.result.current).toBe(APP_VERSION);
+  });
+
+  it("ignores a version that resolves after unmount", async () => {
+    let resolve!: (v: string) => void;
+    getVersion.mockReturnValue(new Promise<string>((r) => (resolve = r)));
+    const { result, unmount } = renderHook(() => useAppVersion());
+    unmount();
+    await act(async () => resolve("1.2.3"));
+    expect(result.current).toBe(APP_VERSION);
+  });
+});
+
+describe("refresh failures", () => {
+  it("useBinaryStatus records the error", async () => {
+    invoke.mockRejectedValue("no binaries");
+    const { result } = renderHook(() => useBinaryStatus());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toBe("no binaries");
+    invoke.mockRejectedValue("");
+    await act(() => result.current.refresh());
+    expect(result.current.error).toBe("Failed to check binaries");
+  });
+
+  it("useCacheStats records the error", async () => {
+    invoke.mockRejectedValue("");
+    const { result } = renderHook(() => useCacheStats());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toBe("Failed to get cache stats");
+  });
+
+  it("binary commands fall back to a generic message", async () => {
+    invoke.mockResolvedValue(null);
+    const { result } = renderHook(() => useBinaryStatus());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    invoke.mockRejectedValue("");
+    await expect(act(() => result.current.installYtdlp())).rejects.toThrow(
+      "Failed to install yt-dlp"
+    );
+    await expect(act(() => result.current.updateYtdlp())).rejects.toThrow(
+      "Failed to update yt-dlp"
+    );
+    await expect(act(() => result.current.installFfmpeg())).rejects.toThrow(
+      "Failed to install FFmpeg"
+    );
+  });
+});
+
+describe("useNavigationEvent", () => {
+  it("forwards navigate payloads", async () => {
+    let captured: ((event: { payload: string }) => void) | undefined;
+    listen.mockImplementation((_name: string, cb: (e: { payload: string }) => void) => {
+      captured = cb;
+      return Promise.resolve(() => {});
+    });
+    const navigate = vi.fn();
+    renderHook(() => useNavigationEvent(navigate));
+    await waitFor(() => expect(listen).toHaveBeenCalledWith("navigate", expect.any(Function)));
+    act(() => captured?.({ payload: "/library" }));
+    expect(navigate).toHaveBeenCalledWith("/library");
+  });
+});
+
+describe("useTauriEvent teardown race", () => {
+  it("unlistens immediately when unmounted before listen resolves", async () => {
+    const unlisten = vi.fn();
+    let resolve!: (fn: () => void) => void;
+    listen.mockReturnValue(new Promise((r) => (resolve = r)));
+    const { unmount } = renderHook(() => useTauriEvent("e", () => {}));
+    unmount();
+    expect(unlisten).not.toHaveBeenCalled();
+    await act(async () => resolve(unlisten));
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("useSystemInfo", () => {

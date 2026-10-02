@@ -1,6 +1,5 @@
 import { FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import {
   Select,
@@ -9,14 +8,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { SettingGroup } from "../components/setting-group";
 import { SettingItem } from "../components/setting-item";
+import { CommitInput } from "../components/commit-input";
 import { FILENAME_PLACEHOLDERS } from "@/lib/constants";
 import type { AppSettings } from "@/hooks/useSettings";
 
@@ -24,12 +19,16 @@ import type { AppSettings } from "@/hooks/useSettings";
 const SELECT_WIDTH = "w-[180px]";
 const INPUT_WIDTH = "w-[180px]";
 
-interface DownloadsTabProps {
+const toIndex = (raw: string) => Math.max(0, parseInt(raw, 10) || 0);
+
+/** Props for {@link DownloadsTab}. */
+export interface DownloadsTabProps {
   settings: AppSettings;
   onUpdateSetting: (path: string, value: unknown) => void;
   onBrowseDownloadPath: () => void;
 }
 
+/** Settings tab: download location, naming, concurrency, metadata and playlists. */
 export function DownloadsTab({
   settings,
   onUpdateSetting,
@@ -40,14 +39,15 @@ export function DownloadsTab({
       <SettingGroup title="Download Location" description="Where your files are saved">
         <SettingItem label="Default folder" vertical>
           <div className="flex gap-2">
-            <Input
+            <CommitInput
+              aria-label="Download folder"
               value={settings.download.downloadPath}
-              onChange={(e) => onUpdateSetting("download.downloadPath", e.target.value)}
+              onCommit={(v) => onUpdateSetting("download.downloadPath", v)}
               placeholder="Choose a folder..."
               className="flex-1 font-mono text-sm"
             />
             <Button variant="outline" onClick={onBrowseDownloadPath}>
-              <FolderOpen className="h-4 w-4 mr-2" />
+              <FolderOpen className="mr-2 h-4 w-4" />
               Browse
             </Button>
           </div>
@@ -72,16 +72,20 @@ export function DownloadsTab({
         </SettingItem>
       </SettingGroup>
 
-      <SettingGroup title="Filename Template" description="Customize how files are named using yt-dlp placeholders">
+      <SettingGroup
+        title="Filename Template"
+        description="Customize how files are named using yt-dlp placeholders"
+      >
         <SettingItem
           label="Template"
           description="Use placeholders to customize filenames"
           vertical
         >
           <div className="space-y-3">
-            <Input
+            <CommitInput
+              aria-label="Filename template"
               value={settings.download.filenameTemplate || "%(title)s.%(ext)s"}
-              onChange={(e) => onUpdateSetting("download.filenameTemplate", e.target.value)}
+              onCommit={(v) => onUpdateSetting("download.filenameTemplate", v)}
               placeholder="%(title)s.%(ext)s"
               className="font-mono text-sm"
             />
@@ -107,7 +111,7 @@ export function DownloadsTab({
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
                       <p className="font-mono text-xs">{p.value}</p>
-                      <p className="text-muted-foreground text-xs">{p.description}</p>
+                      <p className="text-xs text-muted-foreground">{p.description}</p>
                     </TooltipContent>
                   </Tooltip>
                 ))}
@@ -133,9 +137,15 @@ export function DownloadsTab({
               {[1, 2, 3, 4, 5].map((n) => (
                 <SelectItem key={n} value={String(n)}>
                   <span className="flex flex-col py-0.5">
-                    <span className="font-medium">{n} {n === 1 ? "download" : "downloads"}</span>
+                    <span className="font-medium">
+                      {n} {n === 1 ? "download" : "downloads"}
+                    </span>
                     <span className="text-xs text-muted-foreground">
-                      {n === 1 ? "Most stable" : n <= 3 ? "Balanced" : "Faster, uses more resources"}
+                      {n === 1
+                        ? "Most stable"
+                        : n <= 3
+                          ? "Balanced"
+                          : "Faster, uses more resources"}
                     </span>
                   </span>
                 </SelectItem>
@@ -145,7 +155,10 @@ export function DownloadsTab({
         </SettingItem>
       </SettingGroup>
 
-      <SettingGroup title="Metadata & Embedding" description="What gets included in downloaded files">
+      <SettingGroup
+        title="Metadata & Embedding"
+        description="What gets included in downloaded files"
+      >
         <SettingItem label="Embed thumbnail" description="Add video thumbnail as album art">
           <Switch
             checked={settings.download.embedThumbnail}
@@ -167,7 +180,10 @@ export function DownloadsTab({
       </SettingGroup>
 
       <SettingGroup title="Error Handling" description="What happens when downloads fail">
-        <SettingItem label="Auto-retry failed downloads" description="Automatically retry on network errors">
+        <SettingItem
+          label="Auto-retry failed downloads"
+          description="Automatically retry on network errors"
+        >
           <Switch
             checked={settings.download.autoRetry}
             onCheckedChange={(v) => onUpdateSetting("download.autoRetry", v)}
@@ -186,7 +202,9 @@ export function DownloadsTab({
                 {[1, 2, 3, 5, 10].map((n) => (
                   <SelectItem key={n} value={String(n)}>
                     <span className="flex flex-col py-0.5">
-                      <span className="font-medium">{n} {n === 1 ? "attempt" : "attempts"}</span>
+                      <span className="font-medium">
+                        {n} {n === 1 ? "attempt" : "attempts"}
+                      </span>
                       <span className="text-xs text-muted-foreground">
                         {n <= 2 ? "Quick failure" : n <= 5 ? "Balanced" : "Persistent"}
                       </span>
@@ -204,11 +222,12 @@ export function DownloadsTab({
           label="Start index"
           description="Start downloading from this position (0 = beginning)"
         >
-          <Input
+          <CommitInput
             type="number"
             min={0}
-            value={settings.download.playlistStart || 0}
-            onChange={(e) => onUpdateSetting("download.playlistStart", parseInt(e.target.value) || 0)}
+            aria-label="Playlist start index"
+            value={String(settings.download.playlistStart || 0)}
+            onCommit={(v) => onUpdateSetting("download.playlistStart", toIndex(v))}
             className={INPUT_WIDTH}
           />
         </SettingItem>
@@ -216,33 +235,31 @@ export function DownloadsTab({
           label="End index"
           description="Stop downloading at this position (0 = download all)"
         >
-          <Input
+          <CommitInput
             type="number"
             min={0}
-            value={settings.download.playlistEnd || 0}
-            onChange={(e) => onUpdateSetting("download.playlistEnd", parseInt(e.target.value) || 0)}
+            aria-label="Playlist end index"
+            value={String(settings.download.playlistEnd || 0)}
+            onCommit={(v) => onUpdateSetting("download.playlistEnd", toIndex(v))}
             className={INPUT_WIDTH}
           />
         </SettingItem>
-        <SettingItem
-          label="Specific items"
-          description="Download specific items only"
-          vertical
-        >
-          <Input
+        <SettingItem label="Specific items" description="Download specific items only" vertical>
+          <CommitInput
+            aria-label="Playlist items"
             value={settings.download.playlistItems || ""}
-            onChange={(e) => onUpdateSetting("download.playlistItems", e.target.value)}
+            onCommit={(v) => onUpdateSetting("download.playlistItems", v)}
             placeholder="e.g., 1,3,5-7"
             className="font-mono text-sm"
           />
         </SettingItem>
       </SettingGroup>
 
-      <SettingGroup title="Write Metadata Files" description="Save additional information alongside downloads">
-        <SettingItem
-          label="Write info JSON"
-          description="Save video metadata as a .info.json file"
-        >
+      <SettingGroup
+        title="Write Metadata Files"
+        description="Save additional information alongside downloads"
+      >
+        <SettingItem label="Write info JSON" description="Save video metadata as a .info.json file">
           <Switch
             checked={settings.download.writeInfoJson || false}
             onCheckedChange={(v) => onUpdateSetting("download.writeInfoJson", v)}
@@ -278,10 +295,7 @@ export function DownloadsTab({
             onCheckedChange={(v) => onUpdateSetting("download.restrictFilenames", v)}
           />
         </SettingItem>
-        <SettingItem
-          label="Download archive"
-          description="Track downloads to prevent duplicates"
-        >
+        <SettingItem label="Download archive" description="Track downloads to prevent duplicates">
           <Switch
             checked={settings.download.useDownloadArchive || false}
             onCheckedChange={(v) => onUpdateSetting("download.useDownloadArchive", v)}

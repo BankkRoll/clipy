@@ -1,4 +1,3 @@
-import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import {
   Select,
@@ -9,6 +8,7 @@ import {
 } from "@/components/ui/select";
 import { SettingGroup } from "../components/setting-group";
 import { SettingItem } from "../components/setting-item";
+import { CommitInput } from "../components/commit-input";
 import type { AppSettings } from "@/hooks/useSettings";
 
 // Consistent width for all select triggers
@@ -32,14 +32,20 @@ const FRAGMENT_OPTIONS = [
   { value: "16", label: "16 fragments", description: "Fastest, uses most bandwidth" },
 ] as const;
 
-interface NetworkTabProps {
+/** Props for {@link NetworkTab}. */
+export interface NetworkTabProps {
   settings: AppSettings;
   onUpdateSetting: (path: string, value: unknown) => void;
 }
 
+/** Settings tab: bandwidth, fragments, browser cookies, proxy and geo-bypass. */
 export function NetworkTab({ settings, onUpdateSetting }: NetworkTabProps) {
-  const currentBrowser = BROWSERS.find(b => b.value === (settings.download.cookiesFromBrowser || "none"));
-  const currentFragments = FRAGMENT_OPTIONS.find(f => f.value === String(settings.download.concurrentFragments || 1));
+  const currentBrowser = BROWSERS.find(
+    (b) => b.value === (settings.download.cookiesFromBrowser || "none")
+  );
+  const currentFragments = FRAGMENT_OPTIONS.find(
+    (f) => f.value === String(settings.download.concurrentFragments || 1)
+  );
 
   return (
     <div className="space-y-6">
@@ -49,9 +55,10 @@ export function NetworkTab({ settings, onUpdateSetting }: NetworkTabProps) {
           description="Maximum download speed (leave empty for unlimited)"
           vertical
         >
-          <Input
+          <CommitInput
+            aria-label="Rate limit"
             value={settings.download.rateLimit || ""}
-            onChange={(e) => onUpdateSetting("download.rateLimit", e.target.value)}
+            onCommit={(v) => onUpdateSetting("download.rateLimit", v.trim())}
             placeholder="e.g., 1M (1 MB/s), 500K (500 KB/s)"
             className="font-mono text-sm"
           />
@@ -70,7 +77,7 @@ export function NetworkTab({ settings, onUpdateSetting }: NetworkTabProps) {
                 {currentFragments && (
                   <span className="flex flex-col items-start">
                     <span className="truncate">{currentFragments.label}</span>
-                    <span className="text-xs text-muted-foreground truncate">
+                    <span className="truncate text-xs text-muted-foreground">
                       {currentFragments.description}
                     </span>
                   </span>
@@ -98,14 +105,16 @@ export function NetworkTab({ settings, onUpdateSetting }: NetworkTabProps) {
         >
           <Select
             value={settings.download.cookiesFromBrowser || "none"}
-            onValueChange={(v) => onUpdateSetting("download.cookiesFromBrowser", v === "none" ? "" : v)}
+            onValueChange={(v) =>
+              onUpdateSetting("download.cookiesFromBrowser", v === "none" ? "" : v)
+            }
           >
             <SelectTrigger className={SELECT_WIDTH}>
               <SelectValue>
                 {currentBrowser && (
                   <span className="flex flex-col items-start">
                     <span className="truncate">{currentBrowser.label}</span>
-                    <span className="text-xs text-muted-foreground truncate">
+                    <span className="truncate text-xs text-muted-foreground">
                       {currentBrowser.description}
                     </span>
                   </span>
@@ -127,22 +136,16 @@ export function NetworkTab({ settings, onUpdateSetting }: NetworkTabProps) {
       </SettingGroup>
 
       <SettingGroup title="Proxy Settings" description="Route traffic through a proxy server">
-        <SettingItem
-          label="Proxy URL"
-          description="HTTP or SOCKS proxy address"
-          vertical
-        >
-          <Input
+        <SettingItem label="Proxy URL" description="HTTP or SOCKS proxy address" vertical>
+          <CommitInput
+            aria-label="Proxy URL"
             value={settings.advanced.proxyUrl || ""}
-            onChange={(e) => onUpdateSetting("advanced.proxyUrl", e.target.value)}
+            onCommit={(v) => onUpdateSetting("advanced.proxyUrl", v.trim())}
             placeholder="e.g., socks5://127.0.0.1:1080"
             className="font-mono text-sm"
           />
         </SettingItem>
-        <SettingItem
-          label="Geo-bypass"
-          description="Attempt to bypass geographic restrictions"
-        >
+        <SettingItem label="Geo-bypass" description="Attempt to bypass geographic restrictions">
           <Switch
             checked={settings.download.geoBypass || false}
             onCheckedChange={(v) => onUpdateSetting("download.geoBypass", v)}

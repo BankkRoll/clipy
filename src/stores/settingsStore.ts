@@ -1,15 +1,24 @@
+/**
+ * Locally persisted settings caches.
+ *
+ * The backend (`get_settings`) is the source of truth. {@link useThemeStore}
+ * only caches the theme in localStorage so the first paint uses the right
+ * colors before backend settings load; `applyBackendSettings` keeps it in sync.
+ */
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { type Theme, type AppSettings } from "@/types/settings";
 
-/**
- * Theme store - manages app theme
- */
-interface ThemeState {
+/** Shape of the theme cache. */
+export interface ThemeState {
   theme: Theme;
   setTheme: (theme: Theme) => void;
 }
 
+/**
+ * First-paint cache of `appearance.theme`. Write theme changes through
+ * `useTheme().setTheme` so the backend is updated too.
+ */
 export const useThemeStore = create<ThemeState>()(
   persist(
     (set) => ({
@@ -100,6 +109,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   },
 };
 
+/** @deprecated Use backend settings via useSettings. */
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({

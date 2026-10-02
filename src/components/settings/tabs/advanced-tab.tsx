@@ -29,7 +29,8 @@ interface CacheStats {
   totalSize: number;
 }
 
-interface AdvancedTabProps {
+/** Props for {@link AdvancedTab}. */
+export interface AdvancedTabProps {
   settings: AppSettings;
   onUpdateSetting: (path: string, value: unknown) => void;
   cacheStats: CacheStats | null;
@@ -47,6 +48,7 @@ interface AdvancedTabProps {
   onFactoryReset?: () => void;
 }
 
+/** Settings tab: hardware acceleration, debug mode, cache, binaries and factory reset. */
 export function AdvancedTab({
   settings,
   onUpdateSetting,
@@ -65,7 +67,7 @@ export function AdvancedTab({
   onFactoryReset,
 }: AdvancedTabProps) {
   const currentHwAccel = HW_ACCEL_TYPES.find(
-    t => t.value === (settings.advanced.hardwareAccelerationType || "auto")
+    (t) => t.value === (settings.advanced.hardwareAccelerationType || "auto")
   );
 
   return (
@@ -81,10 +83,7 @@ export function AdvancedTab({
           />
         </SettingItem>
         {settings.advanced.hardwareAcceleration && (
-          <SettingItem
-            label="Acceleration type"
-            description="Select your GPU encoder"
-          >
+          <SettingItem label="Acceleration type" description="Select your GPU encoder">
             <Select
               value={settings.advanced.hardwareAccelerationType || "auto"}
               onValueChange={(v) => onUpdateSetting("advanced.hardwareAccelerationType", v)}
@@ -94,7 +93,7 @@ export function AdvancedTab({
                   {currentHwAccel && (
                     <span className="flex flex-col items-start">
                       <span className="truncate">{currentHwAccel.label}</span>
-                      <span className="text-xs text-muted-foreground truncate">
+                      <span className="truncate text-xs text-muted-foreground">
                         {currentHwAccel.description}
                       </span>
                     </span>
@@ -131,7 +130,12 @@ export function AdvancedTab({
             <Button variant="outline" size="sm" onClick={onClearCache}>
               Clear Cache
             </Button>
-            <Button variant="ghost" size="icon" onClick={onRefreshCache}>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onRefreshCache}
+              aria-label="Refresh cache size"
+            >
               <RefreshCw className="h-4 w-4" />
             </Button>
           </div>
@@ -139,11 +143,17 @@ export function AdvancedTab({
       </SettingGroup>
 
       <SettingGroup title="Required Components" description="External tools needed for downloads">
-        <div className="flex items-center justify-between mb-3">
+        <div className="mb-3 flex items-center justify-between">
           <p className="text-xs text-muted-foreground">
             These tools are required for downloading and processing videos
           </p>
-          <Button variant="ghost" size="sm" onClick={onRefreshBinaries} disabled={binaryLoading}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onRefreshBinaries}
+            disabled={binaryLoading}
+            aria-label="Refresh component status"
+          >
             <RefreshCw className={cn("h-3.5 w-3.5", binaryLoading && "animate-spin")} />
           </Button>
         </div>
@@ -172,14 +182,13 @@ export function AdvancedTab({
       <SettingGroup title="Danger Zone" description="Destructive actions">
         <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-4">
           <div className="flex items-start gap-3">
-            <AlertTriangle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
             <div className="flex-1 space-y-3">
               <div>
                 <h4 className="font-medium text-destructive">Factory Reset</h4>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Reset the application to its original state. This will delete all settings,
-                  download history, library data, and cached files. You will need to go through
-                  the onboarding process again.
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Restore every setting to its default, clear cached thumbnails and temporary files,
+                  and restart the setup wizard. Your library and downloaded files are kept.
                 </p>
               </div>
               <Button
