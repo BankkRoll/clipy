@@ -1,7 +1,11 @@
 /**
- * Download-related type definitions
+ * Download-related type definitions.
+ *
+ * Shapes that cross the IPC boundary mirror the serde models in
+ * `src-tauri/src/models/download.rs` (camelCase field names).
  */
 
+/** A download as tracked by the frontend download store. */
 export interface Download {
   id: string;
   videoId: string;
@@ -14,26 +18,58 @@ export interface Download {
   totalBytes: number;
   speed: number;
   eta: number;
+  /** Display label, e.g. `1080p` or `Audio`. */
   quality: string;
   format: string;
+  /**
+   * Output directory the download was started with. Not a playable file: use
+   * {@link Download.filePath} once the backend reports completion.
+   */
   outputPath: string;
+  /** Final file on disk; only known once the backend reports completion. */
+  filePath?: string | undefined;
+  /** Failure reason reported by the backend. */
   error: string | null;
   createdAt: string;
   completedAt: string | null;
   duration: number;
   channel: string;
   /** Current download phase for better UX */
-  phase?: DownloadPhase;
+  phase?: DownloadPhase | undefined;
   /** Message describing current activity */
-  message?: string;
-  // Extended fields
-  audioOnly?: boolean;
-  audioFormat?: string;
-  audioBitrate?: string;
-  subtitles?: boolean;
-  subtitleLanguage?: string;
+  message?: string | undefined;
 }
 
+/**
+ * A download task as returned by the backend `get_downloads` command.
+ * Mirrors `DownloadTask` in `src-tauri/src/models/download.rs`.
+ */
+export interface DownloadTask {
+  id: string;
+  videoId: string;
+  title: string;
+  thumbnail: string;
+  url: string;
+  status: DownloadStatus;
+  progress: number;
+  downloadedBytes: number;
+  totalBytes: number;
+  speed: number;
+  eta: number;
+  /** Raw quality value, e.g. `1080` or `best`. */
+  quality: string;
+  format: string;
+  /** Output directory while running; the final file path once completed. */
+  outputPath: string;
+  error: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  duration: number;
+  channel: string;
+  options?: DownloadOptions;
+}
+
+/** Fine-grained phase of an in-flight download. */
 export type DownloadPhase =
   | "fetching"
   | "downloading_video"
@@ -44,6 +80,7 @@ export type DownloadPhase =
   | "embedding_metadata"
   | "complete";
 
+/** Lifecycle status of a download; matches the backend `DownloadStatus` enum. */
 export type DownloadStatus =
   | "pending"
   | "fetching"
@@ -54,6 +91,10 @@ export type DownloadStatus =
   | "cancelled"
   | "paused";
 
+/**
+ * Options for `start_download`. Must match `DownloadOptions` in
+ * `src-tauri/src/models/download.rs` field-for-field (enforced by a test).
+ */
 export interface DownloadOptions {
   // Basic options
   quality: string;
@@ -127,6 +168,7 @@ export interface DownloadOptions {
   geoBypass: boolean;
 }
 
+/** Backend-equivalent defaults for {@link DownloadOptions}. */
 export const DEFAULT_DOWNLOAD_OPTIONS: DownloadOptions = {
   quality: "1080",
   format: "mp4",
@@ -145,7 +187,7 @@ export const DEFAULT_DOWNLOAD_OPTIONS: DownloadOptions = {
   embedSubtitles: false,
   autoSubtitles: false,
   sponsorBlock: false,
-  sponsorBlockCategories: ["sponsor", "intro", "outro"],
+  sponsorBlockCategories: ["sponsor"],
   downloadChapters: false,
   splitByChapters: false,
   writeDescription: false,
@@ -171,6 +213,7 @@ export const DEFAULT_DOWNLOAD_OPTIONS: DownloadOptions = {
   geoBypass: false,
 };
 
+/** Payload of the backend `download-progress` event. */
 export interface DownloadProgress {
   downloadId: string;
   status: DownloadStatus;
@@ -180,27 +223,14 @@ export interface DownloadProgress {
   speed: number;
   eta: number;
   /** The actual file path when download is completed */
-  filePath?: string;
+  filePath?: string | undefined;
   /** Current phase of the download */
-  phase?: DownloadPhase;
-  /** Human-readable message about current activity */
-  message?: string;
+  phase?: DownloadPhase | undefined;
+  /** Human-readable activity message, or the failure reason when `status` is `failed`. */
+  message?: string | undefined;
 }
 
-export interface DownloadHistoryItem {
-  id: string;
-  videoId: string;
-  title: string;
-  thumbnail: string;
-  url: string;
-  quality: string;
-  format: string;
-  fileSize: number;
-  filePath: string;
-  downloadedAt: string;
-}
-
-// SponsorBlock categories
+/** SponsorBlock segment categories offered in the UI. */
 export const SPONSORBLOCK_CATEGORIES = [
   { value: "sponsor", label: "Sponsor", description: "Paid promotion" },
   { value: "intro", label: "Intro", description: "Intermission/intro animation" },
@@ -212,7 +242,7 @@ export const SPONSORBLOCK_CATEGORIES = [
   { value: "music_offtopic", label: "Music", description: "Non-music in music video" },
 ] as const;
 
-// Common subtitle languages
+/** Common subtitle languages offered in the UI. */
 export const SUBTITLE_LANGUAGES = [
   { value: "en", label: "English" },
   { value: "es", label: "Spanish" },

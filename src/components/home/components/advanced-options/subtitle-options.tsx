@@ -21,6 +21,7 @@ interface SubtitleOptionsProps {
   onAutoSubtitlesChange: (value: boolean) => void;
 }
 
+/** Per-download subtitle choices: download, language, embed and auto-generated. */
 export function SubtitleOptions({
   downloadSubtitles,
   subtitleLanguage,
@@ -33,13 +34,15 @@ export function SubtitleOptions({
 }: SubtitleOptionsProps) {
   return (
     <div className="space-y-3">
-      <h4 className="text-sm font-medium flex items-center gap-2">
+      <h4 className="flex items-center gap-2 text-sm font-medium">
         <Subtitles className="h-4 w-4" />
         Subtitles
       </h4>
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <Label htmlFor="download-subtitles" className="text-sm">Download Subtitles</Label>
+          <Label htmlFor="download-subtitles" className="text-sm">
+            Download Subtitles
+          </Label>
           <Switch
             id="download-subtitles"
             checked={downloadSubtitles}
@@ -49,9 +52,9 @@ export function SubtitleOptions({
         {downloadSubtitles && (
           <>
             <div className="flex items-center gap-3">
-              <Label className="text-sm min-w-[100px]">Language</Label>
+              <Label className="min-w-[100px] text-sm">Language</Label>
               <Select value={subtitleLanguage} onValueChange={onSubtitleLanguageChange}>
-                <SelectTrigger className="h-8 flex-1">
+                <SelectTrigger className="h-8 flex-1" aria-label="Subtitle language">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -64,7 +67,9 @@ export function SubtitleOptions({
               </Select>
             </div>
             <div className="flex items-center justify-between">
-              <Label htmlFor="embed-subtitles" className="text-sm">Embed in Video</Label>
+              <Label htmlFor="embed-subtitles" className="text-sm">
+                Embed in Video
+              </Label>
               <Switch
                 id="embed-subtitles"
                 checked={embedSubtitles}
@@ -72,7 +77,9 @@ export function SubtitleOptions({
               />
             </div>
             <div className="flex items-center justify-between">
-              <Label htmlFor="auto-subtitles" className="text-sm">Include Auto-Generated</Label>
+              <Label htmlFor="auto-subtitles" className="text-sm">
+                Include Auto-Generated
+              </Label>
               <Switch
                 id="auto-subtitles"
                 checked={autoSubtitles}

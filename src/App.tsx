@@ -1,7 +1,15 @@
-import { BrowserRouter, Route, Routes } from "react-router-dom";
-import { useCallback, useEffect, useRef, useState } from "react";
+/**
+ * Application root.
+ *
+ * Responsibilities:
+ * - gate first run behind the setup wizard
+ * - own the app-wide backend subscriptions (download progress, settings side effects)
+ * - apply the theme class to the document
+ * - define routes
+ */
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
 
-import type { DownloadProgress } from "@/types/download";
 import { Downloads } from "@/pages/Downloads";
 import { Editor } from "@/pages/Editor";
 import { Home } from "@/pages/Home";
@@ -12,102 +20,58 @@ import { SetupWizard } from "@/components/onboarding";
 import { Toaster } from "sonner";
 import { getVersion } from "@tauri-apps/api/app";
 import { logger } from "@/lib/logger";
-import { useDownloadStore } from "@/stores/downloadStore";
-import { useTauriEvent } from "@/hooks";
+import { useDownloadSync, useSettings } from "@/hooks";
 import { useThemeStore } from "@/stores/settingsStore";
 import { useUIStore } from "@/stores/uiStore";
 
+const TOAST_OPTIONS = { className: "bg-background text-foreground border-border" };
+
+function usePrefersDark(): boolean {
+  const [dark, setDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = (e: MediaQueryListEvent) => setDark(e.matches);
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
+  }, []);
+
+  return dark;
+}
+
+/** Root component: setup wizard on first run, otherwise the routed app. */
 export function App() {
   const theme = useThemeStore((state) => state.theme);
   const isFirstRun = useUIStore((state) => state.isFirstRun);
-  const updateDownload = useDownloadStore((state) => state.updateDownload);
-  const setStatus = useDownloadStore((state) => state.setStatus);
   const bannerShownRef = useRef(false);
+  const prefersDark = usePrefersDark();
 
-  // Show startup banner in console (once on app mount)
+  // Loading settings here (once, app-wide) pushes theme and debug mode to
+  // their consumers before any page asks for them.
+  useSettings();
+  useDownloadSync();
+
   useEffect(() => {
     if (bannerShownRef.current) return;
     bannerShownRef.current = true;
 
     getVersion()
-      .then((version) => {
-        logger.banner(version);
-      })
-      .catch(() => {
-        logger.banner("dev");
-      });
+      .then((version) => logger.banner(version))
+      .catch(() => logger.banner("dev"));
   }, []);
 
-  // Global listener for download progress events from Tauri backend.
-  // This is the SINGLE source of truth for download-progress (do not add a
-  // second listener elsewhere) so the completed file path is never lost
-  // depending on which route happens to be mounted.
-  const handleDownloadProgress = useCallback(
-    (progress: DownloadProgress) => {
-      if (
-        progress.status === "completed" ||
-        progress.status === "failed" ||
-        progress.status === "cancelled"
-      ) {
-        // Persist the final file path on completion so "Open folder" / play work
-        // regardless of the active route.
-        updateDownload(progress.downloadId, {
-          status: progress.status,
-          progress: progress.status === "completed" ? 100 : progress.progress,
-          ...(progress.filePath ? { outputPath: progress.filePath } : {}),
-        });
-        setStatus(progress.downloadId, progress.status, undefined);
-      } else {
-        updateDownload(progress.downloadId, {
-          status: progress.status,
-          progress: progress.progress,
-          downloadedBytes: progress.downloadedBytes,
-          totalBytes: progress.totalBytes,
-          speed: progress.speed,
-          eta: progress.eta,
-        });
-      }
-    },
-    [updateDownload, setStatus]
-  );
-
-  useTauriEvent<DownloadProgress>("download-progress", handleDownloadProgress);
-
-  // Track system theme for reactive updates
-  const [systemTheme, setSystemTheme] = useState<"light" | "dark">(
-    window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
-  );
-
-  // Listen for system theme changes
-  useEffect(() => {
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleChange = (e: MediaQueryListEvent) => {
-      setSystemTheme(e.matches ? "dark" : "light");
-    };
-    mediaQuery.addEventListener("change", handleChange);
-    return () => mediaQuery.removeEventListener("change", handleChange);
-  }, []);
-
-  // Apply theme to document
   useEffect(() => {
     const root = window.document.documentElement;
     root.classList.remove("light", "dark");
+    const actual = theme === "system" ? (prefersDark ? "dark" : "light") : theme;
+    root.classList.add(actual);
+  }, [theme, prefersDark]);
 
-    const actualTheme = theme === "system" ? systemTheme : theme;
-    root.classList.add(actualTheme);
-  }, [theme, systemTheme]);
-
-  // Show setup wizard on first run
   if (isFirstRun) {
     return (
       <>
-        <SetupWizard onComplete={() => {}} />
-        <Toaster
-          position="bottom-right"
-          toastOptions={{
-            className: "bg-background text-foreground border-border",
-          }}
-        />
+        <SetupWizard />
+        <Toaster position="bottom-right" toastOptions={TOAST_OPTIONS} />
       </>
     );
   }
@@ -122,14 +86,10 @@ export function App() {
           <Route path="/library" element={<Library />} />
           <Route path="/downloads" element={<Downloads />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>
-      <Toaster
-        position="bottom-right"
-        toastOptions={{
-          className: "bg-background text-foreground border-border",
-        }}
-      />
+      <Toaster position="bottom-right" toastOptions={TOAST_OPTIONS} />
     </BrowserRouter>
   );
 }

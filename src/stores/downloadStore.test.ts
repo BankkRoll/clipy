@@ -1,246 +1,268 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { useDownloadStore } from "@/stores/downloadStore";
-import { type Download } from "@/types/download";
+import { downloadFixture, downloadTaskFixture, progressFixture } from "@/test/fixtures";
+import type { Download } from "@/types/download";
 
-// Helper: build the payload for addDownloadWithId (everything except id + createdAt).
-function makeDownload(overrides: Partial<Omit<Download, "id" | "createdAt">> = {}): Omit<
-  Download,
-  "id" | "createdAt"
-> {
-  return {
-    videoId: "vid",
-    title: "Test Video",
-    thumbnail: "",
-    url: "https://youtu.be/abc",
-    status: "pending",
-    progress: 0,
-    downloadedBytes: 0,
-    totalBytes: 0,
-    speed: 0,
-    eta: 0,
-    quality: "1080",
-    format: "mp4",
-    outputPath: "",
-    error: null,
-    completedAt: null,
-    duration: 0,
-    channel: "",
-    ...overrides,
-  };
+const store = () => useDownloadStore.getState();
+
+function seed(...downloads: Download[]) {
+  useDownloadStore.setState({ downloads });
 }
 
-// Reset store state before every test for isolation.
-beforeEach(() => {
-  useDownloadStore.setState({ downloads: [], history: [], activeDownloads: 0 });
-});
-
-describe("addDownload", () => {
-  it("adds a pending download and returns an id", () => {
-    const full = makeDownload();
-    const { status, progress, ...rest } = full;
-    void status;
-    void progress;
-    const id = useDownloadStore.getState().addDownload(rest);
-
-    const { downloads } = useDownloadStore.getState();
-    expect(downloads).toHaveLength(1);
-    expect(downloads[0]?.id).toBe(id);
-    expect(downloads[0]?.status).toBe("pending");
-    expect(downloads[0]?.progress).toBe(0);
-  });
-});
+function get(id = "d1") {
+  return store().downloads.find((d) => d.id === id);
+}
 
 describe("addDownloadWithId", () => {
-  it("adds a download with the provided id", () => {
-    useDownloadStore.getState().addDownloadWithId("my-id", makeDownload());
-    const { downloads } = useDownloadStore.getState();
-    expect(downloads).toHaveLength(1);
-    expect(downloads[0]?.id).toBe("my-id");
+  it("adds a row under the backend id and counts it when running", () => {
+    const { id: _id, createdAt: _c, ...rest } = downloadFixture({ status: "downloading" });
+    store().addDownloadWithId("abc", rest);
+    expect(get("abc")?.title).toBe("Never Gonna Give You Up");
+    expect(get("abc")?.createdAt).toEqual(expect.any(String));
+    expect(store().activeDownloads).toBe(1);
   });
 
-  it("increments activeDownloads when status is downloading", () => {
-    useDownloadStore
-      .getState()
-      .addDownloadWithId("a", makeDownload({ status: "downloading" }));
-    expect(useDownloadStore.getState().activeDownloads).toBe(1);
-  });
-
-  it("does not increment activeDownloads for pending status", () => {
-    useDownloadStore.getState().addDownloadWithId("a", makeDownload({ status: "pending" }));
-    expect(useDownloadStore.getState().activeDownloads).toBe(0);
+  it("replaces an existing row with the same id instead of duplicating it", () => {
+    seed(downloadFixture({ id: "abc", title: "old" }));
+    const {
+      id: _id,
+      createdAt: _c,
+      ...rest
+    } = downloadFixture({ title: "new", status: "pending" });
+    store().addDownloadWithId("abc", rest);
+    expect(store().downloads).toHaveLength(1);
+    expect(get("abc")?.title).toBe("new");
+    expect(store().activeDownloads).toBe(0);
   });
 });
 
-describe("updateProgress", () => {
-  it("updates progress fields and sets status to downloading", () => {
-    useDownloadStore.getState().addDownloadWithId("a", makeDownload());
-    useDownloadStore.getState().updateProgress("a", 50, 500, 100, 10, 1000);
+describe("updateDownload", () => {
+  it("merges fields into the matching row only", () => {
+    seed(downloadFixture(), downloadFixture({ id: "d2" }));
+    store().updateDownload("d1", { title: "changed" });
+    expect(get()?.title).toBe("changed");
+    expect(get("d2")?.title).toBe("Never Gonna Give You Up");
+  });
+});
 
-    const d = useDownloadStore.getState().downloads[0];
-    expect(d?.progress).toBe(50);
-    expect(d?.downloadedBytes).toBe(500);
-    expect(d?.speed).toBe(100);
-    expect(d?.eta).toBe(10);
-    expect(d?.totalBytes).toBe(1000);
-    expect(d?.status).toBe("downloading");
+describe("applyProgress", () => {
+  it("copies in-flight progress, phase and message", () => {
+    seed(downloadFixture({ status: "pending", error: "stale" }));
+    store().applyProgress(progressFixture({ phase: "merging", message: "Merging..." }));
+    expect(get()).toMatchObject({
+      status: "downloading",
+      progress: 42,
+      downloadedBytes: 4200,
+      totalBytes: 10000,
+      speed: 1024,
+      eta: 30,
+      phase: "merging",
+      message: "Merging...",
+      error: null,
+    });
+    expect(store().activeDownloads).toBe(1);
   });
 
-  it("preserves existing totalBytes when omitted", () => {
-    useDownloadStore.getState().addDownloadWithId("a", makeDownload({ totalBytes: 2000 }));
-    useDownloadStore.getState().updateProgress("a", 25, 500, 50, 20);
-    expect(useDownloadStore.getState().downloads[0]?.totalBytes).toBe(2000);
+  it("records the real file path and 100% on completion", () => {
+    seed(downloadFixture({ phase: "merging", message: "x" }));
+    store().applyProgress(
+      progressFixture({ status: "completed", progress: 99, filePath: "C:\\v\\a.mp4" })
+    );
+    expect(get()).toMatchObject({
+      status: "completed",
+      progress: 100,
+      filePath: "C:\\v\\a.mp4",
+      speed: 0,
+      eta: 0,
+      phase: undefined,
+      message: undefined,
+      error: null,
+    });
+    expect(get()?.completedAt).toEqual(expect.any(String));
+    expect(store().activeDownloads).toBe(0);
   });
 
-  it("only affects the matching download", () => {
-    useDownloadStore.getState().addDownloadWithId("a", makeDownload());
-    useDownloadStore.getState().addDownloadWithId("b", makeDownload());
-    useDownloadStore.getState().updateProgress("a", 50, 500, 100, 10);
+  it("keeps a previously known file path when the event has none", () => {
+    seed(downloadFixture({ filePath: "C:\\v\\a.mp4" }));
+    store().applyProgress(progressFixture({ status: "completed" }));
+    expect(get()?.filePath).toBe("C:\\v\\a.mp4");
+  });
 
-    expect(useDownloadStore.getState().downloads[1]?.progress).toBe(0);
+  it("stores the failure message as the error", () => {
+    seed(downloadFixture());
+    store().applyProgress(progressFixture({ status: "failed", message: "HTTP 403" }));
+    expect(get()).toMatchObject({ status: "failed", error: "HTTP 403", progress: 42 });
+    expect(get()?.completedAt).toBeNull();
+  });
+
+  it("keeps an existing error when a failure arrives without a message", () => {
+    seed(downloadFixture({ error: "earlier reason" }));
+    store().applyProgress(progressFixture({ status: "failed" }));
+    expect(get()?.error).toBe("earlier reason");
+  });
+
+  it("clears the error on cancellation", () => {
+    seed(downloadFixture({ error: "x" }));
+    store().applyProgress(progressFixture({ status: "cancelled" }));
+    expect(get()).toMatchObject({ status: "cancelled", error: null });
+  });
+
+  it("ignores events for unknown downloads", () => {
+    seed(downloadFixture());
+    store().applyProgress(progressFixture({ downloadId: "nope" }));
+    expect(get()?.status).toBe("downloading");
+    expect(get()?.progress).toBe(0);
   });
 });
 
 describe("setStatus", () => {
-  it("sets the status and recomputes activeDownloads", () => {
-    useDownloadStore
-      .getState()
-      .addDownloadWithId("a", makeDownload({ status: "downloading" }));
-    expect(useDownloadStore.getState().activeDownloads).toBe(1);
-
-    useDownloadStore.getState().setStatus("a", "completed");
-    expect(useDownloadStore.getState().downloads[0]?.status).toBe("completed");
-    expect(useDownloadStore.getState().activeDownloads).toBe(0);
+  it("sets status and error and recomputes the active count", () => {
+    seed(downloadFixture({ status: "processing" }));
+    expect(store().activeDownloads).toBe(0); // seeding bypasses the counter
+    store().setStatus("d1", "failed", "boom");
+    expect(get()).toMatchObject({ status: "failed", error: "boom" });
+    expect(store().activeDownloads).toBe(0);
   });
 
-  it("forces progress to 100 and sets completedAt when completed", () => {
-    useDownloadStore.getState().addDownloadWithId("a", makeDownload({ progress: 40 }));
-    useDownloadStore.getState().setStatus("a", "completed");
-
-    const d = useDownloadStore.getState().downloads[0];
-    expect(d?.progress).toBe(100);
-    expect(d?.completedAt).not.toBeNull();
+  it("forces 100% and a completion time on completed", () => {
+    seed(downloadFixture({ progress: 50 }));
+    store().setStatus("d1", "completed");
+    expect(get()).toMatchObject({ status: "completed", progress: 100, error: null });
+    expect(get()?.completedAt).toEqual(expect.any(String));
   });
 
-  it("stores an error message when provided", () => {
-    useDownloadStore.getState().addDownloadWithId("a", makeDownload());
-    useDownloadStore.getState().setStatus("a", "failed", "boom");
-    expect(useDownloadStore.getState().downloads[0]?.error).toBe("boom");
-  });
-
-  it("counts processing downloads as active", () => {
-    useDownloadStore.getState().addDownloadWithId("a", makeDownload());
-    useDownloadStore.getState().setStatus("a", "processing");
-    expect(useDownloadStore.getState().activeDownloads).toBe(1);
+  it("keeps progress and completedAt for non-completed statuses", () => {
+    seed(downloadFixture({ progress: 50, completedAt: "t" }));
+    store().setStatus("d1", "processing");
+    expect(get()).toMatchObject({ progress: 50, completedAt: "t" });
+    expect(store().activeDownloads).toBe(1);
   });
 });
 
 describe("removeDownload", () => {
-  it("removes the matching download", () => {
-    useDownloadStore.getState().addDownloadWithId("a", makeDownload());
-    useDownloadStore.getState().addDownloadWithId("b", makeDownload());
-    useDownloadStore.getState().removeDownload("a");
-
-    const { downloads } = useDownloadStore.getState();
-    expect(downloads).toHaveLength(1);
-    expect(downloads[0]?.id).toBe("b");
+  it("removes the row and remembers it as dismissed", () => {
+    seed(downloadFixture(), downloadFixture({ id: "d2" }));
+    store().removeDownload("d1");
+    expect(store().downloads.map((d) => d.id)).toEqual(["d2"]);
+    expect(store().dismissedIds).toEqual(["d1"]);
   });
 });
 
 describe("pause / resume / cancel / retry", () => {
-  it("pauses only a downloading download", () => {
-    useDownloadStore
-      .getState()
-      .addDownloadWithId("a", makeDownload({ status: "downloading" }));
-    useDownloadStore.getState().pauseDownload("a");
-    expect(useDownloadStore.getState().downloads[0]?.status).toBe("paused");
+  it("pauses only a downloading row", () => {
+    seed(downloadFixture(), downloadFixture({ id: "d2", status: "pending" }));
+    store().pauseDownload("d1");
+    store().pauseDownload("d2");
+    expect(get()?.status).toBe("paused");
+    expect(get("d2")?.status).toBe("pending");
   });
 
-  it("does not pause a pending download", () => {
-    useDownloadStore.getState().addDownloadWithId("a", makeDownload({ status: "pending" }));
-    useDownloadStore.getState().pauseDownload("a");
-    expect(useDownloadStore.getState().downloads[0]?.status).toBe("pending");
+  it("resumes only a paused row back to pending", () => {
+    seed(downloadFixture({ status: "paused" }), downloadFixture({ id: "d2" }));
+    store().resumeDownload("d1");
+    store().resumeDownload("d2");
+    expect(get()?.status).toBe("pending");
+    expect(get("d2")?.status).toBe("downloading");
   });
 
-  it("resumes a paused download back to pending", () => {
-    useDownloadStore.getState().addDownloadWithId("a", makeDownload({ status: "paused" }));
-    useDownloadStore.getState().resumeDownload("a");
-    expect(useDownloadStore.getState().downloads[0]?.status).toBe("pending");
+  it("cancels any row", () => {
+    seed(downloadFixture({ status: "pending" }));
+    store().cancelDownload("d1");
+    expect(get()?.status).toBe("cancelled");
   });
 
-  it("cancels any download", () => {
-    useDownloadStore
-      .getState()
-      .addDownloadWithId("a", makeDownload({ status: "downloading" }));
-    useDownloadStore.getState().cancelDownload("a");
-    expect(useDownloadStore.getState().downloads[0]?.status).toBe("cancelled");
-  });
-
-  it("retries a failed download, resetting error and progress", () => {
-    useDownloadStore
-      .getState()
-      .addDownloadWithId("a", makeDownload({ status: "failed", progress: 80, error: "x" }));
-    useDownloadStore.getState().retryDownload("a");
-
-    const d = useDownloadStore.getState().downloads[0];
-    expect(d?.status).toBe("pending");
-    expect(d?.error).toBeNull();
-    expect(d?.progress).toBe(0);
-  });
-
-  it("does not retry a completed download", () => {
-    useDownloadStore
-      .getState()
-      .addDownloadWithId("a", makeDownload({ status: "completed" }));
-    useDownloadStore.getState().retryDownload("a");
-    expect(useDownloadStore.getState().downloads[0]?.status).toBe("completed");
+  it("retries failed and cancelled rows, resetting error and progress", () => {
+    seed(
+      downloadFixture({ status: "failed", error: "x", progress: 50 }),
+      downloadFixture({ id: "d2", status: "cancelled" }),
+      downloadFixture({ id: "d3", status: "completed" })
+    );
+    store().retryDownload("d1");
+    store().retryDownload("d2");
+    store().retryDownload("d3");
+    expect(get()).toMatchObject({ status: "pending", error: null, progress: 0 });
+    expect(get("d2")?.status).toBe("pending");
+    expect(get("d3")?.status).toBe("completed");
   });
 });
 
 describe("clearCompleted", () => {
-  it("moves finished downloads to history and keeps active ones", () => {
-    useDownloadStore
-      .getState()
-      .addDownloadWithId("done", makeDownload({ status: "completed" }));
-    useDownloadStore
-      .getState()
-      .addDownloadWithId("fail", makeDownload({ status: "failed" }));
-    useDownloadStore
-      .getState()
-      .addDownloadWithId("active", makeDownload({ status: "downloading" }));
-
-    useDownloadStore.getState().clearCompleted();
-
-    const { downloads, history } = useDownloadStore.getState();
-    expect(downloads.map((d) => d.id)).toEqual(["active"]);
-    expect(history.map((d) => d.id).sort()).toEqual(["done", "fail"]);
+  it("drops finished rows and keeps the rest", () => {
+    seed(
+      downloadFixture({ id: "a", status: "completed" }),
+      downloadFixture({ id: "b", status: "failed" }),
+      downloadFixture({ id: "c", status: "cancelled" }),
+      downloadFixture({ id: "d", status: "downloading" })
+    );
+    store().clearCompleted();
+    expect(store().downloads.map((d) => d.id)).toEqual(["d"]);
+    expect(store().activeDownloads).toBe(1);
   });
 });
 
-describe("clearHistory", () => {
-  it("empties the history", () => {
-    useDownloadStore.getState().addDownloadWithId("done", makeDownload({ status: "completed" }));
-    useDownloadStore.getState().clearCompleted();
-    expect(useDownloadStore.getState().history.length).toBeGreaterThan(0);
-
-    useDownloadStore.getState().clearHistory();
-    expect(useDownloadStore.getState().history).toEqual([]);
-  });
-});
-
-describe("moveToHistory", () => {
-  it("moves a download into history and removes it from downloads", () => {
-    useDownloadStore.getState().addDownloadWithId("a", makeDownload());
-    useDownloadStore.getState().moveToHistory("a");
-
-    const { downloads, history } = useDownloadStore.getState();
-    expect(downloads).toHaveLength(0);
-    expect(history.map((d) => d.id)).toEqual(["a"]);
+describe("syncFromBackend", () => {
+  it("adds unknown tasks, labelling quality and keeping the directory as outputPath", () => {
+    store().syncFromBackend([
+      downloadTaskFixture(),
+      downloadTaskFixture({ id: "a", quality: "best", options: { audioOnly: true } as never }),
+      downloadTaskFixture({ id: "b", quality: "best" }),
+    ]);
+    expect(get()).toMatchObject({
+      quality: "1080p",
+      outputPath: "C:\\Users\\me\\Videos\\Clipy",
+      filePath: undefined,
+      progress: 10,
+    });
+    expect(get("a")?.quality).toBe("Audio");
+    expect(get("b")?.quality).toBe("best");
+    expect(store().activeDownloads).toBe(3);
   });
 
-  it("is a no-op for an unknown id", () => {
-    useDownloadStore.getState().addDownloadWithId("a", makeDownload());
-    useDownloadStore.getState().moveToHistory("missing");
-    expect(useDownloadStore.getState().downloads).toHaveLength(1);
-    expect(useDownloadStore.getState().history).toHaveLength(0);
+  it("treats a completed task's outputPath as the final file", () => {
+    store().syncFromBackend([
+      downloadTaskFixture({ status: "completed", progress: 97, outputPath: "C:\\v\\a.mp4" }),
+    ]);
+    expect(get()).toMatchObject({ progress: 100, filePath: "C:\\v\\a.mp4" });
+  });
+
+  it("does not invent a file path for a completed task without one", () => {
+    store().syncFromBackend([downloadTaskFixture({ status: "completed", outputPath: "" })]);
+    expect(get()?.filePath).toBeUndefined();
+  });
+
+  it("merges live fields into known rows without touching display fields", () => {
+    seed(downloadFixture({ quality: "Audio", error: "kept", completedAt: "t0", filePath: "f" }));
+    store().syncFromBackend([
+      downloadTaskFixture({ status: "paused", progress: 55, quality: "best" }),
+    ]);
+    expect(get()).toMatchObject({
+      quality: "Audio",
+      status: "paused",
+      progress: 55,
+      error: "kept",
+      completedAt: "t0",
+      filePath: "f",
+    });
+  });
+
+  it("prefers the backend error and completion time when present", () => {
+    seed(downloadFixture());
+    store().syncFromBackend([
+      downloadTaskFixture({ status: "failed", error: "disk full", completedAt: "t1" }),
+    ]);
+    expect(get()).toMatchObject({ error: "disk full", completedAt: "t1" });
+  });
+
+  it("skips tasks the user dismissed", () => {
+    seed(downloadFixture());
+    store().removeDownload("d1");
+    store().syncFromBackend([downloadTaskFixture()]);
+    expect(store().downloads).toEqual([]);
+  });
+
+  it("keeps rows the backend no longer reports", () => {
+    seed(downloadFixture({ id: "local", status: "cancelled" }));
+    store().syncFromBackend([]);
+    expect(get("local")).toBeDefined();
   });
 });

@@ -4,4 +4,5 @@ export { DownloadModeTabs } from "./components/download-mode-tabs";
 export { QualityFormatSelect } from "./components/quality-format-select";
 export { AdvancedOptions } from "./components/advanced-options";
 export { useDownloadOptions, type DownloadOptions } from "./hooks/use-download-options";
+export { buildDownloadOptions } from "./build-download-options";
 export { SIZE_ESTIMATION_RATES } from "./constants";

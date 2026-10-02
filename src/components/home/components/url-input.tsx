@@ -70,7 +70,8 @@ const POPULAR_PLATFORMS = [
   { name: "Streamable", domain: "streamable.com" },
 ];
 
-interface UrlInputProps {
+/** Props for {@link UrlInput}. */
+export interface UrlInputProps {
   url: string;
   isLoading: boolean;
   error: string | null;
@@ -79,6 +80,7 @@ interface UrlInputProps {
   onFetch: () => void;
 }
 
+/** URL field with an animated example placeholder and the supported-site list. */
 export function UrlInput({ url, isLoading, error, hasVideo, onUrlChange, onFetch }: UrlInputProps) {
   const [placeholder, setPlaceholder] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -120,11 +122,7 @@ export function UrlInput({ url, isLoading, error, hasVideo, onUrlChange, onFetch
 
     timeoutRef.current = setTimeout(typeNextChar, 500);
 
-    return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
-    };
+    return () => clearTimeout(timeoutRef.current);
   }, []);
 
   return (
@@ -148,6 +146,7 @@ export function UrlInput({ url, isLoading, error, hasVideo, onUrlChange, onFetch
             <input
               ref={inputRef}
               type="text"
+              aria-label="Video URL"
               placeholder={placeholder || "https://"}
               value={url}
               onChange={(e) => onUrlChange(e.target.value)}
@@ -172,7 +171,7 @@ export function UrlInput({ url, isLoading, error, hasVideo, onUrlChange, onFetch
           </div>
 
           {error && (
-            <div className="mt-3 flex items-center gap-2 text-sm text-destructive">
+            <div role="alert" className="mt-3 flex items-center gap-2 text-sm text-destructive">
               <AlertCircle className="h-4 w-4 shrink-0" />
               {error}
             </div>

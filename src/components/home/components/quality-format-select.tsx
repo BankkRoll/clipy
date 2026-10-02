@@ -7,11 +7,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  VIDEO_FORMATS,
-  AUDIO_FORMATS,
-  AUDIO_BITRATES,
-} from "@/lib/constants";
+import { VIDEO_FORMATS, AUDIO_FORMATS, AUDIO_BITRATES } from "@/lib/constants";
 
 interface QualityOption {
   readonly value: string;
@@ -38,14 +34,15 @@ interface AudioQualityFormatSelectProps {
 
 type QualityFormatSelectProps = VideoQualityFormatSelectProps | AudioQualityFormatSelectProps;
 
+/** Quality + container selects in video mode, format + bitrate selects in audio mode. */
 export function QualityFormatSelect(props: QualityFormatSelectProps) {
   if (props.mode === "video") {
     return (
       <div className="flex flex-wrap gap-3">
-        <div className="flex-1 min-w-[120px]">
-          <Label className="text-xs text-muted-foreground mb-1.5 block">Quality</Label>
+        <div className="min-w-[120px] flex-1">
+          <Label className="mb-1.5 block text-xs text-muted-foreground">Quality</Label>
           <Select value={props.quality} onValueChange={props.onQualityChange}>
-            <SelectTrigger className="h-9">
+            <SelectTrigger className="h-9" aria-label="Quality">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -54,7 +51,7 @@ export function QualityFormatSelect(props: QualityFormatSelectProps) {
                   <div className="flex items-center gap-2">
                     <span>{q.label}</span>
                     {q.badge && (
-                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                      <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
                         {q.badge}
                       </Badge>
                     )}
@@ -64,10 +61,10 @@ export function QualityFormatSelect(props: QualityFormatSelectProps) {
             </SelectContent>
           </Select>
         </div>
-        <div className="flex-1 min-w-[100px]">
-          <Label className="text-xs text-muted-foreground mb-1.5 block">Format</Label>
+        <div className="min-w-[100px] flex-1">
+          <Label className="mb-1.5 block text-xs text-muted-foreground">Format</Label>
           <Select value={props.format} onValueChange={props.onFormatChange}>
-            <SelectTrigger className="h-9">
+            <SelectTrigger className="h-9" aria-label="Format">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -85,10 +82,10 @@ export function QualityFormatSelect(props: QualityFormatSelectProps) {
 
   return (
     <div className="flex flex-wrap gap-3">
-      <div className="flex-1 min-w-[120px]">
-        <Label className="text-xs text-muted-foreground mb-1.5 block">Audio Format</Label>
+      <div className="min-w-[120px] flex-1">
+        <Label className="mb-1.5 block text-xs text-muted-foreground">Audio Format</Label>
         <Select value={props.audioFormat} onValueChange={props.onAudioFormatChange}>
-          <SelectTrigger className="h-9">
+          <SelectTrigger className="h-9" aria-label="Audio format">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -103,10 +100,10 @@ export function QualityFormatSelect(props: QualityFormatSelectProps) {
           </SelectContent>
         </Select>
       </div>
-      <div className="flex-1 min-w-[100px]">
-        <Label className="text-xs text-muted-foreground mb-1.5 block">Bitrate</Label>
+      <div className="min-w-[100px] flex-1">
+        <Label className="mb-1.5 block text-xs text-muted-foreground">Bitrate</Label>
         <Select value={props.audioBitrate} onValueChange={props.onAudioBitrateChange}>
-          <SelectTrigger className="h-9">
+          <SelectTrigger className="h-9" aria-label="Bitrate">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

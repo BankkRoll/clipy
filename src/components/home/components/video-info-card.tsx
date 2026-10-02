@@ -1,7 +1,7 @@
 import { Download, CheckCircle, HardDrive } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, formatDuration, thumbnailSrc } from "@/lib/utils";
 import type { VideoInfo } from "@/types/video";
 import { DownloadModeTabs } from "./download-mode-tabs";
 import { QualityFormatSelect } from "./quality-format-select";
@@ -43,6 +43,7 @@ interface VideoInfoCardProps {
   onDownload: () => void;
 }
 
+/** Fetched video summary with download mode, quality/format and advanced options. */
 export function VideoInfoCard({
   videoInfo,
   options,
@@ -54,25 +55,24 @@ export function VideoInfoCard({
   onShowAdvancedChange,
   onDownload,
 }: VideoInfoCardProps) {
+  const thumbnail = thumbnailSrc(videoInfo.thumbnail);
+
   return (
     <Card className="w-full">
       <CardContent className="p-6">
         <div className="flex gap-4">
           {/* Thumbnail */}
           <div className="relative aspect-video w-48 flex-shrink-0 overflow-hidden rounded-lg bg-muted">
-            <img
-              src={videoInfo.thumbnail}
-              alt={videoInfo.title}
-              className="h-full w-full object-cover"
-            />
+            {thumbnail && (
+              <img src={thumbnail} alt={videoInfo.title} className="h-full w-full object-cover" />
+            )}
             <div className="absolute bottom-1 right-1 rounded bg-black/80 px-1.5 py-0.5 text-xs font-medium text-white">
-              {Math.floor(videoInfo.duration / 60)}:
-              {(videoInfo.duration % 60).toString().padStart(2, "0")}
+              {formatDuration(videoInfo.duration)}
             </div>
           </div>
 
           {/* Info */}
-          <div className="flex flex-1 flex-col min-w-0">
+          <div className="flex min-w-0 flex-1 flex-col">
             <h3 className="line-clamp-2 font-semibold">{videoInfo.title}</h3>
             <p className="mt-1 text-sm text-muted-foreground">{videoInfo.channel}</p>
             <p className="mt-1 text-sm text-muted-foreground">
@@ -110,7 +110,7 @@ export function VideoInfoCard({
             </div>
 
             {/* Estimated Size */}
-            {estimatedSize && (
+            {estimatedSize != null && estimatedSize > 0 && (
               <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
                 <HardDrive className="h-3 w-3" />
                 <span>Estimated size: ~{formatBytes(estimatedSize)}</span>
@@ -130,7 +130,7 @@ export function VideoInfoCard({
 
         {/* Download Button */}
         <div className="mt-6 flex items-center gap-3">
-          <Button onClick={onDownload} className="gap-2 flex-1" size="lg">
+          <Button onClick={onDownload} className="flex-1 gap-2" size="lg">
             <Download className="h-4 w-4" />
             Download {options.downloadMode === "audio" ? "Audio" : "Video"}
           </Button>

@@ -10,15 +10,12 @@ export {
   useFileSystem,
   useTauriEvent,
   useNavigationEvent,
-} from './useTauri';
-export type { SystemInfo, BinaryStatus, CacheStats } from './useTauri';
+  useAppVersion,
+} from "./useTauri";
+export type { SystemInfo, BinaryStatus, CacheStats } from "./useTauri";
 
 // Download hooks
-export {
-  useVideoInfo,
-  useDownloadQueue,
-  useDownload,
-} from './useDownload';
+export { useVideoInfo, useDownloadCommands, useDownloadSync } from "./useDownload";
 export type {
   VideoInfo,
   VideoFormat,
@@ -26,15 +23,12 @@ export type {
   DownloadTask,
   DownloadStatus,
   DownloadProgress,
-} from './useDownload';
+  DownloadDisplay,
+} from "./useDownload";
 
 // Library hooks
-export {
-  useLibrary,
-  useLibraryStats,
-  useLibraryVideo,
-} from './useLibrary';
-export type { LibraryVideo, LibraryStats } from './useLibrary';
+export { useLibrary, useLibraryStats } from "./useLibrary";
+export type { LibraryVideo, LibraryStats } from "./useLibrary";
 
 // Editor hooks
 export {
@@ -44,7 +38,7 @@ export {
   useProject,
   useExport,
   useExportOptions,
-} from './useEditor';
+} from "./useEditor";
 export type {
   VideoMetadata,
   Project,
@@ -59,14 +53,10 @@ export type {
   ExportProgress,
   ExportFormat,
   ExportResolution,
-} from './useEditor';
+} from "./useEditor";
 
 // Settings hooks
-export {
-  useSettings,
-  useTheme,
-  useDownloadSettings,
-} from './useSettings';
+export { useSettings, useTheme, applyBackendSettings } from "./useSettings";
 export type {
   AppSettings,
   GeneralSettings,
@@ -74,4 +64,4 @@ export type {
   EditorSettings,
   AppearanceSettings,
   AdvancedSettings,
-} from './useSettings';
+} from "./useSettings";

@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import {
   Download as DownloadIcon,
   Pause,
@@ -10,12 +10,13 @@ import {
   Library,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn, formatDuration, formatRelativeTime } from "@/lib/utils";
+import { cn, formatDuration, formatRelativeTime, thumbnailSrc } from "@/lib/utils";
 import type { Download } from "@/types/download";
 import { STATUS_CONFIG } from "../constants";
 import { DownloadProgress } from "./download-progress";
 
-interface DownloadItemProps {
+/** Props for {@link DownloadItem}. */
+export interface DownloadItemProps {
   download: Download;
   onPlay: () => void;
   onPause: () => void;
@@ -27,6 +28,7 @@ interface DownloadItemProps {
   onViewLibrary: () => void;
 }
 
+/** One row in the downloads list: thumbnail, progress, status and actions. */
 export const DownloadItem = memo(function DownloadItem({
   download,
   onPlay,
@@ -38,57 +40,53 @@ export const DownloadItem = memo(function DownloadItem({
   onOpenFolder,
   onViewLibrary,
 }: DownloadItemProps) {
+  const [thumbFailed, setThumbFailed] = useState(false);
   const status = STATUS_CONFIG[download.status];
   const StatusIcon = status.icon;
   const isAnimated =
     download.status === "downloading" ||
     download.status === "fetching" ||
     download.status === "processing";
-  const isActive =
-    download.status === "downloading" ||
-    download.status === "fetching" ||
-    download.status === "processing" ||
-    download.status === "pending" ||
-    download.status === "paused";
+  const isActive = isAnimated || download.status === "pending" || download.status === "paused";
+  const thumbnail = thumbFailed ? null : thumbnailSrc(download.thumbnail);
+  const canPlay = Boolean(download.filePath);
 
   return (
     <div
+      data-testid={`download-${download.id}`}
       className={cn(
         "flex items-start gap-4 rounded-lg border p-4 transition-colors",
         isActive ? "border-border bg-card" : "border-border/50 bg-card/50"
       )}
     >
-      {/* Thumbnail */}
       <div className="relative h-20 w-36 flex-shrink-0 overflow-hidden rounded-md bg-muted">
-        {download.thumbnail ? (
+        {thumbnail ? (
           <img
-            src={download.thumbnail}
+            src={thumbnail}
             alt={download.title}
             className="h-full w-full object-cover"
+            onError={() => setThumbFailed(true)}
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center">
+          <div
+            className="flex h-full w-full items-center justify-center"
+            data-testid="thumbnail-placeholder"
+          >
             <DownloadIcon className="h-8 w-8 text-muted-foreground/30" />
           </div>
         )}
-        {/* Status badge overlay */}
         <div
           className={cn(
             "absolute bottom-1 left-1 flex items-center gap-1 rounded px-1.5 py-0.5",
             status.bgColor
           )}
         >
-          <StatusIcon
-            className={cn("h-3 w-3", status.color, isAnimated && "animate-spin")}
-          />
-          <span className={cn("text-xs font-medium", status.color)}>
-            {status.label}
-          </span>
+          <StatusIcon className={cn("h-3 w-3", status.color, isAnimated && "animate-spin")} />
+          <span className={cn("text-xs font-medium", status.color)}>{status.label}</span>
         </div>
       </div>
 
-      {/* Info */}
-      <div className="flex-1 min-w-0">
+      <div className="min-w-0 flex-1">
         <h3 className="truncate font-medium">{download.title}</h3>
 
         <DownloadProgress
@@ -102,19 +100,16 @@ export const DownloadItem = memo(function DownloadItem({
           message={download.message}
         />
 
-        {/* Error message */}
-        {download.error && (
-          <p className="mt-2 text-sm text-destructive">{download.error}</p>
-        )}
-
-        {/* Success message */}
-        {download.status === "completed" && (
-          <p className="mt-2 text-sm text-green-600">
-            Download completed successfully!
+        {download.status === "failed" && (
+          <p role="alert" className="mt-2 text-sm text-destructive">
+            {download.error || "Download failed"}
           </p>
         )}
 
-        {/* Meta info */}
+        {download.status === "completed" && (
+          <p className="mt-2 text-sm text-green-600">Download completed successfully!</p>
+        )}
+
         <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
           <span>{download.quality}</span>
           <span>•</span>
@@ -140,16 +135,16 @@ export const DownloadItem = memo(function DownloadItem({
         </div>
       </div>
 
-      {/* Actions */}
       <div className="flex items-center gap-1">
-        {/* Completed actions */}
         {download.status === "completed" && (
           <>
             <Button
               size="icon"
               variant="ghost"
               onClick={onPlay}
-              title="Play"
+              disabled={!canPlay}
+              title={canPlay ? "Play" : "Waiting for the file location"}
+              aria-label="Play"
             >
               <Play className="h-4 w-4" />
             </Button>
@@ -158,6 +153,7 @@ export const DownloadItem = memo(function DownloadItem({
               variant="ghost"
               onClick={onOpenFolder}
               title="Show in folder"
+              aria-label="Show in folder"
             >
               <FolderOpen className="h-4 w-4" />
             </Button>
@@ -166,63 +162,36 @@ export const DownloadItem = memo(function DownloadItem({
               variant="ghost"
               onClick={onViewLibrary}
               title="View in Library"
+              aria-label="View in Library"
             >
               <Library className="h-4 w-4" />
             </Button>
           </>
         )}
 
-        {/* Pause/Resume */}
         {download.status === "downloading" && (
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={onPause}
-            title="Pause"
-          >
+          <Button size="icon" variant="ghost" onClick={onPause} title="Pause" aria-label="Pause">
             <Pause className="h-4 w-4" />
           </Button>
         )}
         {download.status === "paused" && (
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={onResume}
-            title="Resume"
-          >
+          <Button size="icon" variant="ghost" onClick={onResume} title="Resume" aria-label="Resume">
             <Play className="h-4 w-4" />
           </Button>
         )}
 
-        {/* Retry failed */}
         {(download.status === "failed" || download.status === "cancelled") && (
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={onRetry}
-            title="Retry"
-          >
+          <Button size="icon" variant="ghost" onClick={onRetry} title="Retry" aria-label="Retry">
             <RotateCcw className="h-4 w-4" />
           </Button>
         )}
 
-        {/* Cancel/Remove */}
         {isActive ? (
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={onCancel}
-            title="Cancel"
-          >
+          <Button size="icon" variant="ghost" onClick={onCancel} title="Cancel" aria-label="Cancel">
             <X className="h-4 w-4" />
           </Button>
         ) : (
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={onRemove}
-            title="Remove"
-          >
+          <Button size="icon" variant="ghost" onClick={onRemove} title="Remove" aria-label="Remove">
             <Trash2 className="h-4 w-4" />
           </Button>
         )}

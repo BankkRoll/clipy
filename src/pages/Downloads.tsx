@@ -1,6 +1,13 @@
+/**
+ * Downloads page: the live download queue with per-item controls.
+ *
+ * Progress arrives through the store (see `useDownloadSync` in App); this page
+ * only renders it and sends queue commands.
+ */
 import { useState, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { toast } from "sonner";
 import { VideoPlayer } from "@/components/VideoPlayer";
 import {
   DownloadItem,
@@ -9,119 +16,81 @@ import {
   STATUS_PRIORITY,
 } from "@/components/downloads";
 import { useDownloadStore } from "@/stores/downloadStore";
-import type { Download } from "@/types/download";
-import { useFileSystem } from "@/hooks";
-import { ask } from "@tauri-apps/plugin-dialog";
+import type { Download, DownloadStatus } from "@/types/download";
+import { useDownloadCommands, useFileSystem } from "@/hooks";
 import { logger } from "@/lib/logger";
 
+const RUNNING: ReadonlySet<DownloadStatus> = new Set(["downloading", "fetching", "processing"]);
+const FINISHED: ReadonlySet<DownloadStatus> = new Set(["completed", "failed", "cancelled"]);
+
+/** Downloads page component. */
 export function Downloads() {
   const navigate = useNavigate();
   const [playingDownload, setPlayingDownload] = useState<Download | null>(null);
 
-  const {
-    downloads,
-    pauseDownload,
-    resumeDownload,
-    cancelDownload,
-    retryDownload,
-    removeDownload,
-    clearCompleted,
-  } = useDownloadStore();
+  const downloads = useDownloadStore((state) => state.downloads);
+  const removeDownload = useDownloadStore((state) => state.removeDownload);
+  const commands = useDownloadCommands();
+  const { showInFolder, openFolder } = useFileSystem();
 
-  const { showInFolder } = useFileSystem();
-
-  // NOTE: the `download-progress` event is handled centrally in App.tsx (the
-  // single source of truth). Do not subscribe here too, or completed file paths
-  // get lost depending on which route is mounted.
-
-  // Memoized sorted downloads
   const sortedDownloads = useMemo(
     () => [...downloads].sort((a, b) => STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status]),
     [downloads]
   );
-
   const activeCount = useMemo(
-    () => downloads.filter((d) => d.status === "downloading" || d.status === "fetching" || d.status === "processing").length,
+    () => downloads.filter((d) => RUNNING.has(d.status)).length,
     [downloads]
   );
-
   const completedCount = useMemo(
-    () => downloads.filter((d) => d.status === "completed" || d.status === "failed" || d.status === "cancelled").length,
+    () => downloads.filter((d) => FINISHED.has(d.status)).length,
     [downloads]
   );
 
-  const handleRemoveDownload = useCallback(async (downloadId: string) => {
-    const confirmed = await ask("Remove this download from the list?", {
-      title: "Remove Download",
-      kind: "warning",
-    });
-    if (confirmed) {
-      removeDownload(downloadId);
+  const runCommand = useCallback(async (label: string, command: () => Promise<void>) => {
+    try {
+      await command();
+    } catch (err) {
+      logger.error("Downloads", `Failed to ${label} download:`, err);
+      toast.error(`Failed to ${label} download`, { description: String(err) });
     }
-  }, [removeDownload]);
+  }, []);
+
+  const handleRemoveDownload = useCallback(
+    async (downloadId: string) => {
+      const confirmed = await ask("Remove this download from the list?", {
+        title: "Remove Download",
+        kind: "warning",
+      });
+      if (confirmed) removeDownload(downloadId);
+    },
+    [removeDownload]
+  );
 
   const handleClearCompleted = useCallback(async () => {
     const confirmed = await ask("Clear all completed and failed downloads from the list?", {
       title: "Clear Downloads",
       kind: "warning",
     });
-    if (confirmed) {
-      clearCompleted();
-    }
-  }, [clearCompleted]);
+    if (confirmed) await runCommand("clear", commands.clearCompleted);
+  }, [commands.clearCompleted, runCommand]);
 
-  const handleOpenFolder = useCallback(async (path: string) => {
-    try {
-      await showInFolder(path);
-    } catch (err) {
-      logger.error("Downloads", "Failed to show in folder:", err);
-    }
-  }, [showInFolder]);
+  const handleOpenFolder = useCallback(
+    async (download: Download) => {
+      try {
+        // NOTE: until the backend reports the final file, only the output
+        // directory is known, so open that instead of selecting a file.
+        if (download.filePath) await showInFolder(download.filePath);
+        else await openFolder(download.outputPath);
+      } catch (err) {
+        logger.error("Downloads", "Failed to show in folder:", err);
+        toast.error("Failed to open folder");
+      }
+    },
+    [showInFolder, openFolder]
+  );
 
-  const handleViewInLibrary = useCallback(() => {
-    navigate("/library");
-  }, [navigate]);
-
-  const handleStartDownloading = useCallback(() => {
-    navigate("/");
-  }, [navigate]);
-
-  // Handlers that call backend commands
-  const handlePauseDownload = useCallback(async (id: string) => {
-    try {
-      await invoke("pause_download", { id });
-      pauseDownload(id); // Update UI immediately
-    } catch (err) {
-      logger.error("Downloads", "Failed to pause download:", err);
-    }
-  }, [pauseDownload]);
-
-  const handleResumeDownload = useCallback(async (id: string) => {
-    try {
-      await invoke("resume_download", { id });
-      resumeDownload(id); // Update UI immediately
-    } catch (err) {
-      logger.error("Downloads", "Failed to resume download:", err);
-    }
-  }, [resumeDownload]);
-
-  const handleCancelDownload = useCallback(async (id: string) => {
-    try {
-      await invoke("cancel_download", { id });
-      cancelDownload(id); // Update UI immediately
-    } catch (err) {
-      logger.error("Downloads", "Failed to cancel download:", err);
-    }
-  }, [cancelDownload]);
-
-  const handleRetryDownload = useCallback(async (id: string) => {
-    try {
-      await invoke("retry_download", { id });
-      retryDownload(id); // Update UI immediately
-    } catch (err) {
-      logger.error("Downloads", "Failed to retry download:", err);
-    }
-  }, [retryDownload]);
+  const handleViewInLibrary = useCallback(() => navigate("/library"), [navigate]);
+  const handleStartDownloading = useCallback(() => navigate("/"), [navigate]);
 
   return (
     <div className="flex h-full flex-col">
@@ -142,12 +111,12 @@ export function Downloads() {
                 key={download.id}
                 download={download}
                 onPlay={() => setPlayingDownload(download)}
-                onPause={() => handlePauseDownload(download.id)}
-                onResume={() => handleResumeDownload(download.id)}
-                onCancel={() => handleCancelDownload(download.id)}
-                onRetry={() => handleRetryDownload(download.id)}
+                onPause={() => runCommand("pause", () => commands.pauseDownload(download.id))}
+                onResume={() => runCommand("resume", () => commands.resumeDownload(download.id))}
+                onCancel={() => runCommand("cancel", () => commands.cancelDownload(download.id))}
+                onRetry={() => runCommand("retry", () => commands.retryDownload(download.id))}
                 onRemove={() => handleRemoveDownload(download.id)}
-                onOpenFolder={() => handleOpenFolder(download.outputPath)}
+                onOpenFolder={() => handleOpenFolder(download)}
                 onViewLibrary={handleViewInLibrary}
               />
             ))}
@@ -155,9 +124,9 @@ export function Downloads() {
         )}
       </div>
 
-      {playingDownload && (
+      {playingDownload?.filePath && (
         <VideoPlayer
-          src={playingDownload.outputPath}
+          src={playingDownload.filePath}
           title={playingDownload.title}
           subtitle={playingDownload.channel}
           poster={playingDownload.thumbnail}
