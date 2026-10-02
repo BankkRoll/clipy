@@ -12,23 +12,7 @@
   "app": {
     "withGlobalTauri": false,
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: asset: http://asset.localhost https://asset.localhost clipy-media: http://clipy-media.localhost https://clipy-media.localhost https://i.ytimg.com https://*.ytimg.com https://pbs.twimg.com blob:; media-src 'self' asset: http://asset.localhost https://asset.localhost clipy-media: http://clipy-media.localhost https://clipy-media.localhost blob:; connect-src 'self' ipc: http://ipc.localhost asset: http://asset.localhost https://asset.localhost clipy-media: http://clipy-media.localhost https://clipy-media.localhost https://api.github.com; style-src 'self' 'unsafe-inline'",
-      "assetProtocol": {
-        "enable": true,
-        "scope": [
-          "**/*",
-          "$DOWNLOAD/**",
-          "$VIDEO/**",
-          "$HOME/**",
-          "$APPDATA/**",
-          "$APPCONFIG/**",
-          "$TEMP/**",
-          "C:/**",
-          "D:/**",
-          "E:/**",
-          "F:/**"
-        ]
-      }
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: clipy-media: http://clipy-media.localhost https://clipy-media.localhost https:; media-src 'self' blob: clipy-media: http://clipy-media.localhost https://clipy-media.localhost; connect-src 'self' ipc: http://ipc.localhost https://api.github.com; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'"
     },
     "windows": [
       {
@@ -100,9 +84,6 @@
     }
   },
   "plugins": {
-    "fs": {
-      "requireLiteralLeadingDot": false
-    },
     "shell": {
       "open": true
     }
