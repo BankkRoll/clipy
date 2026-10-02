@@ -141,7 +141,7 @@ impl Default for Transform {
 }
 
 /// Text properties for text clips
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextProperties {
     pub content: String,
@@ -152,23 +152,56 @@ pub struct TextProperties {
     pub background_color: String,
     pub align: TextAlign,
     pub vertical_align: VerticalAlign,
+    /// Auto-caption word timings (seconds, relative to the clip start). Empty
+    /// for plain text clips; kept so saved projects reload with karaoke timing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caption_words: Vec<CaptionWordTiming>,
+    /// Color of the currently spoken caption word.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight_color: Option<String>,
+    /// How the currently spoken caption word is emphasised.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight_style: Option<CaptionHighlightStyle>,
+    /// Glyph outline color for captions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline_color: Option<String>,
+}
+
+/// One caption word with timing in seconds relative to its clip's start.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CaptionWordTiming {
+    pub text: String,
+    pub start: f64,
+    pub end: f64,
+}
+
+/// Emphasis applied to the currently spoken caption word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CaptionHighlightStyle {
+    Color,
+    Box,
+    Scale,
+    None,
 }
 
 /// Text alignment
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TextAlign {
     Left,
+    #[default]
     Center,
     Right,
 }
 
 /// Vertical alignment
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum VerticalAlign {
     Top,
     Middle,
+    #[default]
     Bottom,
 }
 
@@ -247,4 +280,52 @@ pub enum ExportStatus {
     Completed,
     Failed,
     Cancelled,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn caption_fields_survive_a_save_load_round_trip() {
+        let saved = json!({
+            "content": "hello world",
+            "fontFamily": "Inter",
+            "fontSize": 48,
+            "fontWeight": 700,
+            "color": "#ffffff",
+            "backgroundColor": "transparent",
+            "align": "center",
+            "verticalAlign": "bottom",
+            "captionWords": [
+                { "text": "hello", "start": 0.0, "end": 0.4 },
+                { "text": "world", "start": 0.4, "end": 0.9 }
+            ],
+            "highlightColor": "#facc15",
+            "highlightStyle": "box",
+            "outlineColor": "#000000"
+        });
+        let text: TextProperties = serde_json::from_value(saved.clone()).unwrap();
+        assert_eq!(text.caption_words.len(), 2);
+        assert_eq!(text.highlight_style, Some(CaptionHighlightStyle::Box));
+        assert_eq!(serde_json::to_value(&text).unwrap(), saved);
+    }
+
+    #[test]
+    fn plain_text_omits_caption_fields_and_loads_old_projects() {
+        let old = json!({
+            "content": "title",
+            "fontFamily": "Inter",
+            "fontSize": 32,
+            "fontWeight": 400,
+            "color": "#fff",
+            "backgroundColor": "",
+            "align": "left",
+            "verticalAlign": "top"
+        });
+        let text: TextProperties = serde_json::from_value(old.clone()).unwrap();
+        assert!(text.caption_words.is_empty());
+        assert_eq!(serde_json::to_value(&text).unwrap(), old);
+    }
 }

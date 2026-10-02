@@ -1792,6 +1792,7 @@ mod tests {
             background_color: "#000000:x".into(),
             align: TextAlign::Left,
             vertical_align: VerticalAlign::Bottom,
+            ..Default::default()
         };
         let canvas = Canvas {
             width: 1000,
@@ -1964,6 +1965,7 @@ mod tests {
             background_color: String::new(),
             align: TextAlign::Center,
             vertical_align: VerticalAlign::Middle,
+            ..Default::default()
         });
         p.tracks = vec![track(TrackType::Text, vec![t])];
         let planned = plan(&p);
@@ -2258,6 +2260,7 @@ mod tests {
             background_color: "transparent".into(),
             align: TextAlign::Center,
             vertical_align: VerticalAlign::Middle,
+            ..Default::default()
         });
         p.tracks = vec![
             track(TrackType::Video, vec![clip(ClipType::Video, "a.mp4")]),
@@ -2720,6 +2723,7 @@ mod ffmpeg_integration {
             background_color: "#000000".into(),
             align: TextAlign::Center,
             vertical_align: VerticalAlign::Bottom,
+            ..Default::default()
         });
         let mk = |id: &str, track_type, clips| Track {
             id: id.into(),
