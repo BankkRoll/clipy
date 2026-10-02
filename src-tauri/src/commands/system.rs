@@ -223,6 +223,17 @@ pub fn media_url(path: String) -> String {
     crate::media_protocol::to_media_url(&path)
 }
 
+/// Called by the frontend once it has mounted. In installer smoke-test mode
+/// this ends the process with exit code 0, proving the installed app booted
+/// end to end; otherwise it does nothing.
+#[tauri::command]
+pub fn app_ready(app: AppHandle) {
+    if crate::utils::smoke::is_enabled() {
+        info!("Smoke test: frontend ready, exiting");
+        app.exit(0);
+    }
+}
+
 /// Check if app is running as administrator (Windows)
 #[tauri::command]
 pub fn is_admin() -> bool {

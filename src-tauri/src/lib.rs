@@ -110,6 +110,10 @@ pub fn shutdown_background_work() -> bool {
 
 fn setup(app: &mut tauri::App) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let app_handle = app.handle().clone();
+    if utils::smoke::is_enabled() {
+        info!("Smoke-test mode: waiting for the frontend to report ready");
+        utils::smoke::start_watchdog(utils::smoke::READY_TIMEOUT);
+    }
     utils::paths::ensure_app_dirs(&app_handle)?;
     services::database::init_database(&app_handle)?;
     services::config::init_config(&app_handle)?;
@@ -164,13 +168,11 @@ pub fn run() {
     let app = tauri::Builder::default()
         .register_asynchronous_uri_scheme_protocol(media_protocol::SCHEME, media_protocol::handle)
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_os::init())
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
-        // TODO: Enable updater plugin when update server is configured
-        // .plugin(tauri_plugin_updater::Builder::new().build())
+        // Updates are minisign-verified against the pubkey in tauri.conf.json;
+        // the process plugin relaunches into the new version.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(setup)
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -201,6 +203,7 @@ pub fn run() {
             commands::system::get_default_download_path,
             commands::system::media_url,
             commands::system::is_admin,
+            commands::system::app_ready,
             // Download commands
             commands::download::fetch_video_info,
             commands::download::get_available_qualities,
