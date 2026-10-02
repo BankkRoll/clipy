@@ -4,8 +4,9 @@ use crate::error::{ClipyError, Result};
 use crate::models::download::{DownloadOptions, DownloadProgress, DownloadStatus};
 use crate::models::video::{VideoFormat, VideoInfo};
 use crate::services::binary;
+use crate::utils::{path_policy, validators};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tauri::AppHandle;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -47,18 +48,39 @@ struct YtdlpFormat {
     tbr: Option<f64>,
 }
 
+/// Validate a URL for yt-dlp, mapping failures to a `ClipyError`.
+fn checked_url(url: &str) -> Result<String> {
+    validators::validate_media_url(url).map_err(ClipyError::Ytdlp)
+}
+
+/// Arguments for a metadata-only `--dump-json` run.
+///
+/// SECURITY: `--` ends option parsing, so even a URL that slipped past
+/// validation could never be read as a yt-dlp option.
+fn build_info_args(url: &str) -> Result<Vec<String>> {
+    let url = checked_url(url)?;
+    Ok(vec![
+        "--dump-json".into(),
+        "--no-playlist".into(),
+        "--no-warnings".into(),
+        "--".into(),
+        url,
+    ])
+}
+
 /// Fetch video information from a URL
 pub async fn fetch_video_info(app: &AppHandle, url: &str) -> Result<VideoInfo> {
     info!("Fetching video info for: {}", url);
-
+    let args = build_info_args(url)?;
     let ytdlp_path = binary::get_ytdlp_path(app)?;
-    debug!("Using yt-dlp executable: {:?}", ytdlp_path);
+    fetch_video_info_with(&ytdlp_path, &args).await
+}
 
-    let args = ["--dump-json", "--no-playlist", "--no-warnings", url];
+/// Run yt-dlp at `ytdlp_path` with prepared info `args` and parse the result.
+async fn fetch_video_info_with(ytdlp_path: &Path, args: &[String]) -> Result<VideoInfo> {
     debug!("yt-dlp fetch args: {:?}", args);
-
-    let output = Command::new(&ytdlp_path)
-        .args(["--dump-json", "--no-playlist", "--no-warnings", url])
+    let output = ytdlp_command(ytdlp_path)
+        .args(args)
         .output()
         .await
         .map_err(|e| ClipyError::Ytdlp(format!("Failed to run yt-dlp: {}", e)))?;
@@ -80,8 +102,20 @@ pub async fn fetch_video_info(app: &AppHandle, url: &str) -> Result<VideoInfo> {
         video_info.duration,
         video_info.formats.len()
     );
-
     Ok(video_info)
+}
+
+/// A yt-dlp command with platform process settings applied.
+///
+/// On Unix the child gets its own process group (`process_group(0)`), so
+/// signalling the group (`kill(-pid, ..)`) also reaches the ffmpeg children
+/// yt-dlp spawns for merging/post-processing.
+fn ytdlp_command(ytdlp_path: &Path) -> Command {
+    let mut cmd = Command::new(ytdlp_path);
+    #[cfg(unix)]
+    cmd.process_group(0);
+    cmd.kill_on_drop(true);
+    cmd
 }
 
 /// Convert raw yt-dlp info to our VideoInfo model
@@ -141,25 +175,33 @@ fn convert_video_info(raw: YtdlpVideoInfo) -> VideoInfo {
     }
 }
 
-/// Download a video with progress reporting
-pub async fn download_video(
-    app: &AppHandle,
-    download_id: String,
+/// Environment-derived inputs to [`build_download_args`], resolved by the
+/// caller so argument building stays pure.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DownloadContext {
+    /// Directory containing ffmpeg, passed as `--ffmpeg-location`.
+    pub ffmpeg_dir: Option<PathBuf>,
+    /// File for `--download-archive` when the option is enabled.
+    pub archive_path: Option<PathBuf>,
+    /// Output directory used when `options.output_path` is empty.
+    pub default_dir: PathBuf,
+}
+
+/// Build the full yt-dlp argv for a download.
+///
+/// SECURITY: the URL is validated as http(s) and placed after `--`, so it can
+/// never be parsed as an option (e.g. `--exec`). Every other user-controlled
+/// value is passed as the argument *of* a fixed option, and the output
+/// template is confined to the download directory (see
+/// [`build_output_template`]).
+pub(crate) fn build_download_args(
     url: &str,
     options: &DownloadOptions,
-    progress_tx: mpsc::Sender<DownloadProgress>,
-) -> Result<PathBuf> {
-    info!("Starting download: {} with options {:?}", url, options);
-
-    let ytdlp_path = binary::get_ytdlp_path(app)?;
-
-    // Build output template
-    let output_template = build_output_template(options);
-
-    // Build format selector
+    ctx: &DownloadContext,
+) -> Result<Vec<String>> {
+    let url = checked_url(url)?;
+    let output_template = build_output_template(options, &ctx.default_dir)?;
     let format_selector = build_format_selector(options);
-    debug!("Format selector: {}", format_selector);
-    debug!("Output template: {}", output_template);
 
     let mut args = vec![
         "--newline".to_string(),
@@ -169,27 +211,17 @@ pub async fn download_video(
         "-f".to_string(),
         format_selector,
         "-o".to_string(),
-        output_template.clone(),
+        output_template,
     ];
 
-    // Tell yt-dlp exactly where ffmpeg is. Merging bestvideo+bestaudio and any
-    // remux/extract step REQUIRES ffmpeg; relying on the child process's inherited
-    // PATH is unreliable (a GUI-launched app often has a narrower PATH than the
-    // user's shell). We resolve ffmpeg the same way the rest of the app does
-    // (app binaries dir, then system PATH) and pass its directory explicitly.
-    if let Ok(ffmpeg_path) = binary::get_ffmpeg_path(app) {
-        let ffmpeg_dir = ffmpeg_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or(ffmpeg_path);
-        debug!("Passing --ffmpeg-location {:?}", ffmpeg_dir);
+    // Merging bestvideo+bestaudio and any remux/extract step needs ffmpeg; a
+    // GUI-launched app often has a narrower PATH than the user's shell, so the
+    // resolved location is passed explicitly.
+    if let Some(dir) = &ctx.ffmpeg_dir {
         args.push("--ffmpeg-location".to_string());
-        args.push(ffmpeg_dir.to_string_lossy().to_string());
-    } else {
-        warn!("ffmpeg not found; merge/convert steps may fail");
+        args.push(dir.to_string_lossy().to_string());
     }
 
-    // Playlist handling
     if options.no_playlist {
         args.push("--no-playlist".to_string());
     }
@@ -198,10 +230,8 @@ pub async fn download_video(
         args.push(options.playlist_items.clone());
     }
 
-    // Add format conversion if needed
     if options.audio_only {
-        // Audio extraction and conversion
-        args.push("-x".to_string()); // Extract audio
+        args.push("-x".to_string());
         if !options.audio_format.is_empty() && options.audio_format != "best" {
             args.push("--audio-format".to_string());
             args.push(options.audio_format.clone());
@@ -215,21 +245,13 @@ pub async fn download_video(
         args.push(options.format.clone());
     }
 
-    // Video/audio codec preferences
     if options.video_codec != "auto" && !options.video_codec.is_empty() {
         args.push("--format-sort".to_string());
         args.push(format!("vcodec:{}", options.video_codec));
     }
 
-    // Embed thumbnail if requested.
-    //
-    // For mp4/mov containers, embedding adds the cover image as an mjpeg video
-    // stream. Browsers/WebView2 (the in-app HTML5 <video>) refuse to play a file
-    // that contains a second, undecodable video track unless it is explicitly
-    // flagged as an attached picture. We pass postprocessor args so the embedded
-    // thumbnail is marked `disposition:attached_pic`, which keeps the cover art
-    // embedded AND lets the file play in-app. External players were unaffected,
-    // but the in-app player was failing with "format not supported".
+    // For mp4/mov, an embedded cover becomes a second (mjpeg) video stream that
+    // WebView2's <video> refuses to play unless it is flagged attached_pic.
     if options.embed_thumbnail {
         args.push("--embed-thumbnail".to_string());
         let is_mp4_like = matches!(
@@ -237,55 +259,41 @@ pub async fn download_video(
             "mp4" | "mov" | "m4v"
         );
         if is_mp4_like && !options.audio_only {
-            // Tell ffmpeg (the EmbedThumbnail postprocessor) to mark the last
-            // stream (the cover) as attached_pic rather than a default video track.
             args.push("--ppa".to_string());
             args.push("EmbedThumbnail+ffmpeg_o:-disposition:v:1 attached_pic".to_string());
         }
     }
 
-    // Embed metadata if requested
     if options.embed_metadata {
         args.push("--embed-metadata".to_string());
     }
-
-    // Embed chapters if requested
     if options.download_chapters {
         args.push("--embed-chapters".to_string());
     }
-
-    // Split by chapters
     if options.split_by_chapters {
         args.push("--split-chapters".to_string());
     }
 
-    // Subtitle options
     if options.download_subtitles {
         args.push("--write-subs".to_string());
-
         if options.auto_subtitles {
             args.push("--write-auto-subs".to_string());
         }
-
         if !options.subtitle_languages.is_empty() {
             args.push("--sub-langs".to_string());
             args.push(options.subtitle_languages.join(","));
         }
-
         if !options.subtitle_format.is_empty() {
             args.push("--sub-format".to_string());
             args.push(options.subtitle_format.clone());
-            // Ensure the on-disk subtitle file is converted to the requested format
             args.push("--convert-subs".to_string());
             args.push(options.subtitle_format.clone());
         }
-
         if options.embed_subtitles {
             args.push("--embed-subs".to_string());
         }
     }
 
-    // SponsorBlock
     if options.sponsor_block {
         args.push("--sponsorblock-remove".to_string());
         if !options.sponsor_block_categories.is_empty() {
@@ -295,100 +303,224 @@ pub async fn download_video(
         }
     }
 
-    // Write info JSON
-    if options.write_info_json {
-        args.push("--write-info-json".to_string());
+    for (enabled, flag) in [
+        (options.write_info_json, "--write-info-json"),
+        (options.write_description, "--write-description"),
+        (options.write_comments, "--write-comments"),
+        (options.write_thumbnail, "--write-thumbnail"),
+        (options.keep_original, "-k"),
+    ] {
+        if enabled {
+            args.push(flag.to_string());
+        }
     }
 
-    // Write description
-    if options.write_description {
-        args.push("--write-description".to_string());
+    for (value, flag) in [
+        (&options.max_filesize, "--max-filesize"),
+        (&options.rate_limit, "-r"),
+        (&options.remux_video, "--remux-video"),
+        (&options.cookies_from_browser, "--cookies-from-browser"),
+    ] {
+        if !value.is_empty() {
+            args.push(flag.to_string());
+            args.push(value.clone());
+        }
     }
 
-    // Write comments
-    if options.write_comments {
-        args.push("--write-comments".to_string());
-    }
-
-    // Write thumbnail (as separate file)
-    if options.write_thumbnail {
-        args.push("--write-thumbnail".to_string());
-    }
-
-    // Keep original file
-    if options.keep_original {
-        args.push("-k".to_string());
-    }
-
-    // Max filesize limit
-    if !options.max_filesize.is_empty() {
-        args.push("--max-filesize".to_string());
-        args.push(options.max_filesize.clone());
-    }
-
-    // Rate limit
-    if !options.rate_limit.is_empty() {
-        args.push("-r".to_string());
-        args.push(options.rate_limit.clone());
-    }
-
-    // Remux video
-    if !options.remux_video.is_empty() {
-        args.push("--remux-video".to_string());
-        args.push(options.remux_video.clone());
-    }
-
-    // Cookies from browser
-    if !options.cookies_from_browser.is_empty() {
-        args.push("--cookies-from-browser".to_string());
-        args.push(options.cookies_from_browser.clone());
-    }
-
-    // Concurrent fragments for faster HLS/DASH downloads
     if options.concurrent_fragments > 1 {
         args.push("-N".to_string());
         args.push(options.concurrent_fragments.to_string());
     }
 
-    // Proxy
     if !options.proxy_url.is_empty() {
         args.push("--proxy".to_string());
         args.push(options.proxy_url.clone());
     }
 
-    // Restrict filenames to ASCII
     if options.restrict_filenames {
         args.push("--restrict-filenames".to_string());
     }
 
-    // Download archive (to avoid re-downloading)
     if options.use_download_archive {
-        if let Ok(archive_path) = crate::utils::paths::get_download_archive_path(app) {
+        if let Some(archive) = &ctx.archive_path {
             args.push("--download-archive".to_string());
-            args.push(archive_path.to_string_lossy().to_string());
+            args.push(archive.to_string_lossy().to_string());
         }
     }
 
-    // Geo-bypass
     if options.geo_bypass {
         args.push("--geo-bypass".to_string());
     }
 
-    args.push(url.to_string());
+    args.push("--".to_string());
+    args.push(url);
+    Ok(args)
+}
 
-    debug!("yt-dlp args: {:?}", args);
+/// Copy of `args` with the `--proxy` value's credentials masked, for logging.
+fn redact_args(args: &[String]) -> Vec<String> {
+    let mut out = args.to_vec();
+    for i in 1..out.len() {
+        if out[i - 1] == "--proxy" {
+            out[i] = validators::redact_url_credentials(&out[i]);
+        }
+    }
+    out
+}
 
-    let mut child = Command::new(&ytdlp_path)
-        .args(&args)
+/// Download a video with progress reporting
+pub async fn download_video(
+    app: &AppHandle,
+    download_id: String,
+    url: &str,
+    options: &DownloadOptions,
+    progress_tx: mpsc::Sender<DownloadProgress>,
+) -> Result<PathBuf> {
+    info!("Starting download {}: {}", download_id, url);
+    debug!(
+        "Download options (proxy redacted): {:?}",
+        DownloadOptions {
+            proxy_url: validators::redact_url_credentials(&options.proxy_url),
+            ..options.clone()
+        }
+    );
+
+    let ctx = DownloadContext {
+        ffmpeg_dir: match binary::get_ffmpeg_path(app) {
+            Ok(p) => Some(p.parent().map(Path::to_path_buf).unwrap_or(p)),
+            Err(_) => {
+                warn!("ffmpeg not found; merge/convert steps may fail");
+                None
+            }
+        },
+        archive_path: if options.use_download_archive {
+            crate::utils::paths::get_download_archive_path(app).ok()
+        } else {
+            None
+        },
+        default_dir: crate::utils::paths::get_default_downloads_dir(),
+    };
+    let args = build_download_args(url, options, &ctx)?;
+    if options.output_path.trim().is_empty() {
+        // An empty base used to resolve to the drive root on Windows; make
+        // sure the fallback directory exists instead.
+        let _ = std::fs::create_dir_all(&ctx.default_dir);
+    }
+    let ytdlp_path = binary::get_ytdlp_path(app)?;
+    let output_dir = if options.output_path.trim().is_empty() {
+        ctx.default_dir.to_string_lossy().into_owned()
+    } else {
+        options.output_path.clone()
+    };
+    run_download(&ytdlp_path, &args, &download_id, &output_dir, progress_tx).await
+}
+
+/// Running state extracted from yt-dlp's output while a download runs.
+#[derive(Debug, Default)]
+struct OutputTracker {
+    /// Final file path reported by yt-dlp, if seen.
+    captured_file_path: Option<String>,
+    /// Last few error/warning lines, used as the failure reason.
+    stderr_tail: Vec<String>,
+}
+
+/// Media extensions yt-dlp may produce as the final file.
+const OUTPUT_EXTENSIONS: &[&str] = &[
+    ".mp4", ".mkv", ".webm", ".m4a", ".mp3", ".opus", ".flac", ".wav", ".avi", ".mov",
+];
+
+/// Whether `line` looks like the bare file path printed by
+/// `--print after_move:filepath`.
+fn looks_like_output_path(line: &str) -> bool {
+    !line.starts_with('[')
+        && (line.contains('/') || line.contains('\\'))
+        && OUTPUT_EXTENSIONS.iter().any(|ext| line.ends_with(ext))
+}
+
+impl OutputTracker {
+    /// Record one line of yt-dlp output from `stderr` or stdout.
+    fn observe(&mut self, line: &str, from_stderr: bool) {
+        let trimmed = line.trim();
+        if from_stderr
+            && (trimmed.starts_with("ERROR")
+                || trimmed.starts_with("WARNING")
+                || trimmed.to_lowercase().contains("error"))
+        {
+            self.stderr_tail.push(trimmed.to_string());
+            if self.stderr_tail.len() > 10 {
+                self.stderr_tail.remove(0);
+            }
+        }
+
+        if looks_like_output_path(trimmed) {
+            // Late stderr lines must not override a path already captured.
+            if !from_stderr || self.captured_file_path.is_none() {
+                self.captured_file_path = Some(trimmed.to_string());
+            }
+        }
+
+        if let Some(path) = line.split("[download] Destination:").nth(1) {
+            self.captured_file_path = Some(path.trim().to_string());
+        } else if line.contains("[Merger] Merging formats into") {
+            if let (Some(start), Some(end)) = (line.find('"'), line.rfind('"')) {
+                if end > start {
+                    self.captured_file_path = Some(line[start + 1..end].to_string());
+                }
+            }
+        } else if line.contains("[MoveFiles] Moving file") && line.contains(" to ") {
+            if let Some(to_part) = line.split(" to ").last() {
+                self.captured_file_path = Some(to_part.trim().trim_matches('"').to_string());
+            }
+        }
+    }
+
+    /// Failure reason for a non-zero exit.
+    fn failure_reason(&self, code: Option<i32>) -> String {
+        if self.stderr_tail.is_empty() {
+            format!(
+                "yt-dlp exited with status {}",
+                code.map(|c| c.to_string())
+                    .unwrap_or_else(|| "unknown".into())
+            )
+        } else {
+            self.stderr_tail.join("; ")
+        }
+    }
+}
+
+fn downloading(download_id: &str, p: (f64, u64, u64, u64, u64)) -> DownloadProgress {
+    DownloadProgress {
+        download_id: download_id.to_string(),
+        status: DownloadStatus::Downloading,
+        progress: p.0,
+        downloaded_bytes: p.1,
+        total_bytes: p.2,
+        speed: p.3,
+        eta: p.4,
+        file_path: None,
+    }
+}
+
+/// Spawn yt-dlp with prepared `args`, stream progress, and locate the result.
+async fn run_download(
+    ytdlp_path: &Path,
+    args: &[String],
+    download_id: &str,
+    output_dir: &str,
+    progress_tx: mpsc::Sender<DownloadProgress>,
+) -> Result<PathBuf> {
+    debug!("yt-dlp args: {:?}", redact_args(args));
+
+    let mut child = ytdlp_command(ytdlp_path)
+        .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| ClipyError::Ytdlp(format!("Failed to spawn yt-dlp: {}", e)))?;
 
-    // Register the process for cancellation
     if let Some(pid) = child.id() {
         if let Some(registry) = crate::services::process_registry::get_registry() {
-            registry.register(&download_id, pid).await;
+            registry.register(download_id, pid).await;
         }
     }
 
@@ -400,195 +532,47 @@ pub async fn download_video(
         .stderr
         .take()
         .ok_or_else(|| ClipyError::Ytdlp("Failed to capture stderr".into()))?;
-
     let mut stdout_reader = BufReader::new(stdout).lines();
     let mut stderr_reader = BufReader::new(stderr).lines();
 
-    // Send initial progress
     let _ = progress_tx
-        .send(DownloadProgress {
-            download_id: download_id.clone(),
-            status: DownloadStatus::Downloading,
-            progress: 0.0,
-            downloaded_bytes: 0,
-            total_bytes: 0,
-            speed: 0,
-            eta: 0,
-            file_path: None,
-        })
+        .send(downloading(download_id, (0.0, 0, 0, 0, 0)))
         .await;
 
-    // Track the actual downloaded file path from yt-dlp output
-    let mut captured_file_path: Option<String> = None;
-    // Keep the last several stderr lines so a failure can report the REAL reason
-    // (yt-dlp prints the actual error here), not a generic "Download failed".
-    let mut stderr_tail: Vec<String> = Vec::new();
+    let mut tracker = OutputTracker::default();
+    let mut stdout_open = true;
+    let mut stderr_open = true;
 
-    info!("Starting to read yt-dlp output streams...");
-
-    // Read both stdout and stderr concurrently
-    // yt-dlp outputs progress to stderr, other info to stdout
-    let mut lines_received = 0u32;
-    loop {
-        let (line, source) = tokio::select! {
-            result = stdout_reader.next_line() => {
-                match result {
-                    Ok(Some(line)) => (line, "stdout"),
-                    Ok(None) => {
-                        debug!("stdout stream closed");
-                        break; // stdout closed
-                    },
-                    Err(e) => {
-                        debug!("Error reading stdout: {}", e);
-                        continue;
-                    },
+    // yt-dlp writes progress to stdout (with --newline) and errors to stderr.
+    // A closed stream is excluded from the select via its guard, so EOF on one
+    // pipe can no longer make the loop spin on an immediately-ready branch.
+    while stdout_open || stderr_open {
+        let (line, from_stderr) = tokio::select! {
+            r = stdout_reader.next_line(), if stdout_open => match r {
+                Ok(Some(line)) => (line, false),
+                Ok(None) | Err(_) => {
+                    stdout_open = false;
+                    continue;
                 }
-            }
-            result = stderr_reader.next_line() => {
-                match result {
-                    Ok(Some(line)) => (line, "stderr"),
-                    Ok(None) => {
-                        debug!("stderr stream closed");
-                        continue; // stderr closed but keep reading stdout
-                    },
-                    Err(e) => {
-                        debug!("Error reading stderr: {}", e);
-                        continue;
-                    },
+            },
+            r = stderr_reader.next_line(), if stderr_open => match r {
+                Ok(Some(line)) => (line, true),
+                Ok(None) | Err(_) => {
+                    stderr_open = false;
+                    continue;
                 }
-            }
+            },
         };
 
-        lines_received += 1;
-        debug!("[{}] yt-dlp ({}): {}", lines_received, source, line);
-
-        // Remember yt-dlp's own error/warning lines for the failure message.
-        if source == "stderr" {
-            let t = line.trim();
-            if t.starts_with("ERROR")
-                || t.starts_with("WARNING")
-                || t.to_lowercase().contains("error")
-            {
-                stderr_tail.push(t.to_string());
-                if stderr_tail.len() > 10 {
-                    stderr_tail.remove(0);
-                }
-            }
-        }
-
-        // The --print after_move:filepath option outputs the final filepath as a plain line
-        // It's the last thing printed and doesn't have any prefix like [download]
-        // Check if line looks like a file path (contains path separator and file extension)
-        let trimmed = line.trim();
-        if !trimmed.starts_with('[') && !trimmed.is_empty() {
-            // Check if it looks like a valid file path
-            let has_extension = trimmed.contains('.')
-                && (trimmed.ends_with(".mp4")
-                    || trimmed.ends_with(".mkv")
-                    || trimmed.ends_with(".webm")
-                    || trimmed.ends_with(".m4a")
-                    || trimmed.ends_with(".mp3")
-                    || trimmed.ends_with(".opus")
-                    || trimmed.ends_with(".flac")
-                    || trimmed.ends_with(".wav")
-                    || trimmed.ends_with(".avi")
-                    || trimmed.ends_with(".mov"));
-            let has_path_sep = trimmed.contains('/') || trimmed.contains('\\');
-
-            if has_extension && has_path_sep {
-                info!("Captured filepath from --print: {}", trimmed);
-                captured_file_path = Some(trimmed.to_string());
-            }
-        }
-
-        // Also capture from traditional yt-dlp output lines as fallback
-        // Look for: [download] Destination: /path/to/file.mp4
-        // Or: [Merger] Merging formats into "/path/to/file.mp4"
-        // Or: [MoveFiles] Moving file ... to "/path/to/file.mp4"
-        if line.contains("[download] Destination:") {
-            if let Some(path) = line.split("Destination:").nth(1) {
-                captured_file_path = Some(path.trim().to_string());
-            }
-        } else if line.contains("[Merger] Merging formats into") {
-            // Extract path from between quotes
-            if let Some(start) = line.find('"') {
-                if let Some(end) = line.rfind('"') {
-                    if end > start {
-                        captured_file_path = Some(line[start + 1..end].to_string());
-                    }
-                }
-            }
-        } else if line.contains("[MoveFiles] Moving file") && line.contains(" to ") {
-            // Extract destination path after " to "
-            if let Some(to_part) = line.split(" to ").last() {
-                let path = to_part.trim().trim_matches('"');
-                captured_file_path = Some(path.to_string());
-            }
-        }
-
-        if let Some(progress) = parse_progress_line(&line) {
-            info!(
-                "Sending progress to channel: {}% - {} bytes of {} bytes, speed: {}, eta: {}",
-                progress.0, progress.1, progress.2, progress.3, progress.4
-            );
-            match progress_tx
-                .send(DownloadProgress {
-                    download_id: download_id.clone(),
-                    status: DownloadStatus::Downloading,
-                    progress: progress.0,
-                    downloaded_bytes: progress.1,
-                    total_bytes: progress.2,
-                    speed: progress.3,
-                    eta: progress.4,
-                    file_path: None,
-                })
-                .await
-            {
-                Ok(()) => {
-                    debug!("Progress sent successfully to channel");
-                }
-                Err(e) => {
-                    error!("Failed to send progress to channel: {}", e);
-                }
-            }
-        }
-    }
-
-    info!(
-        "Finished reading yt-dlp output. Total lines received: {}",
-        lines_received
-    );
-
-    // Drain any remaining stderr output after stdout closes
-    while let Ok(Some(line)) = stderr_reader.next_line().await {
-        debug!("yt-dlp stderr (remaining): {}", line);
-        let trimmed = line.trim();
-        if trimmed.starts_with("ERROR")
-            || trimmed.starts_with("WARNING")
-            || trimmed.to_lowercase().contains("error")
-        {
-            stderr_tail.push(trimmed.to_string());
-            if stderr_tail.len() > 10 {
-                stderr_tail.remove(0);
-            }
-        }
-        // Check for file path in remaining output
-        if !trimmed.starts_with('[') && !trimmed.is_empty() {
-            let has_extension = trimmed.contains('.')
-                && (trimmed.ends_with(".mp4")
-                    || trimmed.ends_with(".mkv")
-                    || trimmed.ends_with(".webm")
-                    || trimmed.ends_with(".m4a")
-                    || trimmed.ends_with(".mp3")
-                    || trimmed.ends_with(".opus")
-                    || trimmed.ends_with(".flac")
-                    || trimmed.ends_with(".wav")
-                    || trimmed.ends_with(".avi")
-                    || trimmed.ends_with(".mov"));
-            let has_path_sep = trimmed.contains('/') || trimmed.contains('\\');
-            if has_extension && has_path_sep && captured_file_path.is_none() {
-                info!("Captured filepath from remaining stderr: {}", trimmed);
-                captured_file_path = Some(trimmed.to_string());
+        debug!(
+            "yt-dlp ({}): {}",
+            if from_stderr { "stderr" } else { "stdout" },
+            line
+        );
+        tracker.observe(&line, from_stderr);
+        if let Some(p) = parse_progress_line(&line) {
+            if let Err(e) = progress_tx.send(downloading(download_id, p)).await {
+                error!("Failed to send progress to channel: {}", e);
             }
         }
     }
@@ -598,58 +582,69 @@ pub async fn download_video(
         .await
         .map_err(|e| ClipyError::Ytdlp(format!("Failed to wait for yt-dlp: {}", e)))?;
 
-    // Unregister the process now that it's done
     if let Some(registry) = crate::services::process_registry::get_registry() {
-        registry.unregister(&download_id).await;
+        registry.unregister(download_id).await;
     }
 
     if !status.success() {
-        let reason = if stderr_tail.is_empty() {
-            format!(
-                "yt-dlp exited with status {}",
-                status
-                    .code()
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "unknown".into())
-            )
-        } else {
-            stderr_tail.join("; ")
-        };
+        let reason = tracker.failure_reason(status.code());
         error!("yt-dlp download failed: {}", reason);
         return Err(ClipyError::Ytdlp(reason));
     }
 
-    // Send completion (file_path will be set by queue.rs after this)
     let _ = progress_tx
         .send(DownloadProgress {
-            download_id: download_id.clone(),
             status: DownloadStatus::Completed,
             progress: 100.0,
-            downloaded_bytes: 0,
-            total_bytes: 0,
-            speed: 0,
-            eta: 0,
-            file_path: None,
+            ..downloading(download_id, (0.0, 0, 0, 0, 0))
         })
         .await;
 
-    // Find the downloaded file
-    let output_path = find_downloaded_file(&options.output_path, captured_file_path.as_deref())?;
-
+    let output_path = find_downloaded_file(output_dir, tracker.captured_file_path.as_deref())?;
     info!("Download completed: {:?}", output_path);
     Ok(output_path)
+}
+
+/// Reject a user-supplied filename/template that could escape the download
+/// directory: absolute paths, drive or UNC prefixes, and `..` components.
+fn check_relative_template(template: &str) -> Result<()> {
+    let bad = |why: &str| {
+        Err(ClipyError::Ytdlp(format!(
+            "Invalid filename template ({why}): {template:?}"
+        )))
+    };
+    if template.contains('\0') {
+        return bad("NUL byte");
+    }
+    if template.starts_with('/') || template.starts_with('\\') {
+        return bad("absolute path");
+    }
+    let b = template.as_bytes();
+    if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        return bad("drive prefix");
+    }
+    if template.split(['/', '\\']).any(|part| part.trim() == "..") {
+        return bad("parent directory component");
+    }
+    Ok(())
 }
 
 /// Compose the yt-dlp `-o` output template from filename/organization options.
 ///
 /// Precedence:
 /// 1. An explicit `filename` (legacy per-download override) wins.
-/// 2. A non-empty `filename_template` is used verbatim (advanced users).
+/// 2. A non-empty `filename_template` is used (advanced users).
 /// 3. Otherwise build from `create_channel_subfolder` + `include_date_in_filename`.
-fn build_output_template(options: &DownloadOptions) -> String {
+///
+/// SECURITY: user templates must be relative and free of `..`, so the result
+/// always lives under the download directory. An empty `output_path` falls
+/// back to `default_dir` (it used to resolve to the drive root on Windows).
+fn build_output_template(options: &DownloadOptions, default_dir: &Path) -> Result<String> {
     let name_part = if !options.filename.is_empty() {
+        check_relative_template(&options.filename)?;
         options.filename.clone()
     } else if !options.filename_template.is_empty() {
+        check_relative_template(&options.filename_template)?;
         options.filename_template.clone()
     } else {
         let mut t = String::new();
@@ -663,20 +658,19 @@ fn build_output_template(options: &DownloadOptions) -> String {
         t
     };
 
-    // CRITICAL: never let the base be empty. An empty output_path made the
-    // template "/%(title)s..." which on Windows resolves to the drive root
-    // (C:\) -> "[Errno 13] Permission denied". Fall back to the OS default
-    // downloads dir (creating it if needed) so a missing/blank setting still works.
     let base = options.output_path.trim();
     let base_dir = if base.is_empty() {
-        let dir = crate::utils::paths::get_default_downloads_dir();
-        let _ = std::fs::create_dir_all(&dir);
-        dir.to_string_lossy().to_string()
+        default_dir.to_string_lossy().to_string()
     } else {
+        path_policy::validate_raw_path(base)?;
         base.to_string()
     };
 
-    format!("{}/{}", base_dir, name_part)
+    Ok(format!(
+        "{}/{}",
+        base_dir.trim_end_matches(['/', '\\']),
+        name_part
+    ))
 }
 
 /// Build format selector string for yt-dlp
@@ -1094,43 +1088,399 @@ mod tests {
 
     // ---- build_output_template ----
 
+    /// An absolute download dir valid on the host OS.
+    fn base() -> String {
+        if cfg!(windows) {
+            "C:/downloads"
+        } else {
+            "/downloads"
+        }
+        .into()
+    }
+
+    /// Build the template and normalize the host-specific base to
+    /// `/downloads` so expectations read the same on every OS.
+    fn tmpl(o: &DownloadOptions) -> String {
+        build_output_template(o, Path::new("/unused"))
+            .unwrap()
+            .replacen(&base(), "/downloads", 1)
+    }
+
+    #[test]
+    fn output_template_rejects_escapes() {
+        for bad in [
+            "../evil.%(ext)s",
+            "a/../../evil.%(ext)s",
+            "a\\..\\evil",
+            "/etc/cron.d/x",
+            "\\\\host\\share\\x",
+            "C:/Windows/x.%(ext)s",
+            "c:x",
+            " .. /x",
+            "a\0b",
+        ] {
+            let mut o = opts();
+            o.output_path = base();
+            o.filename_template = bad.into();
+            assert!(
+                build_output_template(&o, Path::new("/d")).is_err(),
+                "{bad:?}"
+            );
+            let mut o = opts();
+            o.output_path = base();
+            o.filename = bad.into();
+            assert!(
+                build_output_template(&o, Path::new("/d")).is_err(),
+                "{bad:?}"
+            );
+        }
+        let mut o = opts();
+        o.output_path = base();
+        o.filename_template = "%(uploader)s/..%(title)s.%(ext)s".into();
+        assert!(build_output_template(&o, Path::new("/d")).is_ok());
+    }
+
+    #[test]
+    fn output_template_base_dir_rules() {
+        let mut o = opts();
+        o.output_path = "  ".into();
+        assert_eq!(
+            build_output_template(&o, Path::new("/fallback")).unwrap(),
+            format!("{}/%(title)s.%(ext)s", Path::new("/fallback").display())
+        );
+        o.output_path = format!("{}/", base());
+        assert_eq!(tmpl(&o), "/downloads/%(title)s.%(ext)s");
+        for bad in ["relative/dir", "https://x/y", "-o"] {
+            o.output_path = bad.into();
+            assert!(build_output_template(&o, Path::new("/d")).is_err(), "{bad}");
+        }
+    }
+
+    // ---- build_download_args ----
+
+    fn ctx() -> DownloadContext {
+        DownloadContext {
+            ffmpeg_dir: Some(PathBuf::from("/opt/ffmpeg/bin")),
+            archive_path: Some(PathBuf::from("/data/archive.txt")),
+            default_dir: PathBuf::from("/d"),
+        }
+    }
+
+    const URL: &str = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
+
+    #[test]
+    fn download_args_end_with_double_dash_and_url() {
+        let mut o = opts();
+        o.output_path = base();
+        let args = build_download_args(URL, &o, &ctx()).unwrap();
+        let n = args.len();
+        assert_eq!(args[n - 2], "--");
+        assert_eq!(args[n - 1], URL);
+        assert_eq!(args.iter().filter(|a| *a == "--").count(), 1);
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--ffmpeg-location", "/opt/ffmpeg/bin"]));
+        assert!(!args.iter().any(|a| a == "--download-archive"));
+    }
+
+    #[test]
+    fn download_args_reject_malicious_urls() {
+        let mut o = opts();
+        o.output_path = base();
+        for bad in [
+            "--exec=calc.exe",
+            "-o/tmp/x",
+            "file:///etc/passwd",
+            "ftp://x/y",
+            "https://x.com/a --exec calc",
+            "",
+        ] {
+            assert!(build_download_args(bad, &o, &ctx()).is_err(), "{bad:?}");
+            assert!(build_info_args(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn info_args_use_double_dash() {
+        let args = build_info_args(&format!("  {URL} ")).unwrap();
+        assert_eq!(
+            args,
+            vec!["--dump-json", "--no-playlist", "--no-warnings", "--", URL]
+        );
+    }
+
+    #[test]
+    fn download_args_cover_every_option() {
+        let o = DownloadOptions {
+            output_path: base(),
+            audio_only: true,
+            audio_format: "mp3".into(),
+            audio_bitrate: "320".into(),
+            video_codec: "av1".into(),
+            embed_thumbnail: true,
+            embed_metadata: true,
+            download_chapters: true,
+            split_by_chapters: true,
+            download_subtitles: true,
+            auto_subtitles: true,
+            subtitle_languages: vec!["en".into(), "de".into()],
+            subtitle_format: "vtt".into(),
+            embed_subtitles: true,
+            sponsor_block: true,
+            sponsor_block_categories: vec!["sponsor".into(), "intro".into()],
+            write_info_json: true,
+            write_description: true,
+            write_comments: true,
+            write_thumbnail: true,
+            keep_original: true,
+            max_filesize: "500M".into(),
+            rate_limit: "1M".into(),
+            remux_video: "mkv".into(),
+            cookies_from_browser: "firefox".into(),
+            concurrent_fragments: 4,
+            proxy_url: "http://u:p@proxy:8080".into(),
+            restrict_filenames: true,
+            use_download_archive: true,
+            geo_bypass: true,
+            playlist_items: "1-3".into(),
+            no_playlist: true,
+            ..DownloadOptions::default()
+        };
+        let args = build_download_args(URL, &o, &ctx()).unwrap();
+        let has = |pair: [&str; 2]| args.windows(2).any(|w| w == pair);
+        assert!(has(["--audio-format", "mp3"]));
+        assert!(has(["--audio-quality", "320K"]));
+        assert!(has(["--format-sort", "vcodec:av1"]));
+        assert!(has(["--sub-langs", "en,de"]));
+        assert!(has(["--convert-subs", "vtt"]));
+        assert!(has(["--sponsorblock-remove", "sponsor,intro"]));
+        assert!(has(["--max-filesize", "500M"]));
+        assert!(has(["-r", "1M"]));
+        assert!(has(["--remux-video", "mkv"]));
+        assert!(has(["--cookies-from-browser", "firefox"]));
+        assert!(has(["-N", "4"]));
+        assert!(has(["--proxy", "http://u:p@proxy:8080"]));
+        assert!(has(["--download-archive", "/data/archive.txt"]));
+        assert!(has(["--playlist-items", "1-3"]));
+        for flag in [
+            "-x",
+            "--embed-thumbnail",
+            "--embed-metadata",
+            "--embed-chapters",
+            "--split-chapters",
+            "--write-subs",
+            "--write-auto-subs",
+            "--embed-subs",
+            "--write-info-json",
+            "--write-description",
+            "--write-comments",
+            "--write-thumbnail",
+            "-k",
+            "--restrict-filenames",
+            "--geo-bypass",
+            "--no-playlist",
+        ] {
+            assert!(args.iter().any(|a| a == flag), "{flag}");
+        }
+        // Audio-only never asks for the attached_pic remap.
+        assert!(!args.iter().any(|a| a == "--ppa"));
+        assert_eq!(args[args.len() - 2..], ["--", URL]);
+
+        let logged = redact_args(&args);
+        assert!(!logged.iter().any(|a| a.contains("u:p@")));
+        assert!(logged.iter().any(|a| a.contains("***@proxy")));
+    }
+
+    #[test]
+    fn download_args_video_mp4_thumbnail_and_defaults() {
+        let o = DownloadOptions {
+            output_path: base(),
+            embed_thumbnail: true,
+            sponsor_block: true,
+            format: "mp4".into(),
+            ..DownloadOptions::default()
+        };
+        let mut c = ctx();
+        c.ffmpeg_dir = None;
+        let args = build_download_args(URL, &o, &c).unwrap();
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--merge-output-format", "mp4"]));
+        assert!(args.windows(2).any(|w| w[0] == "--ppa"));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--sponsorblock-remove", "sponsor"]));
+        assert!(!args.iter().any(|a| a == "--ffmpeg-location"));
+
+        let best = DownloadOptions {
+            output_path: base(),
+            format: "best".into(),
+            ..DownloadOptions::default()
+        };
+        let args = build_download_args(URL, &best, &c).unwrap();
+        assert!(!args.iter().any(|a| a == "--merge-output-format"));
+    }
+
+    // ---- output tracking ----
+
+    #[test]
+    fn tracker_captures_paths_and_errors() {
+        let mut t = OutputTracker::default();
+        t.observe("[download] Destination: /d/a.f137.mp4", false);
+        assert_eq!(t.captured_file_path.as_deref(), Some("/d/a.f137.mp4"));
+        t.observe("[Merger] Merging formats into \"/d/a.mp4\"", false);
+        assert_eq!(t.captured_file_path.as_deref(), Some("/d/a.mp4"));
+        t.observe(
+            "[MoveFiles] Moving file \"/tmp/a.mkv\" to \"/d/b.mkv\"",
+            false,
+        );
+        assert_eq!(t.captured_file_path.as_deref(), Some("/d/b.mkv"));
+        t.observe("C:\\Users\\x\\Videos\\final.webm", false);
+        assert_eq!(
+            t.captured_file_path.as_deref(),
+            Some("C:\\Users\\x\\Videos\\final.webm")
+        );
+        // A path-like stderr line does not override an existing capture.
+        t.observe("/d/other.mp4", true);
+        assert_eq!(
+            t.captured_file_path.as_deref(),
+            Some("C:\\Users\\x\\Videos\\final.webm")
+        );
+        t.observe("not a path.txt", false);
+
+        for i in 0..12 {
+            t.observe(&format!("ERROR: thing {i}"), true);
+        }
+        t.observe("WARNING: w", true);
+        t.observe("ERROR: ignored on stdout", false);
+        assert_eq!(t.stderr_tail.len(), 10);
+        assert_eq!(t.stderr_tail.last().unwrap(), "WARNING: w");
+        assert!(t.failure_reason(Some(1)).contains("ERROR: thing 11"));
+
+        let empty = OutputTracker::default();
+        assert_eq!(empty.failure_reason(Some(2)), "yt-dlp exited with status 2");
+        assert_eq!(
+            empty.failure_reason(None),
+            "yt-dlp exited with status unknown"
+        );
+
+        let mut fresh = OutputTracker::default();
+        fresh.observe("/d/late.mp3", true);
+        assert_eq!(fresh.captured_file_path.as_deref(), Some("/d/late.mp3"));
+    }
+
+    #[test]
+    fn output_path_heuristic() {
+        assert!(looks_like_output_path("/a/b.mkv"));
+        assert!(!looks_like_output_path("[download] /a/b.mkv"));
+        assert!(!looks_like_output_path("b.mkv"));
+        assert!(!looks_like_output_path("/a/b.txt"));
+    }
+
+    // ---- find_downloaded_file ----
+
+    #[test]
+    fn find_downloaded_file_prefers_capture_then_newest() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path().to_string_lossy().into_owned();
+        assert!(find_downloaded_file(&d, None).is_err());
+        let old = dir.path().join("old.mp4");
+        std::fs::write(&old, b"1").unwrap();
+        std::fs::write(dir.path().join("notes.txt"), b"1").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let new = dir.path().join("new.webm");
+        std::fs::write(&new, b"1").unwrap();
+        assert_eq!(find_downloaded_file(&d, None).unwrap(), new);
+        assert_eq!(
+            find_downloaded_file(&d, Some(&old.to_string_lossy())).unwrap(),
+            old
+        );
+        assert_eq!(
+            find_downloaded_file(&d, Some("/no/such/file.mp4")).unwrap(),
+            new
+        );
+        assert!(find_downloaded_file("/no/such/dir", None).is_err());
+    }
+
+    // ---- video info conversion ----
+
+    #[test]
+    fn convert_video_info_maps_fields() {
+        let raw: YtdlpVideoInfo = serde_json::from_str(
+            r#"{"id":"x","title":"T","duration":12.7,"availability":"private",
+                "formats":[
+                  {"format_id":"18","ext":"mp4","width":640,"height":360,"fps":29.97,
+                   "vcodec":"avc1","acodec":"mp4a","filesize":10,"tbr":500.0},
+                  {"format_id":"140","acodec":"mp4a","vcodec":"none"},
+                  {"format_id":"sb0","vcodec":"none","acodec":"none"}
+                ]}"#,
+        )
+        .unwrap();
+        let info = convert_video_info(raw);
+        assert_eq!(info.duration, 12);
+        assert!(info.is_private);
+        assert!(!info.is_live);
+        assert_eq!(info.formats.len(), 2);
+        assert_eq!(info.formats[0].resolution, "640x360");
+        assert!(info.formats[0].has_video && info.formats[0].has_audio);
+        assert_eq!(info.formats[1].resolution, "unknown");
+        assert_eq!(info.formats[1].extension, "mp4");
+        assert!(!info.formats[1].has_video);
+    }
+
+    // ---- process spawning without real yt-dlp ----
+
+    #[tokio::test]
+    async fn run_download_reports_spawn_failure() {
+        let (tx, _rx) = mpsc::channel(4);
+        let err = run_download(
+            Path::new("/definitely/missing/yt-dlp"),
+            &["--version".to_string()],
+            "id",
+            "/tmp",
+            tx,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ClipyError::Ytdlp(_)));
+        assert!(
+            fetch_video_info_with(Path::new("/definitely/missing/yt-dlp"), &[])
+                .await
+                .is_err()
+        );
+    }
+
     #[test]
     fn output_template_default() {
         let mut o = opts();
-        o.output_path = "/downloads".into();
-        assert_eq!(build_output_template(&o), "/downloads/%(title)s.%(ext)s");
+        o.output_path = base();
+        assert_eq!(tmpl(&o), "/downloads/%(title)s.%(ext)s");
     }
 
     #[test]
     fn output_template_channel_subfolder() {
         let mut o = opts();
-        o.output_path = "/downloads".into();
+        o.output_path = base();
         o.create_channel_subfolder = true;
-        assert_eq!(
-            build_output_template(&o),
-            "/downloads/%(channel)s/%(title)s.%(ext)s"
-        );
+        assert_eq!(tmpl(&o), "/downloads/%(channel)s/%(title)s.%(ext)s");
     }
 
     #[test]
     fn output_template_include_date() {
         let mut o = opts();
-        o.output_path = "/downloads".into();
+        o.output_path = base();
         o.include_date_in_filename = true;
-        assert_eq!(
-            build_output_template(&o),
-            "/downloads/%(upload_date)s - %(title)s.%(ext)s"
-        );
+        assert_eq!(tmpl(&o), "/downloads/%(upload_date)s - %(title)s.%(ext)s");
     }
 
     #[test]
     fn output_template_channel_and_date() {
         let mut o = opts();
-        o.output_path = "/downloads".into();
+        o.output_path = base();
         o.create_channel_subfolder = true;
         o.include_date_in_filename = true;
         assert_eq!(
-            build_output_template(&o),
+            tmpl(&o),
             "/downloads/%(channel)s/%(upload_date)s - %(title)s.%(ext)s"
         );
     }
@@ -1138,19 +1488,19 @@ mod tests {
     #[test]
     fn output_template_custom_template_wins() {
         let mut o = opts();
-        o.output_path = "/downloads".into();
+        o.output_path = base();
         o.create_channel_subfolder = true; // ignored when template is set
         o.filename_template = "%(id)s.%(ext)s".into();
-        assert_eq!(build_output_template(&o), "/downloads/%(id)s.%(ext)s");
+        assert_eq!(tmpl(&o), "/downloads/%(id)s.%(ext)s");
     }
 
     #[test]
     fn output_template_explicit_filename_wins() {
         let mut o = opts();
-        o.output_path = "/downloads".into();
+        o.output_path = base();
         o.filename_template = "%(id)s.%(ext)s".into();
         o.filename = "myfile.%(ext)s".into();
-        assert_eq!(build_output_template(&o), "/downloads/myfile.%(ext)s");
+        assert_eq!(tmpl(&o), "/downloads/myfile.%(ext)s");
     }
 
     // ---- get_available_qualities ----
@@ -1178,5 +1528,66 @@ mod tests {
             get_available_qualities(&info),
             vec!["1080p".to_string(), "720p".into(), "480p".into()]
         );
+    }
+
+    // ---- network: real yt-dlp ----
+
+    /// Install a verified yt-dlp into `dir` for the network tests.
+    async fn real_ytdlp(dir: &Path) -> PathBuf {
+        binary::install_ytdlp_into(dir, std::env::consts::OS, std::env::consts::ARCH)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore = "network: installs real yt-dlp and fetches video info"]
+    async fn network_fetch_video_info() {
+        let dir = tempfile::tempdir().unwrap();
+        let ytdlp = real_ytdlp(dir.path()).await;
+        let info = fetch_video_info_with(&ytdlp, &build_info_args(URL).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(info.id, "jNQXAC9IVRw");
+        assert!(info.duration > 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "network: installs real yt-dlp and downloads a short public video"]
+    async fn network_download_short_video() {
+        let bin = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let ytdlp = real_ytdlp(bin.path()).await;
+        let options = DownloadOptions {
+            output_path: out.path().to_string_lossy().into_owned(),
+            audio_only: true,
+            audio_format: "best".into(),
+            audio_bitrate: String::new(),
+            embed_thumbnail: false,
+            embed_metadata: false,
+            ..DownloadOptions::default()
+        };
+        let ctx = DownloadContext {
+            ffmpeg_dir: None,
+            archive_path: None,
+            default_dir: out.path().to_path_buf(),
+        };
+        // Audio-only "best" downloads a single m4a stream, so no ffmpeg merge
+        // is needed; `-x` without ffmpeg would fail, so drop it here.
+        let args: Vec<String> = build_download_args(URL, &options, &ctx)
+            .unwrap()
+            .into_iter()
+            .filter(|a| a != "-x")
+            .collect();
+        let (tx, mut rx) = mpsc::channel(1024);
+        let file = run_download(&ytdlp, &args, "it", &out.path().to_string_lossy(), tx)
+            .await
+            .unwrap();
+        assert!(file.starts_with(out.path()) || file.exists());
+        assert!(std::fs::metadata(&file).unwrap().len() > 10_000);
+        let mut saw_completed = false;
+        while let Ok(p) = rx.try_recv() {
+            saw_completed |= p.status == DownloadStatus::Completed;
+        }
+        assert!(saw_completed);
     }
 }

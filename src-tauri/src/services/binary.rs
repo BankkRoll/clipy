@@ -629,7 +629,11 @@ pub async fn install_ytdlp(app: &AppHandle) -> Result<PathBuf> {
 }
 
 /// Install the latest verified yt-dlp for `os`/`arch` into `binaries_dir`.
-async fn install_ytdlp_into(binaries_dir: &Path, os: &str, arch: &str) -> Result<PathBuf> {
+pub(crate) async fn install_ytdlp_into(
+    binaries_dir: &Path,
+    os: &str,
+    arch: &str,
+) -> Result<PathBuf> {
     info!("Installing yt-dlp for {os}/{arch}");
     std::fs::create_dir_all(binaries_dir)?;
     let asset = ytdlp_asset_name(os, arch).ok_or_else(|| {
