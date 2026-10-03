@@ -1,10 +1,13 @@
 name: CI
 
 on:
+  # Only long-lived branches on push; everything else (including Dependabot)
+  # is covered once by its pull request instead of twice.
   push:
-    branches:
-      - "**"
+    branches: [main, tauri-rewrite]
+    paths-ignore: ["**.md", "LICENSE", ".github/dependabot.yml"]
   pull_request:
+    paths-ignore: ["**.md", "LICENSE", ".github/dependabot.yml"]
   # Release builds call this workflow so a tag can never ship code that fails CI.
   workflow_call:
 

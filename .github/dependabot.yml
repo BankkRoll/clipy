@@ -1,11 +1,15 @@
 version: 2
+
+# One grouped PR per ecosystem per month keeps CI usage predictable. Major
+# version bumps are skipped here because they need code changes; security
+# fixes still arrive immediately via Dependabot security updates, which are
+# independent of this schedule.
 updates:
-  # Keeps SHA-pinned actions current; Dependabot rewrites both the SHA and the
-  # trailing version comment.
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 1
     groups:
       actions:
         patterns: ["*"]
@@ -13,22 +17,23 @@ updates:
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
+      interval: monthly
+    open-pull-requests-limit: 1
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
-      radix:
-        patterns: ["@radix-ui/*"]
-      tauri:
-        patterns: ["@tauri-apps/*"]
-      dev-tooling:
-        dependency-type: development
-        update-types: [minor, patch]
+      npm:
+        patterns: ["*"]
 
   - package-ecosystem: cargo
     directory: /src-tauri
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
+      interval: monthly
+    open-pull-requests-limit: 1
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
-      tauri:
-        patterns: ["tauri*"]
+      cargo:
+        patterns: ["*"]
