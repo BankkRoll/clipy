@@ -37,7 +37,8 @@ export function AppUpdater({ autoCheck }: { autoCheck: boolean | undefined }) {
   return (
     <UpdateDialog
       open={state.open}
-      onOpenChange={(open) => (open ? undefined : state.dismiss())}
+      // The dialog has no trigger, so Radix only ever calls this to close it.
+      onOpenChange={state.dismiss}
       type="app"
       currentVersion={state.currentVersion}
       newVersion={state.newVersion}

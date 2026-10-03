@@ -16,7 +16,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 
 /** Minimum Rust line coverage (%) enforced in CI. Ratchet up, never down. */
-const FAIL_UNDER_LINES = 30;
+const FAIL_UNDER_LINES = 80;
 
 const root = path.resolve(import.meta.dirname, "..");
 const manifest = path.join(root, "src-tauri", "Cargo.toml");

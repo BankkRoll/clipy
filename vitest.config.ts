@@ -32,6 +32,13 @@ export default defineConfig({
         "src/types/**",
       ],
       all: true,
+      // Every frontend file is fully covered; any untested addition fails CI.
+      thresholds: {
+        statements: 100,
+        branches: 100,
+        functions: 100,
+        lines: 100,
+      },
     },
   },
 });
