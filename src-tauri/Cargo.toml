@@ -33,7 +33,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 
 # Database
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 # Logging
 tracing = "0.1"
