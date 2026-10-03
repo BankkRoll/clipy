@@ -16,7 +16,7 @@ An open-source, bloat-free desktop application for downloading and editing YouTu
 - Download videos from YouTube and other supported platforms
 - Choose from multiple quality options (up to 4K)
 - Select video or audio-only formats
-- Batch download support
+- Playlist item selection
 - Download queue management with pause/resume/cancel
 - Embed thumbnails and metadata
 - SponsorBlock integration
@@ -28,7 +28,7 @@ An open-source, bloat-free desktop application for downloading and editing YouTu
 - CapCut-style professional timeline interface
 - Multi-track video and audio editing
 - Trim, split, and merge clips
-- Text overlays and captions
+- Text overlays and auto-generated, word-timed captions (whisper.cpp)
 - Video filters (brightness, contrast, saturation, hue, blur, sharpen)
 - Transform controls (position, scale, rotation)
 - Export to multiple formats (MP4, WebM, MKV, MOV)
@@ -41,8 +41,8 @@ An open-source, bloat-free desktop application for downloading and editing YouTu
 - Built with Tauri 2.0 for native performance
 - Small installer size (~10MB vs 150MB for Electron)
 - System tray integration
-- Native file dialogs and notifications
-- Auto-updates
+- Native file dialogs
+- Signed automatic updates
 - First-run setup wizard
 
 ## Screenshots
@@ -51,17 +51,37 @@ _Coming soon_
 
 ## Installation
 
-### Windows
+Download the installer for your platform from the [latest release](https://github.com/BankkRoll/clipy/releases/latest).
+Clipy installs FFmpeg and yt-dlp for you on first launch, and updates itself
+from then on.
 
-Download the latest `.msi` or `.exe` installer from the [Releases](https://github.com/BankkRoll/clipy/releases) page.
+| Platform | File                                                                |
+| -------- | ------------------------------------------------------------------- |
+| Windows  | `Clipy_<version>_x64-setup.exe` (per-user) or `_x64_en-US.msi`      |
+| macOS    | `Clipy_<version>_universal.dmg` (Apple Silicon and Intel)           |
+| Linux    | `Clipy_<version>_amd64.AppImage`, `_amd64.deb`, or `.x86_64.rpm`    |
 
-### macOS
+### Unsigned builds
 
-Download the latest `.dmg` file from the [Releases](https://github.com/BankkRoll/clipy/releases) page.
+Releases are not code-signed, so the OS warns on first launch:
 
-### Linux
+- **Windows**: SmartScreen shows "Windows protected your PC". Choose
+  **More info → Run anyway**.
+- **macOS**: after copying Clipy to Applications, run
+  `xattr -dr com.apple.quarantine /Applications/Clipy.app` once.
 
-Download the latest `.AppImage` or `.deb` package from the [Releases](https://github.com/BankkRoll/clipy/releases) page.
+### Verifying a download
+
+Every release asset is listed in `SHA256SUMS.txt` and carries a signed
+build-provenance attestation, proving it was built by this repository's
+release workflow from the tagged commit:
+
+```bash
+gh attestation verify Clipy_2.0.0_x64-setup.exe --repo BankkRoll/clipy
+```
+
+In-app updates are separately verified against Clipy's update signing key
+before they are installed.
 
 ## Development
 
@@ -69,9 +89,9 @@ Download the latest `.AppImage` or `.deb` package from the [Releases](https://gi
 
 **All Platforms:**
 
-- [Node.js](https://nodejs.org/) v18 or later
+- [Node.js](https://nodejs.org/) 20.19 or later (22 LTS recommended)
 - [Rust](https://www.rust-lang.org/tools/install) latest stable
-- [pnpm](https://pnpm.io/) (recommended) or npm
+- [pnpm](https://pnpm.io/) 10 (`corepack enable` picks the pinned version)
 
 **Windows:**
 
@@ -139,15 +159,46 @@ The built application will be in `src-tauri/target/release/bundle/`:
 ### Available Scripts
 
 ```bash
-pnpm dev          # Start Vite dev server
-pnpm build        # Build frontend
-pnpm tauri dev    # Run Tauri in development mode
-pnpm tauri build  # Build Tauri application
-pnpm lint         # Run ESLint
-pnpm lint:fix     # Fix ESLint issues
-pnpm format       # Format code with Prettier
-pnpm typecheck    # Run TypeScript type checking
+pnpm dev            # Start Vite dev server
+pnpm build          # Typecheck + build frontend
+pnpm tauri dev      # Run Tauri in development mode
+pnpm tauri build    # Build installers
+pnpm lint           # ESLint (zero warnings allowed)
+pnpm format         # Format with Prettier
+pnpm format:check   # Check formatting
+pnpm typecheck      # TypeScript type checking
+pnpm test           # Frontend unit + component tests (Vitest)
+pnpm test:coverage  # Frontend tests with Istanbul coverage (100% enforced)
+pnpm coverage:rust  # Backend tests with llvm-cov coverage
+pnpm coverage       # Both, plus a combined summary
 ```
+
+### Testing
+
+- **Frontend**: Vitest + Testing Library in jsdom. Components talk to a fake
+  backend built on Tauri's official IPC mocks (`src/test/tauri.ts`), so every
+  command, plugin call and event is exercised without a running app. Coverage
+  is enforced at 100% statements, branches, functions and lines.
+- **Backend**: `cd src-tauri && cargo test`. Real-network and real-binary
+  tests (installing and checksum-verifying yt-dlp/FFmpeg/whisper, downloading
+  a video, running FFmpeg exports) are opt-in:
+  `cargo test -- --include-ignored`.
+- **Rust coverage** needs `rustup component add llvm-tools-preview` and
+  `cargo install cargo-llvm-cov`. Reports land in `coverage/`.
+- **Installers**: `scripts/smoke/` installs each bundle silently, launches it
+  with `CLIPY_SMOKE_TEST=1` (the app exits 0 once its UI has loaded), then
+  uninstalls it. The release workflow runs these on every OS before
+  publishing.
+
+### Releasing
+
+Push a `vX.Y.Z` tag whose version matches `package.json`,
+`src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and a `CHANGELOG.md`
+section. The release workflow only runs for the repository owner, re-runs the
+full CI matrix, builds and smoke-tests every installer in a draft release,
+then publishes it with `SHA256SUMS.txt`, provenance attestations and the
+signed `latest.json` the in-app updater reads. The updater signing key lives
+only in the protected `release` environment.
 
 ## Tech Stack
 
@@ -177,7 +228,7 @@ pnpm typecheck    # Run TypeScript type checking
 clipy/
 ├── src/                          # React frontend
 │   ├── components/               # UI components
-│   │   ├── dialogs/              # Error and status dialogs
+│   │   ├── dialogs/              # App update dialog
 │   │   ├── downloads/            # Download management components
 │   │   ├── editor/               # Video editor components
 │   │   ├── home/                 # Home page components
@@ -187,10 +238,11 @@ clipy/
 │   │   ├── settings/             # Settings page components
 │   │   └── ui/                   # Shadcn/ui base components
 │   ├── hooks/                    # React hooks (Tauri API wrappers)
-│   ├── lib/                      # Utilities and constants
+│   ├── lib/                      # Utilities, constants, editor logic (lib/editor)
 │   ├── pages/                    # Page components
 │   ├── stores/                   # Zustand stores
 │   ├── styles/                   # Global CSS
+│   ├── test/                     # Test harness (IPC mocks, fixtures)
 │   └── types/                    # TypeScript types
 ├── src-tauri/                    # Rust backend
 │   ├── src/
@@ -199,28 +251,49 @@ clipy/
 │   │   ├── services/             # Business logic
 │   │   │   ├── binary.rs         # Binary management (ffmpeg, yt-dlp)
 │   │   │   ├── cache.rs          # Cache management
+│   │   │   ├── captions.rs       # whisper.cpp auto-captions
 │   │   │   ├── config.rs         # Configuration
 │   │   │   ├── database.rs       # SQLite database
 │   │   │   ├── ffmpeg.rs         # FFmpeg operations
 │   │   │   ├── process_registry.rs # Process tracking for downloads
 │   │   │   ├── queue.rs          # Download queue
 │   │   │   └── ytdlp.rs          # yt-dlp operations
-│   │   └── utils/                # Utility functions
-│   ├── capabilities/             # Tauri capabilities
+│   │   ├── media_protocol.rs     # clipy-media:// streaming for local playback
+│   │   └── utils/                # Path policy, paths, logging, tray, smoke mode
+│   ├── capabilities/             # Tauri capabilities (webview permissions)
 │   ├── icons/                    # App icons
+│   ├── tauri.conf.json           # Tauri configuration
 │   └── Cargo.toml                # Rust dependencies
+├── scripts/                      # Coverage, release-notes, installer smoke tests
 ├── public/                       # Static assets
-├── package.json                  # Node.js dependencies
-└── tauri.conf.json               # Tauri configuration
+├── CHANGELOG.md
+└── package.json                  # Node.js dependencies
 ```
 
 ## Configuration
 
-Clipy stores its configuration and data in:
+Clipy stores its settings (`config.json`), library database, downloaded
+tools (FFmpeg, yt-dlp, whisper) and caches in:
 
-- **Windows**: `%APPDATA%\Clipy`
-- **macOS**: `~/Library/Application Support/Clipy`
-- **Linux**: `~/.config/Clipy`
+- **Windows**: `%APPDATA%\com.clipy.app`
+- **macOS**: `~/Library/Application Support/com.clipy.app`
+- **Linux**: `~/.local/share/com.clipy.app`
+
+Logs are kept for 7 days in:
+
+- **Windows**: `%LOCALAPPDATA%\Clipy\logs`
+- **macOS**: `~/Library/Application Support/Clipy/logs`
+- **Linux**: `~/.local/share/Clipy/logs`
+
+## Security
+
+- Downloaded tools are verified against published SHA-256 checksums before
+  they are installed.
+- The UI can only reach the backend through a fixed set of commands; every
+  file path it sends is validated, and the webview has no direct file-system,
+  shell or network access beyond opening links in your browser.
+- Report vulnerabilities privately through
+  [GitHub security advisories](https://github.com/BankkRoll/clipy/security/advisories/new).
 
 ## Contributing
 
