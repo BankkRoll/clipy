@@ -16,15 +16,6 @@ export type SettingsTab = (typeof SETTINGS_TABS)[number]["value"];
 /** Project repository opened by "View on GitHub". */
 export const REPOSITORY_URL = "https://github.com/BankkRoll/clipy";
 
-/**
- * Release pages must live under this prefix before the update toast offers to
- * open them; anything else in the API response is ignored.
- */
-export const RELEASES_URL_PREFIX = `${REPOSITORY_URL}/`;
-
-/** GitHub API endpoint for the latest published release. */
-export const LATEST_RELEASE_API = "https://api.github.com/repos/BankkRoll/clipy/releases/latest";
-
 /** A credited project and where to read about it. */
 export interface Acknowledgement {
   name: string;

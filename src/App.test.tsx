@@ -46,6 +46,20 @@ describe("App", () => {
       expect(screen.queryByRole("link", { name: "Library" })).toBeNull();
     });
 
+    it("reports app_ready once, even on first run, for installer smoke tests", async () => {
+      const { backend } = setup("/");
+      await waitFor(() => expect(backend.callsTo("app_ready")).toHaveLength(1));
+    });
+
+    it("tolerates a backend without app_ready", async () => {
+      setup("/", {
+        app_ready: () => {
+          throw "unknown command";
+        },
+      });
+      expect(await screen.findByText("Welcome to Clipy")).toBeInTheDocument();
+    });
+
     it("switches to the app once onboarding completes", async () => {
       setup("/");
       act(() => useUIStore.getState().completeOnboarding());

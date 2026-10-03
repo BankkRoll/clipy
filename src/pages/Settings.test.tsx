@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import { Settings } from "@/pages/Settings";
 import { useThemeStore } from "@/stores/settingsStore";
+import { resetUpdaterStore, useUpdaterStore } from "@/stores/updaterStore";
 import { mockBackend, type IpcHandler } from "@/test/tauri";
 import { renderWithRouter } from "@/test/render";
 import { binaryStatusFixture, cacheStatsFixture, settingsFixture } from "@/test/fixtures";
@@ -59,6 +60,7 @@ beforeEach(() => {
 afterEach(() => {
   errorSpy.mockRestore();
   vi.unstubAllGlobals();
+  resetUpdaterStore();
 });
 
 describe("Settings page shell", () => {
@@ -590,15 +592,13 @@ describe("required components", () => {
 });
 
 describe("about and updates", () => {
-  function release(tag: unknown, url: unknown = `${REPOSITORY_URL}/releases/tag/v9`) {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({ tag_name: tag, html_url: url }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    return fetchMock;
-  }
+  const UPDATE = {
+    rid: 1,
+    currentVersion: "2.1.0",
+    version: "2.2.0",
+    body: "## Highlights\n- Faster exports",
+    rawJson: {},
+  };
 
   async function check(user: User) {
     await openTab(user, "About");
@@ -606,77 +606,27 @@ describe("about and updates", () => {
     await user.click(screen.getByRole("button", { name: "Check for Updates" }));
   }
 
-  it("offers a newer release and opens its page in the system browser", async () => {
-    const fetchMock = release("v2.2.0", `${REPOSITORY_URL}/releases/tag/v2.2.0`);
-    const { user, backend } = setup();
+  it("hands a found update to the app-wide update dialog without toasting", async () => {
+    const { user, backend } = setup({ "plugin:updater|check": () => UPDATE });
     await check(user);
-    expect(await screen.findByText("Update available: v2.2.0")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.github.com/repos/BankkRoll/clipy/releases/latest",
-      expect.anything()
-    );
-    await user.click(screen.getByRole("button", { name: "View" }));
-    await waitFor(() =>
-      expect(backend.callsTo("plugin:shell|open")[0]?.args).toMatchObject({
-        path: `${REPOSITORY_URL}/releases/tag/v2.2.0`,
-      })
-    );
+    await waitFor(() => expect(useUpdaterStore.getState().status).toBe("available"));
+    expect(useUpdaterStore.getState()).toMatchObject({ open: true, newVersion: "2.2.0" });
+    expect(backend.callsTo("plugin:updater|check")).toHaveLength(1);
+    expect(screen.queryByText("You're up to date!")).toBeNull();
   });
 
-  it("never offers to open a release URL outside the project repository", async () => {
-    release("v3.0.0", "https://evil.example/BankkRoll/clipy/releases/x");
-    const { user } = setup();
-    await check(user);
-    expect(await screen.findByText("Update available: v3.0.0")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "View" })).toBeNull();
-  });
-
-  it("ignores a non-string release URL", async () => {
-    release("v3.0.0", 42);
-    const { user } = setup();
-    await check(user);
-    expect(await screen.findByText("Update available: v3.0.0")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "View" })).toBeNull();
-  });
-
-  it("logs when the release page cannot be opened", async () => {
-    release("v2.2.0", `${REPOSITORY_URL}/releases/tag/v2.2.0`);
-    const { user } = setup({
-      "plugin:shell|open": () => {
-        throw "no browser";
-      },
-    });
-    await check(user);
-    await user.click(await screen.findByRole("button", { name: "View" }));
-    await waitFor(() => expect(errorSpy).toHaveBeenCalled());
-  });
-
-  it.each([["v2.1.0"], ["2.0.9"], ["2.1.0-beta.1"]])("reports up to date for %s", async (tag) => {
-    release(tag);
-    const { user } = setup();
+  it("reports up to date when the updater finds nothing", async () => {
+    const { user } = setup({ "plugin:updater|check": () => null });
     await check(user);
     expect(await screen.findByText("You're up to date!")).toBeInTheDocument();
   });
 
-  it("treats the final release as newer than a running prerelease", async () => {
-    release("v2.1.0");
-    const { user } = setup({ "plugin:app|version": () => "2.1.0-rc.1" });
-    await openTab(user, "About");
-    await screen.findByText("Version 2.1.0-rc.1");
-    await user.click(screen.getByRole("button", { name: "Check for Updates" }));
-    expect(await screen.findByText("Update available: v2.1.0")).toBeInTheDocument();
-  });
-
-  it.each([
-    ["an HTTP error", () => vi.fn().mockResolvedValue({ ok: false, status: 403 })],
-    [
-      "a missing tag",
-      () => vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) }),
-    ],
-    ["a network failure", () => vi.fn().mockRejectedValue(new TypeError("offline"))],
-  ])("reports %s as a failed check", async (_name, makeFetch) => {
-    vi.stubGlobal("fetch", makeFetch());
-    const { user } = setup();
+  it("reports a failed check and re-enables the button", async () => {
+    const { user } = setup({
+      "plugin:updater|check": () => {
+        throw "offline";
+      },
+    });
     await check(user);
     expect(await screen.findByText("Failed to check for updates")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Check for Updates" })).toBeEnabled();

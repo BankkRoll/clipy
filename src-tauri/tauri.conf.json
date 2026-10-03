@@ -12,7 +12,7 @@
   "app": {
     "withGlobalTauri": false,
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: clipy-media: http://clipy-media.localhost https://clipy-media.localhost https:; media-src 'self' blob: clipy-media: http://clipy-media.localhost https://clipy-media.localhost; connect-src 'self' ipc: http://ipc.localhost https://api.github.com; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: clipy-media: http://clipy-media.localhost https://clipy-media.localhost https:; media-src 'self' blob: clipy-media: http://clipy-media.localhost https://clipy-media.localhost; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'"
     },
     "windows": [
       {

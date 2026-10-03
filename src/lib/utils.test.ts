@@ -13,8 +13,6 @@ import {
   isValidUrl,
   extractYouTubeVideoId,
   sanitizeFilename,
-  isNewerVersion,
-  compareVersions,
   normalizeUrl,
   thumbnailSrc,
   isRemoteSource,
@@ -447,65 +445,5 @@ describe("throttle", () => {
     throttled("first");
     throttled("second");
     expect(fn).toHaveBeenCalledWith("first");
-  });
-});
-
-describe("isNewerVersion", () => {
-  it("detects a newer patch/minor/major", () => {
-    expect(isNewerVersion("2.0.1", "2.0.0")).toBe(true);
-    expect(isNewerVersion("2.1.0", "2.0.9")).toBe(true);
-    expect(isNewerVersion("3.0.0", "2.9.9")).toBe(true);
-  });
-  it("returns false for equal or older", () => {
-    expect(isNewerVersion("2.0.0", "2.0.0")).toBe(false);
-    expect(isNewerVersion("1.9.9", "2.0.0")).toBe(false);
-  });
-  it("tolerates leading v and prerelease suffixes", () => {
-    expect(isNewerVersion("v2.1.0", "2.0.0")).toBe(true);
-    expect(isNewerVersion("2.0.0-beta.1", "2.0.0")).toBe(false);
-  });
-  it("treats a release as newer than its own prerelease", () => {
-    expect(isNewerVersion("2.0.0", "2.0.0-rc.1")).toBe(true);
-    expect(isNewerVersion("2.0.1-alpha", "2.0.0")).toBe(true);
-  });
-  it("handles missing segments", () => {
-    expect(isNewerVersion("2.1", "2.0.5")).toBe(true);
-    expect(isNewerVersion("2", "2.0.0")).toBe(false);
-  });
-});
-
-describe("compareVersions", () => {
-  // The semver 2.0 spec's own precedence example, ascending.
-  const ordered = [
-    "1.0.0-alpha",
-    "1.0.0-alpha.1",
-    "1.0.0-alpha.beta",
-    "1.0.0-beta",
-    "1.0.0-beta.2",
-    "1.0.0-beta.11",
-    "1.0.0-rc.1",
-    "1.0.0",
-  ];
-
-  it.each(ordered.slice(1).map((v, i) => [ordered[i]!, v]))("%s < %s", (lower, higher) => {
-    expect(compareVersions(lower, higher)).toBeLessThan(0);
-    expect(compareVersions(higher, lower)).toBeGreaterThan(0);
-  });
-
-  it("treats equal versions, build metadata and a leading v as equal", () => {
-    expect(compareVersions("v1.2.3", "1.2.3")).toBe(0);
-    expect(compareVersions("1.2.3+build.5", "1.2.3")).toBe(0);
-    expect(compareVersions("1.0.0-rc.1", "1.0.0-rc.1")).toBe(0);
-  });
-
-  it("pads missing segments on either side with zeros", () => {
-    expect(compareVersions("2.0.1", "2")).toBeGreaterThan(0);
-    expect(compareVersions("2", "2.0.1")).toBeLessThan(0);
-    expect(compareVersions("2", "2.0.0")).toBe(0);
-  });
-
-  it("orders numeric identifiers before alphanumeric ones", () => {
-    expect(compareVersions("1.0.0-1", "1.0.0-a")).toBeLessThan(0);
-    expect(compareVersions("1.0.0-a", "1.0.0-1")).toBeGreaterThan(0);
   });
 });

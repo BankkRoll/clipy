@@ -279,69 +279,6 @@ export function sanitizeFilename(filename: string): string {
     .slice(0, 200);
 }
 
-function parseVersion(v: string): { core: number[]; pre: string[] } {
-  const clean = v.trim().replace(/^v/i, "").replace(/\+.*$/, "");
-  const dash = clean.indexOf("-");
-  const core = dash === -1 ? clean : clean.slice(0, dash);
-  const pre = dash === -1 ? "" : clean.slice(dash + 1);
-  return {
-    core: core.split(".").map((n) => parseInt(n, 10) || 0),
-    pre: pre ? pre.split(".") : [],
-  };
-}
-
-function comparePrerelease(a: string[], b: string[]): number {
-  // A release outranks any of its prereleases: 1.0.0 > 1.0.0-rc.1.
-  if (a.length === 0 || b.length === 0) return b.length - a.length;
-
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const x = a[i];
-    const y = b[i];
-    if (x === undefined) return -1;
-    if (y === undefined) return 1;
-    if (x === y) continue;
-    const xNum = /^\d+$/.test(x);
-    const yNum = /^\d+$/.test(y);
-    if (xNum && yNum) return Number(x) - Number(y);
-    // Numeric identifiers sort before alphanumeric ones.
-    if (xNum !== yNum) return xNum ? -1 : 1;
-    return x < y ? -1 : 1;
-  }
-  return 0;
-}
-
-/**
- * Compare two version strings using semver 2.0 precedence, including
- * prerelease tags. Tolerates a leading "v", build metadata and missing
- * minor/patch segments.
- *
- * @param a - First version, e.g. `2.1.0-beta.2`.
- * @param b - Second version.
- * @returns A negative number if `a < b`, positive if `a > b`, 0 if equal.
- * @example
- * compareVersions("2.0.0", "2.0.0-rc.1"); // > 0
- */
-export function compareVersions(a: string, b: string): number {
-  const x = parseVersion(a);
-  const y = parseVersion(b);
-  for (let i = 0; i < Math.max(x.core.length, y.core.length); i++) {
-    const diff = (x.core[i] ?? 0) - (y.core[i] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return comparePrerelease(x.pre, y.pre);
-}
-
-/**
- * Check whether `candidate` is strictly newer than `current` (semver precedence).
- *
- * @param candidate - Version that might be newer, e.g. the latest release tag.
- * @param current - The running version.
- * @returns True if `candidate` has higher precedence than `current`.
- */
-export function isNewerVersion(candidate: string, current: string): boolean {
-  return compareVersions(candidate, current) > 0;
-}
-
 /**
  * Resolve a video thumbnail into something an `<img>` can load.
  *

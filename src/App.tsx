@@ -19,6 +19,8 @@ import { Settings } from "@/pages/Settings";
 import { SetupWizard } from "@/components/onboarding";
 import { Toaster } from "sonner";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
+import { AppUpdater } from "@/components/dialogs";
 import { logger } from "@/lib/logger";
 import { useDownloadSync, useSettings } from "@/hooks";
 import { useThemeStore } from "@/stores/settingsStore";
@@ -48,7 +50,7 @@ export function App() {
 
   // Loading settings here (once, app-wide) pushes theme and debug mode to
   // their consumers before any page asks for them.
-  useSettings();
+  const { settings } = useSettings();
   useDownloadSync();
 
   useEffect(() => {
@@ -58,6 +60,9 @@ export function App() {
     getVersion()
       .then((version) => logger.banner(version))
       .catch(() => logger.banner("dev"));
+    // Installer smoke tests wait for this signal; outside smoke mode the
+    // backend ignores it.
+    invoke("app_ready").catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -89,6 +94,7 @@ export function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>
+      <AppUpdater autoCheck={settings?.general.checkForUpdates} />
       <Toaster position="bottom-right" toastOptions={TOAST_OPTIONS} />
     </BrowserRouter>
   );

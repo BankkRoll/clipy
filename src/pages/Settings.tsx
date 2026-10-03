@@ -4,21 +4,19 @@
  */
 import { useEffect, useState, useCallback } from "react";
 import { RefreshCw, Loader2, AlertCircle, ChevronRight } from "lucide-react";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { invoke } from "@tauri-apps/api/core";
 import { open, ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
-import { cn, isNewerVersion } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { useSettings, useCacheStats, useBinaryStatus, useAppVersion } from "@/hooks";
 import { useThemeStore } from "@/stores/settingsStore";
+import { useUpdaterStore } from "@/stores/updaterStore";
 import { logger } from "@/lib/logger";
 import {
   SETTINGS_TABS,
-  LATEST_RELEASE_API,
-  RELEASES_URL_PREFIX,
   GeneralTab,
   DownloadsTab,
   QualityTab,
@@ -42,7 +40,8 @@ function useSystemPrefersDark(): boolean {
 
 /** Settings page component. */
 export function Settings() {
-  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const checkingUpdates = useUpdaterStore((state) => state.status === "checking");
+  const checkForUpdate = useUpdaterStore((state) => state.checkForUpdate);
   const [activeTab, setActiveTab] = useState("general");
   const [updatingYtdlp, setUpdatingYtdlp] = useState(false);
   const [installingFfmpeg, setInstallingFfmpeg] = useState(false);
@@ -117,56 +116,20 @@ export function Settings() {
     [runBinaryTask, installYtdlp]
   );
 
+  // A found update opens the app-wide update dialog (AppUpdater), so only the
+  // "nothing new" and failure outcomes need a toast here.
   const handleCheckForUpdates = useCallback(async () => {
-    setCheckingUpdates(true);
-    try {
-      const res = await fetch(LATEST_RELEASE_API, {
-        headers: { Accept: "application/vnd.github+json" },
+    const outcome = await checkForUpdate({ manual: true });
+    if (outcome === "up-to-date") {
+      toast.success("You're up to date!", {
+        description: `Clipy ${appVersion} is the latest version.`,
       });
-      if (!res.ok) throw new Error(`GitHub API returned ${res.status}`);
-
-      const data = (await res.json()) as { tag_name?: unknown; html_url?: unknown };
-      const latest =
-        typeof data.tag_name === "string" ? data.tag_name.replace(/^v/i, "").trim() : "";
-      if (!latest) throw new Error("No release tag found");
-
-      if (!isNewerVersion(latest, appVersion)) {
-        toast.success("You're up to date!", {
-          description: `Clipy ${appVersion} is the latest version.`,
-        });
-        return;
-      }
-
-      // SECURITY: the URL comes from a network response and is handed to the
-      // OS shell, so only ever open this repository's own release pages.
-      const releaseUrl =
-        typeof data.html_url === "string" && data.html_url.startsWith(RELEASES_URL_PREFIX)
-          ? data.html_url
-          : null;
-
-      toast.info(`Update available: v${latest}`, {
-        description: `You have ${appVersion}.`,
-        action: releaseUrl
-          ? {
-              label: "View",
-              onClick: () => {
-                openExternal(releaseUrl).catch((err: unknown) =>
-                  logger.error("Settings", "Failed to open release page", err)
-                );
-              },
-            }
-          : undefined,
-        duration: 10000,
-      });
-    } catch (err) {
-      logger.error("Settings", "Update check failed", err);
+    } else if (outcome === "error") {
       toast.error("Failed to check for updates", {
         description: "Could not reach the update server. Try again later.",
       });
-    } finally {
-      setCheckingUpdates(false);
     }
-  }, [appVersion]);
+  }, [appVersion, checkForUpdate]);
 
   const handleUpdateSetting = useCallback(
     async (path: string, value: unknown) => {

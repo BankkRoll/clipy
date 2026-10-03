@@ -15,8 +15,6 @@ export {
   SETTINGS_TABS,
   ACKNOWLEDGEMENTS,
   REPOSITORY_URL,
-  RELEASES_URL_PREFIX,
-  LATEST_RELEASE_API,
   type SettingsTab,
   type Acknowledgement,
 } from "./constants";

@@ -1,11 +1,4 @@
-import {
-  Download,
-  RefreshCw,
-  Clock,
-  XCircle,
-  CheckCircle,
-  ArrowRight,
-} from "lucide-react";
+import { Download, RefreshCw, Clock, XCircle, CheckCircle, ArrowRight } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -86,7 +79,7 @@ export function UpdateDialog({
           {releaseNotes && releaseNotes.length > 0 && downloadStatus === "idle" && (
             <div className="space-y-2">
               <p className="text-sm font-medium">What's new:</p>
-              <ul className="space-y-1.5 text-sm text-muted-foreground max-h-32 overflow-y-auto">
+              <ul className="max-h-32 space-y-1.5 overflow-y-auto text-sm text-muted-foreground">
                 {releaseNotes.map((note, index) => (
                   <li key={index} className="flex items-start gap-2">
                     <span className="text-primary">•</span>
@@ -111,7 +104,7 @@ export function UpdateDialog({
           {/* Ready to install */}
           {downloadStatus === "ready" && (
             <div className="flex items-center gap-3 rounded-lg border border-green-500/30 bg-green-500/5 p-4">
-              <CheckCircle className="h-5 w-5 text-green-500 shrink-0" />
+              <CheckCircle className="h-5 w-5 shrink-0 text-green-500" />
               <div>
                 <p className="font-medium text-green-500">Ready to install!</p>
                 <p className="text-sm text-muted-foreground">
@@ -126,7 +119,7 @@ export function UpdateDialog({
           {/* Error state */}
           {downloadStatus === "error" && (
             <div className="flex items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
-              <XCircle className="h-5 w-5 text-destructive shrink-0" />
+              <XCircle className="h-5 w-5 shrink-0 text-destructive" />
               <div>
                 <p className="font-medium text-destructive">Update failed</p>
                 <p className="text-sm text-muted-foreground">
@@ -138,7 +131,7 @@ export function UpdateDialog({
 
           {/* yt-dlp specific note */}
           {!isApp && downloadStatus === "idle" && (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 rounded-lg p-3">
+            <div className="flex items-center gap-2 rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
               <Clock className="h-3.5 w-3.5 shrink-0" />
               <span>Updates in background, no restart needed</span>
             </div>

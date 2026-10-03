@@ -1,13 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import {
-  ACKNOWLEDGEMENTS,
-  LATEST_RELEASE_API,
-  RELEASES_URL_PREFIX,
-  REPOSITORY_URL,
-  SETTINGS_TABS,
-} from "@/components/settings";
+import { ACKNOWLEDGEMENTS, REPOSITORY_URL, SETTINGS_TABS } from "@/components/settings";
 
 const root = process.cwd();
 const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")) as {
@@ -56,10 +50,8 @@ describe("acknowledgements", () => {
 });
 
 describe("settings constants", () => {
-  it("scopes release links to this repository", () => {
-    expect(RELEASES_URL_PREFIX).toBe(`${REPOSITORY_URL}/`);
-    expect(RELEASES_URL_PREFIX).toBe("https://github.com/BankkRoll/clipy/");
-    expect(LATEST_RELEASE_API).toMatch(/^https:\/\/api\.github\.com\/repos\/BankkRoll\/clipy\//);
+  it("points at the canonical repository", () => {
+    expect(REPOSITORY_URL).toBe("https://github.com/BankkRoll/clipy");
   });
 
   it("lists every tab once", () => {
