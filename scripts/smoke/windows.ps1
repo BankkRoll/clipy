@@ -13,7 +13,10 @@
 #>
 param(
   [Parameter(Mandatory = $true)][string]$BundleDir,
-  [int]$TimeoutSeconds = 120
+  [int]$TimeoutSeconds = 120,
+  # The MSI installs per-machine and needs an elevated shell; CI runners are
+  # elevated, local shells often are not.
+  [switch]$SkipMsi
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,11 +57,18 @@ Start-Process -FilePath (Join-Path $nsisDir "uninstall.exe") -ArgumentList "/S" 
 for ($i = 0; $i -lt 30 -and (Test-Path (Join-Path $nsisDir "*.exe")); $i++) { Start-Sleep -Seconds 1 }
 if (Test-Path (Join-Path $nsisDir "*.exe")) { throw "NSIS uninstall left executables behind in $nsisDir" }
 
+if ($SkipMsi) {
+  Write-Host "Skipping MSI (-SkipMsi)"
+  Write-Host "Windows installer smoke tests passed"
+  exit 0
+}
+
 # --- MSI (per-machine -> Program Files\Clipy) --------------------------------
 $msi = Get-ChildItem -Path (Join-Path $BundleDir "msi") -Filter *.msi | Select-Object -First 1
 if (-not $msi) { throw "MSI not found" }
 Write-Host "MSI: $($msi.FullName)"
-$log = Join-Path $env:RUNNER_TEMP "msi-install.log"
+$tempDir = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
+$log = Join-Path $tempDir "msi-install.log"
 $p = Start-Process msiexec.exe -ArgumentList "/i `"$($msi.FullName)`" /qn /norestart /l*v `"$log`"" -Wait -PassThru
 if ($p.ExitCode -ne 0) { Get-Content $log -Tail 50; throw "msiexec install failed: $($p.ExitCode)" }
 $msiDir = Join-Path $env:ProgramFiles "Clipy"
