@@ -39,7 +39,7 @@ An open-source, bloat-free desktop application for downloading and editing YouTu
 ### Native Experience
 
 - Built with Tauri 2.0 for native performance
-- Small installers (about 4 MB on Windows, versus ~150 MB for the old Electron build)
+- Small installers (about 4 MB on Windows, versus 202 MB for the Electron 1.0 build)
 - System tray integration
 - Native file dialogs
 - Signed automatic updates
