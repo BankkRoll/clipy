@@ -8,7 +8,7 @@ use crate::utils::{path_policy, validators};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -69,7 +69,7 @@ fn build_info_args(url: &str) -> Result<Vec<String>> {
 }
 
 /// Fetch video information from a URL
-pub async fn fetch_video_info(app: &AppHandle, url: &str) -> Result<VideoInfo> {
+pub async fn fetch_video_info<R: Runtime>(app: &AppHandle<R>, url: &str) -> Result<VideoInfo> {
     info!("Fetching video info for: {}", url);
     let args = build_info_args(url)?;
     let ytdlp_path = binary::get_ytdlp_path(app)?;
@@ -369,8 +369,8 @@ fn redact_args(args: &[String]) -> Vec<String> {
 }
 
 /// Download a video with progress reporting
-pub async fn download_video(
-    app: &AppHandle,
+pub async fn download_video<R: Runtime>(
+    app: &AppHandle<R>,
     download_id: String,
     url: &str,
     options: &DownloadOptions,
@@ -1530,35 +1530,40 @@ mod tests {
         );
     }
 
-    // ---- network: real yt-dlp ----
+    // ---- scripted yt-dlp (see test_support::fake_tool) ----
 
-    /// Install a verified yt-dlp into `dir` for the network tests.
-    async fn real_ytdlp(dir: &Path) -> PathBuf {
-        binary::install_ytdlp_into(dir, std::env::consts::OS, std::env::consts::ARCH)
-            .await
-            .unwrap()
+    use crate::test_support::{fake_tool, mock_app_in_tempdir, Script};
+
+    const INFO_JSON: &str = r#"{"id":"jNQXAC9IVRw","title":"Me at the zoo","duration":19.0,
+        "channel":"jawed","is_live":false,
+        "formats":[{"format_id":"18","ext":"mp4","width":320,"height":240,
+        "vcodec":"avc1","acodec":"mp4a"}]}"#;
+
+    fn ok_with(stdout: &str) -> Script {
+        Script {
+            stdout: stdout.into(),
+            ..Default::default()
+        }
     }
 
-    #[tokio::test]
-    #[ignore = "network: installs real yt-dlp and fetches video info"]
-    async fn network_fetch_video_info() {
-        let dir = tempfile::tempdir().unwrap();
-        let ytdlp = real_ytdlp(dir.path()).await;
-        let info = fetch_video_info_with(&ytdlp, &build_info_args(URL).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(info.id, "jNQXAC9IVRw");
-        assert!(info.duration > 0);
+    fn drain(rx: &mut mpsc::Receiver<DownloadProgress>) -> Vec<DownloadProgress> {
+        let mut all = Vec::new();
+        while let Ok(p) = rx.try_recv() {
+            all.push(p);
+        }
+        all
     }
 
-    #[tokio::test]
-    #[ignore = "network: installs real yt-dlp and downloads a short public video"]
-    async fn network_download_short_video() {
-        let bin = tempfile::tempdir().unwrap();
-        let out = tempfile::tempdir().unwrap();
-        let ytdlp = real_ytdlp(bin.path()).await;
+    /// Download `url` as audio into `out` with the yt-dlp at `ytdlp`; returns
+    /// the file and every progress update. Shared by the scripted and the
+    /// network test so both exercise the same argument building and parsing.
+    async fn audio_download(
+        ytdlp: &Path,
+        url: &str,
+        out: &Path,
+    ) -> (Result<PathBuf>, Vec<DownloadProgress>) {
         let options = DownloadOptions {
-            output_path: out.path().to_string_lossy().into_owned(),
+            output_path: out.to_string_lossy().into_owned(),
             audio_only: true,
             audio_format: "best".into(),
             audio_bitrate: String::new(),
@@ -1567,27 +1572,189 @@ mod tests {
             ..DownloadOptions::default()
         };
         let ctx = DownloadContext {
-            ffmpeg_dir: None,
-            archive_path: None,
-            default_dir: out.path().to_path_buf(),
+            default_dir: out.to_path_buf(),
+            ..Default::default()
         };
-        // Audio-only "best" downloads a single m4a stream, so no ffmpeg merge
-        // is needed; `-x` without ffmpeg would fail, so drop it here.
-        let args: Vec<String> = build_download_args(URL, &options, &ctx)
+        // Audio-only "best" is a single m4a stream, so no ffmpeg merge is
+        // needed; `-x` would require ffmpeg, so drop it.
+        let args: Vec<String> = build_download_args(url, &options, &ctx)
             .unwrap()
             .into_iter()
             .filter(|a| a != "-x")
             .collect();
         let (tx, mut rx) = mpsc::channel(1024);
-        let file = run_download(&ytdlp, &args, "it", &out.path().to_string_lossy(), tx)
+        let result = run_download(ytdlp, &args, "it", &out.to_string_lossy(), tx).await;
+        (result, drain(&mut rx))
+    }
+
+    #[tokio::test]
+    async fn scripted_download_streams_progress_and_finds_the_file() {
+        let work = tempfile::tempdir().unwrap();
+        let out = work.path().join("out");
+        std::fs::create_dir(&out).unwrap();
+        let media = work.path().join("fixture.m4a");
+        std::fs::write(&media, b"audio").unwrap();
+        let target = out.join("Me at the zoo.m4a");
+        let stdout = format!(
+            "[youtube] jNQXAC9IVRw: Downloading webpage\n\
+             [download] Destination: {t}\n\
+             [download]  50.0% of 2.00MiB at 1.00MiB/s ETA 00:01\n\
+             [download] 100% of 2.00MiB in 00:00:02\n\
+             {t}\n",
+            t = target.display()
+        );
+        let ytdlp = fake_tool(
+            &work.path().join("bin"),
+            "yt-dlp",
+            &Script {
+                copy: Some((media, target.clone())),
+                stdout,
+                stderr: "WARNING: falling back to generic\n".into(),
+                ..Default::default()
+            },
+        );
+
+        let (file, progress) = audio_download(&ytdlp, URL, &out).await;
+        assert_eq!(file.unwrap(), target);
+        let half = progress.iter().find(|p| p.progress == 50.0).unwrap();
+        assert_eq!(half.total_bytes, 2 * 1024 * 1024);
+        assert_eq!((half.speed, half.eta), (1024 * 1024, 1));
+        assert_eq!(progress.last().unwrap().status, DownloadStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn scripted_download_failure_reports_error_lines() {
+        let work = tempfile::tempdir().unwrap();
+        let ytdlp = fake_tool(
+            work.path(),
+            "yt-dlp",
+            &Script {
+                stderr: "WARNING: slow\nERROR: Video unavailable\n".into(),
+                exit_code: 1,
+                ..Default::default()
+            },
+        );
+        let (result, progress) = audio_download(&ytdlp, URL, work.path()).await;
+        let err = result.unwrap_err().to_string();
+        assert_eq!(err, "yt-dlp error: WARNING: slow; ERROR: Video unavailable");
+        assert!(progress
+            .iter()
+            .all(|p| p.status == DownloadStatus::Downloading));
+
+        let silent = fake_tool(
+            &work.path().join("silent"),
+            "yt-dlp",
+            &Script {
+                exit_code: 3,
+                ..Default::default()
+            },
+        );
+        let (result, _) = audio_download(&silent, URL, work.path()).await;
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("yt-dlp exited with status 3"));
+    }
+
+    #[tokio::test]
+    async fn fetch_video_info_runs_the_app_ytdlp() {
+        let app = mock_app_in_tempdir();
+        let bin = crate::utils::paths::get_binaries_dir(app.handle()).unwrap();
+        fake_tool(&bin, "yt-dlp", &ok_with(INFO_JSON));
+        let info = fetch_video_info(app.handle(), URL).await.unwrap();
+        assert_eq!((info.id.as_str(), info.duration), ("jNQXAC9IVRw", 19));
+        assert_eq!(info.formats.len(), 1);
+        assert!(fetch_video_info(app.handle(), "file:///etc/passwd")
+            .await
+            .is_err());
+
+        fake_tool(&bin, "yt-dlp", &ok_with("not json"));
+        let err = fetch_video_info(app.handle(), URL).await.unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to parse video info"),
+            "{err}"
+        );
+
+        fake_tool(
+            &bin,
+            "yt-dlp",
+            &Script {
+                stderr: "ERROR: Private video".into(),
+                exit_code: 1,
+                ..Default::default()
+            },
+        );
+        let err = fetch_video_info(app.handle(), URL).await.unwrap_err();
+        assert!(err.to_string().contains("ERROR: Private video"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn download_video_passes_app_paths_to_ytdlp() {
+        let app = mock_app_in_tempdir();
+        let bin = crate::utils::paths::get_binaries_dir(app.handle()).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let media = bin.parent().unwrap().join("fixture.mp4");
+        std::fs::write(&media, b"video").unwrap();
+        let target = out.path().join("clip.mp4");
+        fake_tool(&bin, "ffmpeg", &Script::default());
+        fake_tool(
+            &bin,
+            "yt-dlp",
+            &Script {
+                copy: Some((media, target.clone())),
+                ..Default::default()
+            },
+        );
+        let options = DownloadOptions {
+            output_path: out.path().to_string_lossy().into_owned(),
+            use_download_archive: true,
+            proxy_url: "http://user:secret@proxy:8080".into(),
+            ..DownloadOptions::default()
+        };
+        let (tx, mut rx) = mpsc::channel(64);
+        let file = download_video(app.handle(), "d1".into(), URL, &options, tx)
             .await
             .unwrap();
-        assert!(file.starts_with(out.path()) || file.exists());
-        assert!(std::fs::metadata(&file).unwrap().len() > 10_000);
-        let mut saw_completed = false;
-        while let Ok(p) = rx.try_recv() {
-            saw_completed |= p.status == DownloadStatus::Completed;
-        }
-        assert!(saw_completed);
+        // Nothing captured from output, so the newest media file is used.
+        assert_eq!(file, target);
+        assert!(drain(&mut rx).iter().all(|p| p.download_id == "d1"));
+
+        let bad = DownloadOptions {
+            filename: "../escape.%(ext)s".into(),
+            ..options
+        };
+        let (tx, _rx) = mpsc::channel(4);
+        assert!(download_video(app.handle(), "d2".into(), URL, &bad, tx)
+            .await
+            .is_err());
+    }
+
+    // ---- network: real yt-dlp ----
+
+    /// Install a verified yt-dlp into `dir` for the network tests.
+    async fn real_ytdlp(dir: &Path) -> PathBuf {
+        let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
+        binary::install_ytdlp_into(&binary::Sources::upstream(), dir, os, arch)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore = "network: installs real yt-dlp and fetches video info"]
+    async fn network_fetch_video_info() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = build_info_args(URL).unwrap();
+        let info = fetch_video_info_with(&real_ytdlp(dir.path()).await, &args).await;
+        assert_eq!(info.unwrap().id, "jNQXAC9IVRw");
+    }
+
+    #[tokio::test]
+    #[ignore = "network: installs real yt-dlp and downloads a short public video"]
+    async fn network_download_short_video() {
+        let (bin, out) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ytdlp = real_ytdlp(bin.path()).await;
+        let (file, progress) = audio_download(&ytdlp, URL, out.path()).await;
+        assert!(std::fs::metadata(file.unwrap()).unwrap().len() > 10_000);
+        assert_eq!(progress.last().unwrap().status, DownloadStatus::Completed);
     }
 }

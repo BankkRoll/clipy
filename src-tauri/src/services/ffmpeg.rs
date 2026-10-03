@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, OnceLock};
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{mpsc, Notify};
@@ -104,10 +104,12 @@ fn ffprobe_beside(ffmpeg_path: &Path) -> PathBuf {
     } else {
         "ffprobe"
     };
-    ffmpeg_path
-        .parent()
-        .map(|p| p.join(name))
-        .unwrap_or_else(|| PathBuf::from(name))
+    binary::platform_exe(
+        ffmpeg_path
+            .parent()
+            .map(|p| p.join(name))
+            .unwrap_or_else(|| PathBuf::from(name)),
+    )
 }
 
 /// Arguments for `ffprobe` to dump format + streams of `input` as JSON.
@@ -124,7 +126,10 @@ fn build_probe_args(input: &Path) -> Vec<String> {
 }
 
 /// Get video metadata using FFprobe
-pub async fn get_video_metadata(app: &AppHandle, path: &str) -> Result<VideoMetadata> {
+pub async fn get_video_metadata<R: Runtime>(
+    app: &AppHandle<R>,
+    path: &str,
+) -> Result<VideoMetadata> {
     let input = validate_input(path)?;
     let ffprobe_path = ffprobe_beside(&binary::get_ffmpeg_path(app)?);
     probe_with(&ffprobe_path, &input).await
@@ -245,8 +250,8 @@ async fn run_ffmpeg(ffmpeg_path: &Path, args: &[String], what: &str) -> Result<V
 }
 
 /// Generate a thumbnail from a video
-pub async fn generate_thumbnail(
-    app: &AppHandle,
+pub async fn generate_thumbnail<R: Runtime>(
+    app: &AppHandle<R>,
     video_path: &str,
     output_path: &str,
     time_offset: f64,
@@ -284,8 +289,8 @@ fn timeline_thumbnail_plan(duration: f64, count: u32, dir: &Path) -> Vec<(f64, P
 const MAX_TIMELINE_THUMBNAILS: u32 = 500;
 
 /// Generate multiple thumbnails for timeline
-pub async fn generate_timeline_thumbnails(
-    app: &AppHandle,
+pub async fn generate_timeline_thumbnails<R: Runtime>(
+    app: &AppHandle<R>,
     video_path: &str,
     output_dir: &str,
     count: u32,
@@ -346,7 +351,11 @@ fn normalize_waveform(raw: &[u8]) -> Vec<f32> {
 }
 
 /// Extract audio waveform data
-pub async fn extract_waveform(app: &AppHandle, video_path: &str, samples: u32) -> Result<Vec<f32>> {
+pub async fn extract_waveform<R: Runtime>(
+    app: &AppHandle<R>,
+    video_path: &str,
+    samples: u32,
+) -> Result<Vec<f32>> {
     let input = validate_input(video_path)?;
     let ffmpeg_path = binary::get_ffmpeg_path(app)?;
     match run_ffmpeg(
@@ -543,8 +552,8 @@ fn finite_or(value: f64, fallback: f64) -> f64 {
 /// The caller owns cancel-flag reset (see [`reset_export_cancel`]) so a cancel
 /// issued between claiming the export slot and reaching this function is not
 /// lost.
-pub async fn export_project(
-    app: &AppHandle,
+pub async fn export_project<R: Runtime>(
+    app: &AppHandle<R>,
     project: &Project,
     settings: &ExportSettings,
     progress_tx: mpsc::Sender<ExportProgress>,
@@ -1225,7 +1234,7 @@ struct EncoderChoice {
 /// Pick an encoder. When hardware accel is requested, probe ffmpeg's encoder
 /// list and pick the first available platform HW encoder; otherwise fall back
 /// to libx264 (software) so export never hard-fails on machines without NVENC.
-async fn select_video_encoder(app: &AppHandle, want_hw: bool) -> EncoderChoice {
+async fn select_video_encoder<R: Runtime>(app: &AppHandle<R>, want_hw: bool) -> EncoderChoice {
     if !want_hw {
         return EncoderChoice {
             name: "libx264".to_string(),
@@ -1234,15 +1243,20 @@ async fn select_video_encoder(app: &AppHandle, want_hw: bool) -> EncoderChoice {
     }
 
     let available = list_ffmpeg_encoders(app).await.unwrap_or_default();
-    // Preference order varies by platform; only pick ones ffmpeg reports.
-    let candidates: &[&str] = if cfg!(target_os = "macos") {
-        &["h264_videotoolbox", "h264_nvenc", "h264_qsv"]
-    } else if cfg!(target_os = "windows") {
-        &["h264_nvenc", "h264_qsv", "h264_amf"]
-    } else {
-        &["h264_nvenc", "h264_vaapi", "h264_qsv"]
-    };
+    pick_encoder(&available, HW_ENCODER_PREFERENCE)
+}
 
+/// Hardware H.264 encoders to try, in this platform's preference order.
+const HW_ENCODER_PREFERENCE: &[&str] = if cfg!(target_os = "macos") {
+    &["h264_videotoolbox", "h264_nvenc", "h264_qsv"]
+} else if cfg!(target_os = "windows") {
+    &["h264_nvenc", "h264_qsv", "h264_amf"]
+} else {
+    &["h264_nvenc", "h264_vaapi", "h264_qsv"]
+};
+
+/// The first of `candidates` that ffmpeg reports in `available`, else libx264.
+fn pick_encoder(available: &[String], candidates: &[&str]) -> EncoderChoice {
     for cand in candidates {
         if available.iter().any(|e| e == cand) {
             debug!("Selected hardware encoder: {}", cand);
@@ -1264,7 +1278,7 @@ async fn select_video_encoder(app: &AppHandle, want_hw: bool) -> EncoderChoice {
 static ENCODER_CACHE: OnceLock<Vec<String>> = OnceLock::new();
 
 /// Query `ffmpeg -encoders` and return the list of encoder names.
-async fn list_ffmpeg_encoders(app: &AppHandle) -> Result<Vec<String>> {
+async fn list_ffmpeg_encoders<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<String>> {
     if let Some(cached) = ENCODER_CACHE.get() {
         return Ok(cached.clone());
     }
@@ -1465,8 +1479,8 @@ fn build_output_args(
 }
 
 /// Transcode a video file
-pub async fn transcode_video(
-    app: &AppHandle,
+pub async fn transcode_video<R: Runtime>(
+    app: &AppHandle<R>,
     input_path: &str,
     output_path: &str,
     settings: &ExportSettings,
@@ -2632,240 +2646,277 @@ mod tests {
         assert!(run_ffmpeg(missing, &[], "x").await.is_err());
         assert!(probe_with(missing, Path::new("/a.mp4")).await.is_err());
     }
-}
 
-/// Tests that drive a real ffmpeg/ffprobe from PATH on lavfi-generated media.
-/// Run with `cargo test -- --ignored`.
-#[cfg(test)]
-mod ffmpeg_integration {
-    use super::*;
-    use crate::models::project::{Clip, ClipProperties, ProjectSettings, TextProperties, Track};
+    // ---- scripted ffmpeg/ffprobe (see test_support::fake_tool) ----
 
-    fn ffmpeg() -> PathBuf {
-        PathBuf::from(if cfg!(windows) {
-            "ffmpeg.exe"
-        } else {
-            "ffmpeg"
-        })
-    }
+    use crate::test_support::{fake_tool, mock_app_in_tempdir, Script};
 
-    fn ffprobe() -> PathBuf {
-        PathBuf::from(if cfg!(windows) {
-            "ffprobe.exe"
-        } else {
-            "ffprobe"
-        })
-    }
+    const PROBE_JSON: &str = r#"{"format":{"duration":"3.5","bit_rate":"1000"},
+        "streams":[{"codec_type":"video","codec_name":"h264","width":320,"height":240,
+        "r_frame_rate":"25/1"},{"codec_type":"audio","codec_name":"aac"}]}"#;
 
-    fn test_settings(output: &Path) -> ExportSettings {
-        ExportSettings {
-            output_path: output.to_string_lossy().into_owned(),
-            fps: 25,
-            resolution: "original".into(),
-            use_hardware_acceleration: false,
+    fn ok_with(stdout: &str) -> Script {
+        Script {
+            stdout: stdout.into(),
             ..Default::default()
         }
     }
 
-    /// Render a 2 s 320x240 test pattern with a sine tone.
-    async fn make_clip(dir: &Path) -> PathBuf {
-        let out = dir.join("in.mp4");
-        let args: Vec<String> = [
-            "-y",
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc=size=320x240:rate=25:duration=2",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=440:duration=2",
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-shortest",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .chain([file_arg(&out)])
-        .collect();
-        run_ffmpeg(&ffmpeg(), &args, "fixture").await.unwrap();
-        path_policy::canonicalize(&out).unwrap()
+    fn failing(stderr: &str) -> Script {
+        Script {
+            stderr: stderr.into(),
+            exit_code: 1,
+            ..Default::default()
+        }
     }
 
-    fn project_with(source: &Path, text: &str) -> Project {
-        let video = Clip {
-            id: "c1".into(),
-            track_id: "t1".into(),
-            clip_type: ClipType::Video,
-            name: "clip".into(),
-            start_time: 0.0,
-            end_time: 1.5,
-            source_start: 0.0,
-            source_end: 1.5,
-            source_path: source.to_string_lossy().into_owned(),
-            thumbnails: Vec::new(),
-            properties: ClipProperties::default(),
-        };
-        let mut title = video.clone();
-        title.id = "c2".into();
-        title.clip_type = ClipType::Text;
-        title.source_path = String::new();
-        title.properties.text = Some(TextProperties {
-            content: text.into(),
-            font_family: "Arial".into(),
-            font_size: 24,
-            font_weight: 400,
-            color: "#ffcc00".into(),
-            background_color: "#000000".into(),
-            align: TextAlign::Center,
-            vertical_align: VerticalAlign::Bottom,
-            ..Default::default()
-        });
-        let mk = |id: &str, track_type, clips| Track {
-            id: id.into(),
-            track_type,
-            name: id.into(),
-            clips,
-            muted: false,
-            locked: false,
-            volume: 1.0,
-            height: 80,
-        };
-        Project {
-            id: "p".into(),
-            name: "it".into(),
-            created_at: String::new(),
-            modified_at: String::new(),
-            duration: 1.5,
-            tracks: vec![
-                mk("v", TrackType::Video, vec![video]),
-                mk("t", TrackType::Text, vec![title]),
-            ],
-            settings: ProjectSettings {
-                width: 320,
-                height: 240,
-                fps: 25,
-                sample_rate: 48000,
-            },
-        }
+    fn s(p: &Path) -> String {
+        p.to_string_lossy().into_owned()
+    }
+
+    /// A mock app whose binaries dir holds scripted ffmpeg/ffprobe, plus a
+    /// media file to feed them.
+    fn app_with_tools(
+        ffmpeg: &Script,
+        ffprobe: &Script,
+    ) -> (tauri::App<tauri::test::MockRuntime>, PathBuf) {
+        let app = mock_app_in_tempdir();
+        let bin = crate::utils::paths::get_binaries_dir(app.handle()).unwrap();
+        fake_tool(&bin, "ffmpeg", ffmpeg);
+        fake_tool(&bin, "ffprobe", ffprobe);
+        let media = bin.parent().unwrap().join("in.mp4");
+        std::fs::write(&media, b"media").unwrap();
+        (app, media)
     }
 
     #[tokio::test]
-    #[ignore = "needs ffmpeg and ffprobe on PATH"]
-    async fn probe_thumbnail_waveform_and_transcode() {
-        let dir = tempfile::tempdir().unwrap();
-        let input = make_clip(dir.path()).await;
+    async fn app_wrappers_run_the_resolved_tools() {
+        let (app, media) = app_with_tools(&ok_with("ABCDEFGH"), &ok_with(PROBE_JSON));
+        let app = app.handle();
+        let dir = media.parent().unwrap();
 
-        let meta = probe_with(&ffprobe(), &input).await.unwrap();
-        assert_eq!((meta.width, meta.height), (320, 240));
+        let meta = get_video_metadata(app, &s(&media)).await.unwrap();
+        assert_eq!((meta.width, meta.height, meta.fps), (320, 240, 25.0));
+        assert_eq!((meta.duration, meta.bitrate), (3.5, 1000));
         assert!(meta.has_audio);
-        assert!((meta.duration - 2.0).abs() < 0.2);
 
-        let thumb = dir.path().join("t.jpg");
-        run_ffmpeg(
-            &ffmpeg(),
-            &build_thumbnail_args(&input, &thumb, 0.5, Some(160)),
-            "thumb",
-        )
-        .await
-        .unwrap();
-        assert!(std::fs::metadata(&thumb).unwrap().len() > 0);
-
-        let raw = run_ffmpeg(&ffmpeg(), &build_waveform_args(&input, 200), "wave")
+        generate_thumbnail(app, &s(&media), &s(&dir.join("t.jpg")), 1.0)
             .await
             .unwrap();
-        let wave = normalize_waveform(&raw);
-        assert!(!wave.is_empty());
-        assert!(wave.iter().all(|v| (0.0..=1.0).contains(v)));
+        let thumbs = generate_timeline_thumbnails(app, &s(&media), &s(dir), 3, 160)
+            .await
+            .unwrap();
+        assert_eq!(thumbs.len(), 3);
+        assert!(thumbs[2].ends_with("thumb_0002.jpg"), "{thumbs:?}");
 
-        let out = dir.path().join("t.mkv");
-        let s = ExportSettings {
+        // "ABCDEFGH" is two little-endian f32 samples.
+        let wave = extract_waveform(app, &s(&media), 2).await.unwrap();
+        assert_eq!(wave.len(), 2);
+        assert!(wave.contains(&1.0) && wave.iter().all(|v| (0.0..=1.0).contains(v)));
+
+        let settings = ExportSettings {
             use_hardware_acceleration: false,
             ..Default::default()
         };
-        let args = build_transcode_args(
-            &input,
-            &out,
-            &s,
-            &EncoderChoice {
-                name: "libx264".into(),
-                hardware: false,
-            },
-        );
-        run_ffmpeg(&ffmpeg(), &args, "transcode").await.unwrap();
-        assert!(probe_with(&ffprobe(), &out).await.unwrap().has_audio);
-    }
-
-    #[tokio::test]
-    #[ignore = "needs ffmpeg and ffprobe on PATH"]
-    async fn export_with_hostile_text_and_colors_renders() {
-        let _guard = EXPORT_TEST_LOCK.lock().await;
-        let dir = tempfile::tempdir().unwrap();
-        let input = make_clip(dir.path()).await;
-        let project = project_with(&input, "it's 100% a:b [x];movie=/etc/passwd %{pts}");
-        let settings = ExportSettings {
-            video_codec: "h264".into(),
-            ..test_settings(&dir.path().join("out.mp4"))
-        };
-
-        let (tx, mut rx) = mpsc::channel(256);
-        reset_export_cancel();
-        let out = run_export(
-            &ffmpeg(),
-            &EncoderChoice {
-                name: "libx264".into(),
-                hardware: false,
-            },
-            &project,
-            &settings,
-            tx,
-        )
-        .await
-        .unwrap();
-        let meta = probe_with(&ffprobe(), &out).await.unwrap();
-        assert_eq!((meta.width, meta.height), (320, 240));
-        let mut last = None;
-        while let Ok(p) = rx.try_recv() {
-            last = Some(p.status);
-        }
-        assert_eq!(last, Some(ExportStatus::Completed));
-    }
-
-    #[tokio::test]
-    #[ignore = "needs ffmpeg on PATH"]
-    async fn cancel_stops_export_and_removes_output() {
-        let _guard = EXPORT_TEST_LOCK.lock().await;
-        let dir = tempfile::tempdir().unwrap();
-        let input = make_clip(dir.path()).await;
-        let mut project = project_with(&input, "slow");
-        project.settings.width = 3840;
-        project.settings.height = 2160;
-        let settings = ExportSettings {
-            encoding_preset: "veryslow".into(),
-            ..test_settings(&dir.path().join("cancelled.mp4"))
-        };
-        let out_path = PathBuf::from(&settings.output_path);
-
-        reset_export_cancel();
-        let (tx, mut rx) = mpsc::channel(1024);
-        let task = tokio::spawn(async move {
-            run_export(
-                &ffmpeg(),
-                &EncoderChoice {
-                    name: "libx264".into(),
-                    hardware: false,
-                },
-                &project,
-                &settings,
-                tx,
-            )
+        transcode_video(app, &s(&media), &s(&dir.join("t.mkv")), &settings)
             .await
-        });
-        // Wait until ffmpeg is actually running before cancelling.
+            .unwrap();
+
+        // Outputs and inputs are still validated before anything runs.
+        assert!(
+            generate_thumbnail(app, &s(&media), &s(&dir.join("t.exe")), 0.0)
+                .await
+                .is_err()
+        );
+        assert!(get_video_metadata(app, "concat:/a|/b").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn app_wrappers_surface_tool_failures() {
+        let (app, media) = app_with_tools(&failing("boom: bad input"), &failing("no probe"));
+        let app = app.handle();
+        let dir = media.parent().unwrap();
+
+        let err = get_video_metadata(app, &s(&media)).await.unwrap_err();
+        assert!(
+            err.to_string().contains("ffprobe failed: no probe"),
+            "{err}"
+        );
+        let err = generate_thumbnail(app, &s(&media), &s(&dir.join("t.png")), 0.0)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("boom: bad input"), "{err}");
+        assert!(
+            generate_timeline_thumbnails(app, &s(&media), &s(dir), 2, 90)
+                .await
+                .is_err()
+        );
+        // A file without an audio stream simply has no waveform.
+        assert!(extract_waveform(app, &s(&media), 10)
+            .await
+            .unwrap()
+            .is_empty());
+        let settings = ExportSettings {
+            use_hardware_acceleration: false,
+            ..Default::default()
+        };
+        let err = transcode_video(app, &s(&media), &s(&dir.join("o.mp4")), &settings)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Transcode failed"), "{err}");
+    }
+
+    #[test]
+    fn encoder_preference_picks_first_reported_hardware_encoder() {
+        let list = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        let cands = ["h264_nvenc", "h264_qsv"];
+        let pick = pick_encoder(&list(&["aac", "h264_qsv", "h264_nvenc"]), &cands);
+        assert_eq!((pick.name.as_str(), pick.hardware), ("h264_nvenc", true));
+        let pick = pick_encoder(&list(&["h264_qsv"]), &cands);
+        assert_eq!(pick.name, "h264_qsv");
+        let pick = pick_encoder(&list(&["libx264"]), &cands);
+        assert_eq!((pick.name.as_str(), pick.hardware), ("libx264", false));
+        assert!(!HW_ENCODER_PREFERENCE.is_empty());
+    }
+
+    #[tokio::test]
+    async fn hardware_request_probes_the_encoder_list() {
+        let listing = " V..... = Video\n ------\n V....D h264_nvenc  NVENC\n A....D aac  AAC\n";
+        let (app, media) = app_with_tools(&ok_with(listing), &ok_with(PROBE_JSON));
+        let choice = select_video_encoder(app.handle(), true).await;
+        // The encoder list is cached process-wide, so only check consistency.
+        let cached = list_ffmpeg_encoders(app.handle()).await.unwrap();
+        assert_eq!(
+            choice.hardware,
+            HW_ENCODER_PREFERENCE
+                .iter()
+                .any(|c| cached.iter().any(|e| e == c))
+        );
+        let soft = select_video_encoder(app.handle(), false).await;
+        assert_eq!((soft.name.as_str(), soft.hardware), ("libx264", false));
+        let settings = ExportSettings {
+            use_hardware_acceleration: true,
+            ..Default::default()
+        };
+        let out = media.with_extension("mkv");
+        transcode_video(app.handle(), &s(&media), &s(&out), &settings)
+            .await
+            .unwrap();
+    }
+
+    fn drain(rx: &mut mpsc::Receiver<ExportProgress>) -> Vec<ExportProgress> {
+        let mut all = Vec::new();
+        while let Ok(p) = rx.try_recv() {
+            all.push(p);
+        }
+        all
+    }
+
+    #[tokio::test]
+    async fn export_reports_progress_until_end() {
+        let _guard = EXPORT_TEST_LOCK.lock().await;
+        reset_export_cancel();
+        let progress = "frame=150\nfps=30\nprogress=continue\nframe=300\nprogress=end\n";
+        let (app, _) = app_with_tools(&ok_with(progress), &Script::default());
+        let dir = tempfile::tempdir().unwrap();
+        let (p, mut settings) = export_fixture(dir.path());
+        settings.use_hardware_acceleration = false;
+        let (tx, mut rx) = mpsc::channel(64);
+
+        let out = export_project(app.handle(), &p, &settings, tx)
+            .await
+            .unwrap();
+        assert!(out.ends_with("out.mp4"), "{out:?}");
+        let all = drain(&mut rx);
+        let statuses: Vec<_> = all.iter().map(|p| p.status).collect();
+        assert_eq!(statuses.first(), Some(&ExportStatus::Preparing));
+        assert_eq!(statuses.last(), Some(&ExportStatus::Completed));
+        let frame150 = all.iter().find(|p| p.current_frame == 150).unwrap();
+        assert_eq!(frame150.total_frames, 300);
+        assert!((frame150.progress - 50.0).abs() < 1e-9);
+        // 100% is only reported once ffmpeg says `progress=end`.
+        let frame300: Vec<f64> = all
+            .iter()
+            .filter(|p| p.current_frame == 300)
+            .map(|p| p.progress)
+            .collect();
+        assert_eq!(frame300, [99.9, 100.0]);
+    }
+
+    #[tokio::test]
+    async fn export_failure_carries_the_stderr_tail() {
+        let _guard = EXPORT_TEST_LOCK.lock().await;
+        reset_export_cancel();
+        let dir = tempfile::tempdir().unwrap();
+        let (p, s) = export_fixture(dir.path());
+        let stderr: String = (0..30).map(|i| format!("line {i}\n")).collect();
+        let ffmpeg = fake_tool(&dir.path().join("bin"), "ffmpeg", &failing(&stderr));
+
+        let (tx, mut rx) = mpsc::channel(64);
+        let err = run_export(&ffmpeg, &enc("libx264", false), &p, &s, tx)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("line 29") && !msg.contains("line 9\n"),
+            "{msg}"
+        );
+        let last = drain(&mut rx).pop().unwrap();
+        assert_eq!(last.status, ExportStatus::Failed);
+        assert!(last.error.unwrap().contains("line 29"));
+
+        let silent = fake_tool(&dir.path().join("bin2"), "ffmpeg", &failing(""));
+        let (tx, mut rx) = mpsc::channel(64);
+        let err = run_export(&silent, &enc("libx264", false), &p, &s, tx)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("unknown error"), "{err}");
+        assert_eq!(
+            drain(&mut rx).pop().unwrap().error.as_deref(),
+            Some("Export failed")
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_cancel_stops_export_and_removes_output() {
+        let _guard = EXPORT_TEST_LOCK.lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let (p, s) = export_fixture(dir.path());
+        std::fs::write(&s.output_path, b"partial").unwrap();
+        let ffmpeg = fake_tool(&dir.path().join("bin"), "ffmpeg", &ok_with("frame=1\n"));
+
+        request_export_cancel();
+        let (tx, mut rx) = mpsc::channel(64);
+        let err = run_export(&ffmpeg, &enc("libx264", false), &p, &s, tx)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ClipyError::ExportFailed(_)), "{err:?}");
+        assert!(!Path::new(&s.output_path).exists());
+        assert!(!export_cancelled());
+        assert_eq!(
+            drain(&mut rx).pop().unwrap().status,
+            ExportStatus::Cancelled
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_wakes_an_export_waiting_on_ffmpeg() {
+        let _guard = EXPORT_TEST_LOCK.lock().await;
+        reset_export_cancel();
+        let dir = tempfile::tempdir().unwrap();
+        let (p, s) = export_fixture(dir.path());
+        let slow = Script {
+            sleep_secs: 2,
+            stdout: "frame=1\nprogress=end\n".into(),
+            ..Default::default()
+        };
+        let ffmpeg = fake_tool(&dir.path().join("bin"), "ffmpeg", &slow);
+
+        let (tx, mut rx) = mpsc::channel(64);
+        let task =
+            tokio::spawn(
+                async move { run_export(&ffmpeg, &enc("libx264", false), &p, &s, tx).await },
+            );
         while let Some(p) = rx.recv().await {
             if p.status == ExportStatus::Exporting {
                 break;
@@ -2874,27 +2925,15 @@ mod ffmpeg_integration {
         request_export_cancel();
         let err = task.await.unwrap().unwrap_err();
         assert!(matches!(err, ClipyError::ExportFailed(_)), "{err:?}");
-        assert!(!out_path.exists());
         assert!(!export_cancelled());
-        let mut saw_cancelled = false;
-        while let Ok(p) = rx.try_recv() {
-            saw_cancelled |= p.status == ExportStatus::Cancelled;
-        }
-        assert!(saw_cancelled);
-    }
-
-    #[tokio::test]
-    #[ignore = "needs ffmpeg on PATH"]
-    async fn system_encoder_list_parses() {
-        let raw = run_ffmpeg(
-            &ffmpeg(),
-            &["-hide_banner".to_string(), "-encoders".to_string()],
-            "encoders",
-        )
-        .await
-        .unwrap();
-        let names = parse_encoder_list(&String::from_utf8_lossy(&raw));
-        assert!(names.iter().any(|n| n == "aac"), "{names:?}");
-        assert!(!names.iter().any(|n| n == "="));
     }
 }
+
+/// Tests that drive a real ffmpeg/ffprobe from PATH. Run with
+/// `cargo test -- --ignored`.
+// NOTE: the file lives under tests/live/ (no top-level .rs, so not its own
+// Cargo test target) because these opt-in tests need external tools and are
+// not part of the unit-coverage baseline.
+#[cfg(test)]
+#[path = "../../tests/live/ffmpeg.rs"]
+mod ffmpeg_integration;

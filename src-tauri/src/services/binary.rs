@@ -33,7 +33,7 @@ use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 use tracing::{debug, info, warn};
 
 // -----------------------------------------------------------------------------
@@ -46,6 +46,25 @@ fn exe_name(stem: &str) -> String {
         format!("{stem}.exe")
     } else {
         stem.to_string()
+    }
+}
+
+/// The executable to spawn for `path`. Identity in the app.
+///
+/// NOTE: Windows tests cannot fake a `.exe`, so there a `<stem>.cmd` fixture
+/// (see `test_support::fake_tool`) stands in for a missing `<stem>.exe`.
+#[cfg(not(all(test, windows)))]
+pub(crate) fn platform_exe(path: PathBuf) -> PathBuf {
+    path
+}
+
+#[cfg(all(test, windows))]
+pub(crate) fn platform_exe(path: PathBuf) -> PathBuf {
+    let cmd = path.with_extension("cmd");
+    if !path.exists() && cmd.exists() {
+        cmd
+    } else {
+        path
     }
 }
 
@@ -72,7 +91,7 @@ fn first_existing_line(output: &str) -> Option<PathBuf> {
 
 /// Locate `stem` in `binaries_dir`, falling back to `PATH`.
 fn find_binary(binaries_dir: &Path, stem: &str) -> Option<PathBuf> {
-    let local = binaries_dir.join(exe_name(stem));
+    let local = platform_exe(binaries_dir.join(exe_name(stem)));
     if local.exists() {
         return Some(local);
     }
@@ -140,7 +159,7 @@ fn check_binaries_in(binaries_dir: &Path) -> BinaryStatus {
 }
 
 /// Check if required binaries are installed
-pub fn check_binaries(app: &AppHandle) -> Result<BinaryStatus> {
+pub fn check_binaries<R: Runtime>(app: &AppHandle<R>) -> Result<BinaryStatus> {
     info!("Checking binary status");
     let status = check_binaries_in(&paths::get_binaries_dir(app)?);
     debug!("Binary status: {:?}", status);
@@ -148,24 +167,24 @@ pub fn check_binaries(app: &AppHandle) -> Result<BinaryStatus> {
 }
 
 /// Get the path to FFmpeg binary
-pub fn get_ffmpeg_path(app: &AppHandle) -> Result<PathBuf> {
+pub fn get_ffmpeg_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
     find_binary(&paths::get_binaries_dir(app)?, "ffmpeg")
         .ok_or_else(|| ClipyError::BinaryNotFound("FFmpeg not found".into()))
 }
 
 /// Get the path to yt-dlp binary
-pub fn get_ytdlp_path(app: &AppHandle) -> Result<PathBuf> {
+pub fn get_ytdlp_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
     find_binary(&paths::get_binaries_dir(app)?, "yt-dlp")
         .ok_or_else(|| ClipyError::BinaryNotFound("yt-dlp not found".into()))
 }
 
 /// Get the path to FFprobe binary (comes bundled with FFmpeg)
-pub fn get_ffprobe_path(app: &AppHandle) -> Result<PathBuf> {
+pub fn get_ffprobe_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
     let dir = paths::get_binaries_dir(app)?;
     find_binary(&dir, "ffprobe")
         .or_else(|| {
             let ffmpeg = find_binary(&dir, "ffmpeg")?;
-            let beside = ffmpeg.parent()?.join(exe_name("ffprobe"));
+            let beside = platform_exe(ffmpeg.parent()?.join(exe_name("ffprobe")));
             beside.exists().then_some(beside)
         })
         .ok_or_else(|| ClipyError::BinaryNotFound("FFprobe not found".into()))
@@ -463,6 +482,29 @@ const YTDLP_RELEASES: &str = "https://github.com/yt-dlp/yt-dlp/releases";
 const BTBN_LATEST: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest";
 const MARTIN_RIEDL: &str = "https://ffmpeg.martin-riedl.de";
 
+/// Upstream base URLs the installers download from. Always [`Sources::upstream`]
+/// in the app; tests point them at a local server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Sources {
+    /// GitHub releases root of yt-dlp.
+    pub ytdlp_releases: String,
+    /// BtbN `latest` release download root.
+    pub btbn_latest: String,
+    /// martin-riedl.de origin (macOS builds).
+    pub martin_riedl: String,
+}
+
+impl Sources {
+    /// The real upstream locations.
+    pub fn upstream() -> Self {
+        Self {
+            ytdlp_releases: YTDLP_RELEASES.into(),
+            btbn_latest: BTBN_LATEST.into(),
+            martin_riedl: MARTIN_RIEDL.into(),
+        }
+    }
+}
+
 /// yt-dlp release asset for an OS/arch (`std::env::consts` values).
 ///
 /// Linux uses the standalone `yt-dlp_linux*` builds rather than the `yt-dlp`
@@ -517,16 +559,17 @@ fn ffmpeg_source(os: &str, arch: &str) -> Option<FfmpegSource> {
 }
 
 /// martin-riedl.de redirect URL for the latest release build of `tool`.
-fn martin_riedl_latest_url(arch: &str, tool: &str) -> String {
-    format!("{MARTIN_RIEDL}/redirect/latest/macos/{arch}/release/{tool}.zip")
+fn martin_riedl_latest_url(origin: &str, arch: &str, tool: &str) -> String {
+    format!("{origin}/redirect/latest/macos/{arch}/release/{tool}.zip")
 }
 
 /// Absolute download URL for a martin-riedl.de redirect `Location`, which may
-/// be relative (`/download/...`). Only that host is accepted.
-fn martin_riedl_resolve(location: &str) -> Option<String> {
-    let base = url::Url::parse(MARTIN_RIEDL).ok()?;
+/// be relative (`/download/...`). Only `origin`'s scheme and host are
+/// accepted (`https://ffmpeg.martin-riedl.de` in the app).
+fn martin_riedl_resolve(origin: &str, location: &str) -> Option<String> {
+    let base = url::Url::parse(origin).ok()?;
     let resolved = base.join(location).ok()?;
-    (resolved.scheme() == "https" && resolved.host_str() == base.host_str())
+    (resolved.scheme() == base.scheme() && resolved.host_str() == base.host_str())
         .then(|| resolved.to_string())
 }
 
@@ -535,13 +578,24 @@ fn martin_riedl_resolve(location: &str) -> Option<String> {
 // -----------------------------------------------------------------------------
 
 /// Download and install FFmpeg
-pub async fn install_ffmpeg(app: &AppHandle) -> Result<PathBuf> {
+pub async fn install_ffmpeg<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
     let dir = paths::get_binaries_dir(app)?;
-    install_ffmpeg_into(&dir, std::env::consts::OS, std::env::consts::ARCH).await
+    install_ffmpeg_into(
+        &Sources::upstream(),
+        &dir,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    )
+    .await
 }
 
-/// Install ffmpeg + ffprobe for `os`/`arch` into `binaries_dir`.
-async fn install_ffmpeg_into(binaries_dir: &Path, os: &str, arch: &str) -> Result<PathBuf> {
+/// Install ffmpeg + ffprobe for `os`/`arch` from `src` into `binaries_dir`.
+async fn install_ffmpeg_into(
+    src: &Sources,
+    binaries_dir: &Path,
+    os: &str,
+    arch: &str,
+) -> Result<PathBuf> {
     info!("Installing FFmpeg for {os}/{arch}");
     std::fs::create_dir_all(binaries_dir)?;
     let source = ffmpeg_source(os, arch).ok_or_else(|| {
@@ -553,13 +607,14 @@ async fn install_ffmpeg_into(binaries_dir: &Path, os: &str, arch: &str) -> Resul
 
     match source {
         FfmpegSource::BtbN { asset } => {
-            let sums = fetch_text(&client, &format!("{BTBN_LATEST}/checksums.sha256")).await?;
+            let sums =
+                fetch_text(&client, &format!("{}/checksums.sha256", src.btbn_latest)).await?;
             let expected = parse_checksum_file(&sums, asset).ok_or_else(|| {
                 ClipyError::Other(format!("{asset} missing from checksums.sha256"))
             })?;
             let archive = download_archive(
                 &client,
-                &format!("{BTBN_LATEST}/{asset}"),
+                &format!("{}/{asset}", src.btbn_latest),
                 binaries_dir,
                 &expected,
             )
@@ -580,8 +635,10 @@ async fn install_ffmpeg_into(binaries_dir: &Path, os: &str, arch: &str) -> Resul
         }
         FfmpegSource::MartinRiedl { arch } => {
             for tool in ["ffmpeg", "ffprobe"] {
-                let location = resolve_redirect(&martin_riedl_latest_url(arch, tool)).await?;
-                let url = martin_riedl_resolve(&location).ok_or_else(|| {
+                let location =
+                    resolve_redirect(&martin_riedl_latest_url(&src.martin_riedl, arch, tool))
+                        .await?;
+                let url = martin_riedl_resolve(&src.martin_riedl, &location).ok_or_else(|| {
                     ClipyError::Other(format!("Unexpected FFmpeg redirect: {location}"))
                 })?;
                 let sums = fetch_text(&client, &format!("{url}.sha256")).await?;
@@ -623,13 +680,21 @@ async fn download_archive(
 }
 
 /// Download and install yt-dlp
-pub async fn install_ytdlp(app: &AppHandle) -> Result<PathBuf> {
+pub async fn install_ytdlp<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
     let dir = paths::get_binaries_dir(app)?;
-    install_ytdlp_into(&dir, std::env::consts::OS, std::env::consts::ARCH).await
+    install_ytdlp_into(
+        &Sources::upstream(),
+        &dir,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    )
+    .await
 }
 
-/// Install the latest verified yt-dlp for `os`/`arch` into `binaries_dir`.
+/// Install the latest verified yt-dlp for `os`/`arch` from `src` into
+/// `binaries_dir`.
 pub(crate) async fn install_ytdlp_into(
+    src: &Sources,
     binaries_dir: &Path,
     os: &str,
     arch: &str,
@@ -643,21 +708,18 @@ pub(crate) async fn install_ytdlp_into(
     })?;
     let client = http_client()?;
 
-    let location = resolve_redirect(&format!("{YTDLP_RELEASES}/latest")).await?;
+    let releases = &src.ytdlp_releases;
+    let location = resolve_redirect(&format!("{releases}/latest")).await?;
     let tag = parse_release_tag(&location)
         .ok_or_else(|| ClipyError::Other(format!("Unexpected yt-dlp redirect: {location}")))?;
-    let sums = fetch_text(
-        &client,
-        &format!("{YTDLP_RELEASES}/download/{tag}/SHA2-256SUMS"),
-    )
-    .await?;
+    let sums = fetch_text(&client, &format!("{releases}/download/{tag}/SHA2-256SUMS")).await?;
     let expected = parse_checksum_file(&sums, asset)
         .ok_or_else(|| ClipyError::Other(format!("{asset} missing from SHA2-256SUMS ({tag})")))?;
 
     let target = binaries_dir.join(exe_name("yt-dlp"));
     download_verified(
         &client,
-        &format!("{YTDLP_RELEASES}/download/{tag}/{asset}"),
+        &format!("{releases}/download/{tag}/{asset}"),
         &target,
         &expected,
         MAX_BINARY_DOWNLOAD,
@@ -672,7 +734,7 @@ pub(crate) async fn install_ytdlp_into(
 ///
 /// NOTE: delegates to `yt-dlp -U`, whose updater verifies the release's
 /// `SHA2-256SUMS` itself.
-pub async fn update_ytdlp(app: &AppHandle) -> Result<String> {
+pub async fn update_ytdlp<R: Runtime>(app: &AppHandle<R>) -> Result<String> {
     info!("Updating yt-dlp to latest version");
     let ytdlp_path = get_ytdlp_path(app)?;
     let output = tokio::process::Command::new(&ytdlp_path)
@@ -700,7 +762,9 @@ pub async fn update_ytdlp(app: &AppHandle) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use crate::test_support::{
+        build_zip, fake_tool, mock_app_in_tempdir, sha256_hex, Route, Script, TestServer,
+    };
 
     const HASH_A: &str = "1fa6733c37ea6fb51c99ad8fe785e7b7e5f3246c9b980230329d4fb72ed8d4d6";
     const HASH_B: &str = "66674953FE251B89F4D08C5F0E35E0728679BD67AB3D7D05C0562AF101DD3E7A";
@@ -827,22 +891,25 @@ mod tests {
 
     #[test]
     fn martin_riedl_urls() {
+        let origin = &Sources::upstream().martin_riedl;
         assert_eq!(
-            martin_riedl_latest_url("arm64", "ffprobe"),
+            martin_riedl_latest_url(origin, "arm64", "ffprobe"),
             "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffprobe.zip"
         );
         assert_eq!(
-            martin_riedl_resolve("/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip").as_deref(),
+            martin_riedl_resolve(origin, "/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip")
+                .as_deref(),
             Some("https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip")
         );
         assert_eq!(
-            martin_riedl_resolve("https://evil.example/ffmpeg.zip"),
+            martin_riedl_resolve(origin, "https://evil.example/ffmpeg.zip"),
             None
         );
         assert_eq!(
-            martin_riedl_resolve("http://ffmpeg.martin-riedl.de/x.zip"),
+            martin_riedl_resolve(origin, "http://ffmpeg.martin-riedl.de/x.zip"),
             None
         );
+        assert_eq!(martin_riedl_resolve("not a url", "/x.zip"), None);
     }
 
     #[test]
@@ -904,25 +971,6 @@ mod tests {
     }
 
     // ---- archive extraction with in-test archives ----
-
-    fn build_zip(entries: &[(&str, &[u8])], symlink: Option<(&str, &str)>) -> Vec<u8> {
-        use zip::write::SimpleFileOptions;
-        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        for (name, data) in entries {
-            if name.ends_with('/') {
-                w.add_directory(*name, SimpleFileOptions::default())
-                    .unwrap();
-            } else {
-                w.start_file(*name, SimpleFileOptions::default()).unwrap();
-                w.write_all(data).unwrap();
-            }
-        }
-        if let Some((name, target)) = symlink {
-            w.add_symlink(name, target, SimpleFileOptions::default())
-                .unwrap();
-        }
-        w.finish().unwrap().into_inner()
-    }
 
     fn build_tar_xz(
         dir: &Path,
@@ -1073,15 +1121,358 @@ mod tests {
         );
     }
 
+    fn leftovers(dir: &Path) -> Vec<String> {
+        dir_names(dir)
+            .into_iter()
+            .filter(|n| n.starts_with(".clipy-"))
+            .collect()
+    }
+
+    /// Sources whose every base points at `server`.
+    fn local_sources(server: &TestServer) -> Sources {
+        Sources {
+            ytdlp_releases: server.url("/releases"),
+            btbn_latest: server.url("/btbn"),
+            martin_riedl: server.base.clone(),
+        }
+    }
+
     #[tokio::test]
     async fn installers_refuse_unsupported_platforms() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(install_ffmpeg_into(dir.path(), "plan9", "mips")
+        let src = Sources::upstream();
+        assert!(install_ffmpeg_into(&src, dir.path(), "plan9", "mips")
             .await
             .is_err());
-        assert!(install_ytdlp_into(dir.path(), "plan9", "mips")
+        assert!(install_ytdlp_into(&src, dir.path(), "plan9", "mips")
             .await
             .is_err());
+        assert!(dir_names(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn app_wrappers_find_tools_in_the_binaries_dir() {
+        let app = mock_app_in_tempdir();
+        let bin = paths::get_binaries_dir(app.handle()).unwrap();
+        let ffmpeg = fake_tool(
+            &bin,
+            "ffmpeg",
+            &Script {
+                stdout: "ffmpeg version 9.9-test Copyright\n".into(),
+                ..Default::default()
+            },
+        );
+        let ytdlp = fake_tool(
+            &bin,
+            "yt-dlp",
+            &Script {
+                stdout: "2099.01.01\n".into(),
+                ..Default::default()
+            },
+        );
+        let ffprobe = fake_tool(&bin, "ffprobe", &Script::default());
+
+        let status = check_binaries(app.handle()).unwrap();
+        assert!(status.ffmpeg_installed && status.ytdlp_installed);
+        assert_eq!(status.ffmpeg_version.as_deref(), Some("9.9-test"));
+        assert_eq!(status.ytdlp_version.as_deref(), Some("2099.01.01"));
+        assert_eq!(get_ffmpeg_path(app.handle()).unwrap(), ffmpeg);
+        assert_eq!(get_ytdlp_path(app.handle()).unwrap(), ytdlp);
+        assert_eq!(get_ffprobe_path(app.handle()).unwrap(), ffprobe);
+    }
+
+    #[tokio::test]
+    async fn update_ytdlp_reports_output_and_failures() {
+        let app = mock_app_in_tempdir();
+        let bin = paths::get_binaries_dir(app.handle()).unwrap();
+        fake_tool(
+            &bin,
+            "yt-dlp",
+            &Script {
+                stdout: "Updated yt-dlp to 2099.01.01\n".into(),
+                ..Default::default()
+            },
+        );
+        let out = update_ytdlp(app.handle()).await.unwrap();
+        assert!(out.contains("Updated yt-dlp to 2099.01.01"), "{out}");
+
+        fake_tool(
+            &bin,
+            "yt-dlp",
+            &Script {
+                stderr: "ERROR: unable to write\n".into(),
+                exit_code: 1,
+                ..Default::default()
+            },
+        );
+        let err = update_ytdlp(app.handle()).await.unwrap_err();
+        assert!(matches!(err, ClipyError::BinaryExecutionFailed(_)));
+        assert!(err.to_string().contains("ERROR: unable to write"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn http_helpers_report_status_size_and_redirect_errors() {
+        let server = TestServer::start().await;
+        server
+            .route("/text", Route::ok("hello"))
+            .route("/boom", Route::status(500))
+            .route("/big", Route::ok(vec![b'x'; 64]))
+            .route("/big-unsized", Route::ok(vec![b'x'; 64]).without_length())
+            .route("/moved", Route::redirect("/elsewhere"));
+        let client = http_client().unwrap();
+
+        assert_eq!(
+            fetch_text(&client, &server.url("/text")).await.unwrap(),
+            "hello"
+        );
+        let err = fetch_text(&client, &server.url("/boom")).await.unwrap_err();
+        assert!(err.to_string().contains("HTTP 500"), "{err}");
+
+        assert_eq!(
+            resolve_redirect(&server.url("/moved")).await.unwrap(),
+            "/elsewhere"
+        );
+        let err = resolve_redirect(&server.url("/text")).await.unwrap_err();
+        assert!(err.to_string().contains("Expected a redirect"), "{err}");
+
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("f");
+        let digest = sha256_hex(&[b'x'; 64]);
+        for path in ["/big", "/big-unsized"] {
+            let err = download_verified(&client, &server.url(path), &dest, &digest, 63)
+                .await
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("exceeds 63 bytes"),
+                "{path}: {err}"
+            );
+        }
+        let err = download_verified(&client, &server.url("/boom"), &dest, &digest, 99)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("HTTP 500"), "{err}");
+        assert!(dir_names(dir.path()).is_empty());
+
+        download_verified(&client, &server.url("/big"), &dest, &digest, 64)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), vec![b'x'; 64]);
+    }
+
+    /// Serve yt-dlp release `tag` whose SUMS file lists `listed_hash` for the
+    /// Linux x86_64 asset `body`.
+    fn serve_ytdlp_release(server: &TestServer, tag: &str, body: &[u8], listed_hash: &str) {
+        server
+            .route(
+                "/releases/latest",
+                Route::redirect(&format!("/releases/tag/{tag}")),
+            )
+            .route(
+                &format!("/releases/download/{tag}/SHA2-256SUMS"),
+                Route::ok(format!(
+                    "{listed_hash}  yt-dlp_linux\n{HASH_B}  yt-dlp.exe\n"
+                )),
+            )
+            .route(
+                &format!("/releases/download/{tag}/yt-dlp_linux"),
+                Route::ok(body.to_vec()),
+            );
+    }
+
+    #[tokio::test]
+    async fn ytdlp_install_verifies_the_release_it_resolved() {
+        let server = TestServer::start().await;
+        let body = b"#!/bin/sh\necho fake yt-dlp\n";
+        serve_ytdlp_release(&server, "2099.01.01", body, &sha256_hex(body));
+        let dir = tempfile::tempdir().unwrap();
+
+        let path = install_ytdlp_into(&local_sources(&server), dir.path(), "linux", "x86_64")
+            .await
+            .unwrap();
+        assert_eq!(path, dir.path().join(exe_name("yt-dlp")));
+        assert_eq!(std::fs::read(&path).unwrap(), body);
+        assert!(leftovers(dir.path()).is_empty());
+        assert!(server
+            .hits()
+            .contains(&"/releases/download/2099.01.01/yt-dlp_linux".to_string()));
+    }
+
+    #[tokio::test]
+    async fn ytdlp_install_with_wrong_hash_installs_nothing() {
+        let server = TestServer::start().await;
+        serve_ytdlp_release(&server, "2099.01.01", b"tampered", HASH_A);
+        let dir = tempfile::tempdir().unwrap();
+        let err = install_ytdlp_into(&local_sources(&server), dir.path(), "linux", "x86_64")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Checksum mismatch"), "{err}");
+        assert!(dir_names(dir.path()).is_empty());
+
+        // An asset missing from the listing is refused before downloading.
+        let err = install_ytdlp_into(&local_sources(&server), dir.path(), "macos", "aarch64")
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("missing from SHA2-256SUMS"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ytdlp_install_rejects_unexpected_redirects() {
+        let server = TestServer::start().await;
+        server.route("/releases/latest", Route::redirect("/releases/tag/..%2f"));
+        let dir = tempfile::tempdir().unwrap();
+        let err = install_ytdlp_into(&local_sources(&server), dir.path(), "linux", "x86_64")
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Unexpected yt-dlp redirect"),
+            "{err}"
+        );
+        assert_eq!(server.hits(), ["/releases/latest"]);
+    }
+
+    #[tokio::test]
+    async fn ffmpeg_install_from_btbn_zip_and_tar_xz() {
+        let server = TestServer::start().await;
+        let zip = build_zip(
+            &[
+                ("ffmpeg-x/bin/ffmpeg.exe", b"FFMPEG"),
+                ("ffmpeg-x/bin/ffprobe.exe", b"FFPROBE"),
+                ("ffmpeg-x/bin/ffplay.exe", b"no"),
+            ],
+            None,
+        );
+        let work = tempfile::tempdir().unwrap();
+        let tar = std::fs::read(build_tar_xz(
+            work.path(),
+            &[
+                ("ffmpeg-linux64/bin/ffmpeg", b"FF"),
+                ("ffmpeg-linux64/bin/ffprobe", b"FP"),
+            ],
+            None,
+        ))
+        .unwrap();
+        let win = "ffmpeg-master-latest-win64-gpl.zip";
+        let linux = "ffmpeg-master-latest-linux64-gpl.tar.xz";
+        server
+            .route(
+                "/btbn/checksums.sha256",
+                Route::ok(format!(
+                    "{}  {win}\n{}  {linux}\n",
+                    sha256_hex(&zip),
+                    sha256_hex(&tar)
+                )),
+            )
+            .route(&format!("/btbn/{win}"), Route::ok(zip))
+            .route(&format!("/btbn/{linux}"), Route::ok(tar));
+        let src = local_sources(&server);
+        let mut expect = vec![exe_name("ffmpeg"), exe_name("ffprobe")];
+        expect.sort();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = install_ffmpeg_into(&src, dir.path(), "windows", "x86_64")
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"FFMPEG");
+        assert_eq!(dir_names(dir.path()), expect);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = install_ffmpeg_into(&src, dir.path(), "linux", "x86_64")
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"FF");
+        assert_eq!(dir_names(dir.path()), expect);
+
+        // Not listed in checksums.sha256: nothing is downloaded.
+        let err = install_ffmpeg_into(&src, dir.path(), "linux", "aarch64")
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("missing from checksums.sha256"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ffmpeg_install_fails_when_archive_lacks_ffmpeg() {
+        let server = TestServer::start().await;
+        let zip = build_zip(&[("bin/ffprobe.exe", b"FFPROBE")], None);
+        let asset = "ffmpeg-master-latest-win64-gpl.zip";
+        server
+            .route(
+                "/btbn/checksums.sha256",
+                Route::ok(format!("{}  {asset}\n", sha256_hex(&zip))),
+            )
+            .route(&format!("/btbn/{asset}"), Route::ok(zip));
+        let dir = tempfile::tempdir().unwrap();
+        let err = install_ffmpeg_into(&local_sources(&server), dir.path(), "windows", "x86_64")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("FFmpeg binary not found"), "{err}");
+        assert!(leftovers(dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn ffmpeg_install_from_martin_riedl_resolves_each_tool() {
+        let server = TestServer::start().await;
+        for (tool, data) in [("ffmpeg", &b"FFMPEG"[..]), ("ffprobe", &b"FFPROBE"[..])] {
+            let zip = build_zip(&[(tool, data)], None);
+            let versioned = format!("/download/macos/arm64/1_9.0/{tool}.zip");
+            server
+                .route(
+                    &format!("/redirect/latest/macos/arm64/release/{tool}.zip"),
+                    Route::redirect(&versioned),
+                )
+                .route(
+                    &format!("{versioned}.sha256"),
+                    Route::ok(format!("{}  {tool}.zip\n", sha256_hex(&zip))),
+                )
+                .route(&versioned, Route::ok(zip));
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = install_ffmpeg_into(&local_sources(&server), dir.path(), "macos", "aarch64")
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"FFMPEG");
+        assert_eq!(
+            std::fs::read(dir.path().join(exe_name("ffprobe"))).unwrap(),
+            b"FFPROBE"
+        );
+    }
+
+    #[tokio::test]
+    async fn ffmpeg_install_refuses_foreign_redirects_and_missing_checksums() {
+        let server = TestServer::start().await;
+        server.route(
+            "/redirect/latest/macos/amd64/release/ffmpeg.zip",
+            Route::redirect("https://evil.example/ffmpeg.zip"),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let src = local_sources(&server);
+        let err = install_ffmpeg_into(&src, dir.path(), "macos", "x86_64")
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Unexpected FFmpeg redirect"),
+            "{err}"
+        );
+
+        server
+            .route(
+                "/redirect/latest/macos/amd64/release/ffmpeg.zip",
+                Route::redirect("/download/v/ffmpeg.zip"),
+            )
+            .route("/download/v/ffmpeg.zip.sha256", Route::ok("nothing useful"));
+        let err = install_ffmpeg_into(&src, dir.path(), "macos", "x86_64")
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("No checksum for ffmpeg.zip"),
+            "{err}"
+        );
+        assert!(dir_names(dir.path()).is_empty());
     }
 
     // ---- network: real upstream downloads ----
@@ -1090,52 +1481,41 @@ mod tests {
     #[ignore = "network: downloads and verifies the real yt-dlp release"]
     async fn network_install_ytdlp_verified() {
         let dir = tempfile::tempdir().unwrap();
-        let path = install_ytdlp_into(dir.path(), std::env::consts::OS, std::env::consts::ARCH)
+        let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
+        let path = install_ytdlp_into(&Sources::upstream(), dir.path(), os, arch)
             .await
             .unwrap();
         let version = run_version(&path, "--version").and_then(|o| parse_ytdlp_version(&o));
-        assert!(version.is_some(), "installed yt-dlp did not run");
-        let leftovers: Vec<_> = dir_names(dir.path())
-            .into_iter()
-            .filter(|n| n.starts_with(".clipy-"))
-            .collect();
-        assert!(leftovers.is_empty(), "{leftovers:?}");
+        assert!(version.is_some() && leftovers(dir.path()).is_empty());
     }
 
     #[tokio::test]
     #[ignore = "network: downloads and verifies a real ffmpeg build (~100 MB)"]
     async fn network_install_ffmpeg_verified() {
         let dir = tempfile::tempdir().unwrap();
-        let path = install_ffmpeg_into(dir.path(), std::env::consts::OS, std::env::consts::ARCH)
+        let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
+        let path = install_ffmpeg_into(&Sources::upstream(), dir.path(), os, arch)
             .await
             .unwrap();
-        assert!(run_version(&path, "-version")
-            .and_then(|o| parse_ffmpeg_version(&o))
-            .is_some());
-        assert!(dir.path().join(exe_name("ffprobe")).exists());
+        let version = run_version(&path, "-version").and_then(|o| parse_ffmpeg_version(&o));
+        assert!(version.is_some() && dir.path().join(exe_name("ffprobe")).exists());
     }
 
     #[tokio::test]
     #[ignore = "network: fetches the real yt-dlp SHA2-256SUMS"]
     async fn network_wrong_hash_is_rejected_and_nothing_installed() {
-        let dir = tempfile::tempdir().unwrap();
-        let client = http_client().unwrap();
-        let location = resolve_redirect(&format!("{YTDLP_RELEASES}/latest"))
+        let releases = Sources::upstream().ytdlp_releases;
+        let location = resolve_redirect(&format!("{releases}/latest"))
             .await
             .unwrap();
-        let tag = parse_release_tag(&location).unwrap();
+        let url = format!(
+            "{releases}/download/{}/SHA2-256SUMS",
+            parse_release_tag(&location).unwrap()
+        );
+        let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("SUMS");
-        let err = download_verified(
-            &client,
-            &format!("{YTDLP_RELEASES}/download/{tag}/SHA2-256SUMS"),
-            &dest,
-            HASH_A,
-            1024 * 1024,
-        )
-        .await
-        .unwrap_err();
-        assert!(err.to_string().contains("Checksum mismatch"), "{err}");
-        assert!(!dest.exists());
+        let err = download_verified(&http_client().unwrap(), &url, &dest, HASH_A, 1 << 20).await;
+        assert!(err.unwrap_err().to_string().contains("Checksum mismatch"));
         assert!(dir_names(dir.path()).is_empty());
     }
 }

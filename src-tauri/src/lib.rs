@@ -295,6 +295,227 @@ pub(crate) mod test_support {
         context.config_mut().identifier = dir.to_string_lossy().into_owned();
         mock_builder().build(context).unwrap()
     }
+
+    /// A canned HTTP response served by [`TestServer`].
+    #[derive(Debug, Clone)]
+    pub struct Route {
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+        content_length: bool,
+    }
+
+    impl Route {
+        /// `200 OK` with `body`.
+        pub fn ok(body: impl Into<Vec<u8>>) -> Self {
+            Self {
+                status: 200,
+                headers: Vec::new(),
+                body: body.into(),
+                content_length: true,
+            }
+        }
+
+        /// An empty response with `status`.
+        pub fn status(status: u16) -> Self {
+            Self {
+                status,
+                ..Self::ok(Vec::new())
+            }
+        }
+
+        /// `302 Found` pointing at `location`.
+        pub fn redirect(location: &str) -> Self {
+            Self::status(302).header("Location", location)
+        }
+
+        /// Add a response header.
+        pub fn header(mut self, name: &str, value: &str) -> Self {
+            self.headers.push((name.into(), value.into()));
+            self
+        }
+
+        /// Omit `Content-Length`, so the body is delimited by connection close
+        /// and only a streaming size check can catch an oversized body.
+        pub fn without_length(mut self) -> Self {
+            self.content_length = false;
+            self
+        }
+    }
+
+    /// Minimal in-process HTTP/1.1 server for download tests: one request per
+    /// connection, routes matched on the exact request path.
+    pub struct TestServer {
+        /// `http://127.0.0.1:<port>` (no trailing slash).
+        pub base: String,
+        routes: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Route>>>,
+        hits: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl TestServer {
+        /// Bind an ephemeral port and serve on the current Tokio runtime.
+        pub async fn start() -> Self {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let routes = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+                String,
+                Route,
+            >::new()));
+            let hits = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let (r, h) = (routes.clone(), hits.clone());
+            tokio::spawn(async move {
+                while let Ok((mut sock, _)) = listener.accept().await {
+                    let (routes, hits) = (r.clone(), h.clone());
+                    tokio::spawn(async move {
+                        let mut req = Vec::new();
+                        let mut buf = [0u8; 1024];
+                        while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                            match sock.read(&mut buf).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(n) => req.extend_from_slice(&buf[..n]),
+                            }
+                        }
+                        let head = String::from_utf8_lossy(&req).into_owned();
+                        let path = head.split_whitespace().nth(1).unwrap_or("/").to_string();
+                        hits.lock().unwrap().push(path.clone());
+                        let route = routes
+                            .lock()
+                            .unwrap()
+                            .get(&path)
+                            .cloned()
+                            .unwrap_or_else(|| Route::status(404));
+                        let mut resp =
+                            format!("HTTP/1.1 {} X\r\nConnection: close\r\n", route.status);
+                        for (k, v) in &route.headers {
+                            resp += &format!("{k}: {v}\r\n");
+                        }
+                        if route.content_length {
+                            resp += &format!("Content-Length: {}\r\n", route.body.len());
+                        }
+                        resp += "\r\n";
+                        let _ = sock.write_all(resp.as_bytes()).await;
+                        let _ = sock.write_all(&route.body).await;
+                        let _ = sock.shutdown().await;
+                    });
+                }
+            });
+            Self { base, routes, hits }
+        }
+
+        /// Serve `route` at `path` (e.g. `/a/b.zip`).
+        pub fn route(&self, path: &str, route: Route) -> &Self {
+            self.routes.lock().unwrap().insert(path.into(), route);
+            self
+        }
+
+        /// Absolute URL for `path`.
+        pub fn url(&self, path: &str) -> String {
+            format!("{}{}", self.base, path)
+        }
+
+        /// Paths requested so far, in order.
+        pub fn hits(&self) -> Vec<String> {
+            self.hits.lock().unwrap().clone()
+        }
+    }
+
+    /// An in-memory zip with `entries` (names ending in `/` become
+    /// directories) plus an optional `(name, target)` symlink entry.
+    pub fn build_zip(entries: &[(&str, &[u8])], symlink: Option<(&str, &str)>) -> Vec<u8> {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, data) in entries {
+            if name.ends_with('/') {
+                w.add_directory(*name, SimpleFileOptions::default())
+                    .unwrap();
+            } else {
+                w.start_file(*name, SimpleFileOptions::default()).unwrap();
+                w.write_all(data).unwrap();
+            }
+        }
+        if let Some((name, target)) = symlink {
+            w.add_symlink(name, target, SimpleFileOptions::default())
+                .unwrap();
+        }
+        w.finish().unwrap().into_inner()
+    }
+
+    /// Lowercase hex SHA-256 of `bytes`.
+    pub fn sha256_hex(bytes: &[u8]) -> String {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(bytes))
+    }
+
+    /// Behaviour of a [`fake_tool`] script, applied in field order.
+    #[derive(Debug, Default, Clone)]
+    pub struct Script {
+        /// Seconds to wait before doing anything else.
+        pub sleep_secs: u32,
+        /// Copy `from` to `to` (stands in for files the real tool writes).
+        pub copy: Option<(std::path::PathBuf, std::path::PathBuf)>,
+        /// Bytes written to stdout.
+        pub stdout: String,
+        /// Bytes written to stderr.
+        pub stderr: String,
+        /// Process exit code.
+        pub exit_code: i32,
+    }
+
+    /// Write a scripted stand-in for the external tool `stem` into `dir` and
+    /// return its path.
+    ///
+    /// The script is `<stem>` (POSIX sh) on Unix and `<stem>.cmd` on Windows;
+    /// see [`crate::services::binary::platform_exe`] for how a `.cmd` fixture
+    /// stands in for `<stem>.exe` in Windows tests. Output comes from data
+    /// files next to the script, so arbitrary text replays byte for byte.
+    pub fn fake_tool(dir: &std::path::Path, stem: &str, script: &Script) -> std::path::PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let out = dir.join(format!("{stem}.stdout.txt"));
+        let err = dir.join(format!("{stem}.stderr.txt"));
+        std::fs::write(&out, &script.stdout).unwrap();
+        std::fs::write(&err, &script.stderr).unwrap();
+        let q = |p: &std::path::Path| p.display().to_string();
+
+        #[cfg(windows)]
+        let (path, body) = {
+            let mut body = String::from("@echo off\r\n");
+            if script.sleep_secs > 0 {
+                body += &format!("ping -n {} 127.0.0.1 >nul\r\n", script.sleep_secs + 1);
+            }
+            if let Some((from, to)) = &script.copy {
+                body += &format!("copy /y \"{}\" \"{}\" >nul\r\n", q(from), q(to));
+            }
+            body += &format!("type \"{}\"\r\n", q(&out));
+            body += &format!("type \"{}\" 1>&2\r\n", q(&err));
+            body += &format!("exit /b {}\r\n", script.exit_code);
+            (dir.join(format!("{stem}.cmd")), body)
+        };
+
+        #[cfg(not(windows))]
+        let (path, body) = {
+            let mut body = String::from("#!/bin/sh\n");
+            if script.sleep_secs > 0 {
+                body += &format!("sleep {}\n", script.sleep_secs);
+            }
+            if let Some((from, to)) = &script.copy {
+                body += &format!("cp '{}' '{}'\n", q(from), q(to));
+            }
+            body += &format!("cat '{}'\n", q(&out));
+            body += &format!("cat '{}' >&2\n", q(&err));
+            body += &format!("exit {}\n", script.exit_code);
+            (dir.join(stem), body)
+        };
+
+        std::fs::write(&path, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        path
+    }
 }
 
 #[cfg(test)]

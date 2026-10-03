@@ -19,7 +19,7 @@ use crate::services::{binary, ffmpeg};
 use crate::utils::{path_policy, paths};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
@@ -34,7 +34,7 @@ pub struct CaptionProgress {
     pub message: String,
 }
 
-fn emit_progress(app: &AppHandle, stage: &str, progress: f32, message: &str) {
+fn emit_progress<R: Runtime>(app: &AppHandle<R>, stage: &str, progress: f32, message: &str) {
     let _ = app.emit(
         "caption-progress",
         CaptionProgress {
@@ -61,6 +61,29 @@ const HF_MODEL_BASE: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolv
 
 /// Name of the directory (inside the binaries dir) that holds whisper.cpp.
 const WHISPER_DIR: &str = "whisper";
+
+/// Where whisper.cpp and the models are downloaded from. Always
+/// [`CaptionSources::upstream`] in the app; tests point it at a local server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CaptionSources {
+    /// URL of the whisper.cpp Windows bundle.
+    pub whisper_zip: String,
+    /// Pinned SHA-256 of `whisper_zip`.
+    pub whisper_zip_sha256: String,
+    /// Base URL that `ggml-<id>.bin` model files are joined onto.
+    pub model_base: String,
+}
+
+impl CaptionSources {
+    /// The pinned upstream locations.
+    pub fn upstream() -> Self {
+        Self {
+            whisper_zip: WHISPER_WIN_ZIP.into(),
+            whisper_zip_sha256: WHISPER_WIN_ZIP_SHA256.into(),
+            model_base: format!("{HF_MODEL_BASE}/{HF_REVISION}"),
+        }
+    }
+}
 
 /// A downloadable GGML model with its pinned digest and size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,7 +194,7 @@ pub struct CaptionResult {
 }
 
 /// Directory holding GGML model files (`<app-data>/models`).
-fn models_dir(app: &AppHandle) -> Result<PathBuf> {
+fn models_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
     let dir = paths::get_app_data_dir(app)?.join("models");
     std::fs::create_dir_all(&dir)
         .map_err(|e| ClipyError::Other(format!("Failed to create models dir: {}", e)))?;
@@ -190,11 +213,11 @@ fn whisper_cli_in(binaries_dir: &Path) -> PathBuf {
     } else {
         "whisper-cli"
     };
-    whisper_dir_in(binaries_dir).join(name)
+    binary::platform_exe(whisper_dir_in(binaries_dir).join(name))
 }
 
 /// Path to the `whisper-cli` executable.
-pub fn whisper_cli_path(app: &AppHandle) -> Result<PathBuf> {
+pub fn whisper_cli_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
     Ok(whisper_cli_in(&paths::get_binaries_dir(app)?))
 }
 
@@ -203,19 +226,19 @@ fn model_file_name(model: &WhisperModel) -> String {
     format!("ggml-{}.bin", model.id)
 }
 
-/// Pinned download URL for an allowlisted model.
-fn model_url(model: &WhisperModel) -> String {
-    format!("{HF_MODEL_BASE}/{HF_REVISION}/{}", model_file_name(model))
+/// Download URL for an allowlisted model under `base`.
+fn model_url(base: &str, model: &WhisperModel) -> String {
+    format!("{base}/{}", model_file_name(model))
 }
 
 /// Path of the model file for `model` (validated against the allowlist).
-pub fn model_path(app: &AppHandle, model: &str) -> Result<PathBuf> {
+pub fn model_path<R: Runtime>(app: &AppHandle<R>, model: &str) -> Result<PathBuf> {
     let m = find_model(model)?;
     Ok(models_dir(app)?.join(model_file_name(m)))
 }
 
 /// True when both the whisper binary and the requested model are present.
-pub fn is_ready(app: &AppHandle, model: &str) -> bool {
+pub fn is_ready<R: Runtime>(app: &AppHandle<R>, model: &str) -> bool {
     whisper_cli_path(app).map(|p| p.exists()).unwrap_or(false)
         && model_path(app, model).map(|p| p.exists()).unwrap_or(false)
 }
@@ -227,12 +250,21 @@ fn model_file_ok(path: &Path, model: &WhisperModel) -> bool {
 }
 
 /// Download (if missing) the whisper binary and the requested GGML model.
-pub async fn ensure_installed(app: &AppHandle, model: &str) -> Result<()> {
+pub async fn ensure_installed<R: Runtime>(app: &AppHandle<R>, model: &str) -> Result<()> {
+    ensure_installed_from(app, &CaptionSources::upstream(), model).await
+}
+
+/// [`ensure_installed`] downloading from `src`.
+async fn ensure_installed_from<R: Runtime>(
+    app: &AppHandle<R>,
+    src: &CaptionSources,
+    model: &str,
+) -> Result<()> {
     let model = find_model(model)?;
     let binaries_dir = paths::get_binaries_dir(app)?;
     if !whisper_cli_in(&binaries_dir).exists() {
         emit_progress(app, "download", -1.0, "Downloading speech engine…");
-        install_whisper_binary(&binaries_dir).await?;
+        install_whisper_binary(src, &binaries_dir).await?;
     }
     let target = models_dir(app)?.join(model_file_name(model));
     if !model_file_ok(&target, model) {
@@ -243,16 +275,16 @@ pub async fn ensure_installed(app: &AppHandle, model: &str) -> Result<()> {
             -1.0,
             &format!("Downloading {} model (first use only)…", model.id),
         );
-        download_model(model, &target).await?;
+        download_model(src, model, &target).await?;
     }
     Ok(())
 }
 
-/// Download and verify one model to `target`.
-async fn download_model(model: &WhisperModel, target: &Path) -> Result<()> {
+/// Download and verify one model from `src` to `target`.
+async fn download_model(src: &CaptionSources, model: &WhisperModel, target: &Path) -> Result<()> {
     binary::download_verified(
         &binary::http_client()?,
-        &model_url(model),
+        &model_url(&src.model_base, model),
         target,
         model.sha256,
         model.size,
@@ -262,22 +294,28 @@ async fn download_model(model: &WhisperModel, target: &Path) -> Result<()> {
 
 /// Download, verify and extract the prebuilt whisper.cpp bundle (Windows only
 /// for now; other platforms need a system `whisper-cli`).
-async fn install_whisper_binary(binaries_dir: &Path) -> Result<()> {
+async fn install_whisper_binary(src: &CaptionSources, binaries_dir: &Path) -> Result<()> {
     if !cfg!(target_os = "windows") {
         return Err(ClipyError::Other(
             "Automatic whisper install is currently Windows-only; install whisper-cli on PATH"
                 .into(),
         ));
     }
+    install_whisper_bundle(src, binaries_dir).await
+}
+
+/// Download, verify and extract the whisper.cpp bundle from `src` into
+/// `binaries_dir/whisper`, then drop files older installers left behind.
+async fn install_whisper_bundle(src: &CaptionSources, binaries_dir: &Path) -> Result<()> {
     info!("Downloading whisper.cpp {} binary bundle", WHISPER_VERSION);
     let dir = whisper_dir_in(binaries_dir);
     std::fs::create_dir_all(&dir)?;
     let zip_path = dir.join(".whisper-download.zip");
     binary::download_verified(
         &binary::http_client()?,
-        WHISPER_WIN_ZIP,
+        &src.whisper_zip,
         &zip_path,
-        WHISPER_WIN_ZIP_SHA256,
+        &src.whisper_zip_sha256,
         64 * 1024 * 1024,
     )
     .await?;
@@ -363,8 +401,8 @@ fn caption_stem(source: &Path) -> String {
 }
 
 /// Full transcription pipeline for a source media file.
-pub async fn generate_captions(
-    app: &AppHandle,
+pub async fn generate_captions<R: Runtime>(
+    app: &AppHandle<R>,
     source_path: &str,
     model: &str,
 ) -> Result<CaptionResult> {
@@ -658,7 +696,7 @@ mod tests {
         let m = find_model("base.en").unwrap();
         assert_eq!(model_file_name(m), "ggml-base.en.bin");
         assert_eq!(
-            model_url(m),
+            model_url(&CaptionSources::upstream().model_base, m),
             format!(
                 "https://huggingface.co/ggerganov/whisper.cpp/resolve/{HF_REVISION}/ggml-base.en.bin"
             )
@@ -769,38 +807,277 @@ mod tests {
         assert_eq!(t, "ok\n");
     }
 
-    #[tokio::test]
-    async fn non_windows_install_is_refused() {
-        if cfg!(target_os = "windows") {
-            return;
+    use crate::test_support::{
+        build_zip, fake_tool, mock_app_in_tempdir, sha256_hex, Route, Script, TestServer,
+    };
+    use std::sync::{Arc, Mutex};
+    use tauri::Listener;
+
+    /// The whisper.cpp release layout: CLI, its DLLs and tools we skip.
+    fn bundle_zip() -> Vec<u8> {
+        build_zip(
+            &[
+                ("Release/whisper-cli.exe", b"CLI"),
+                ("Release/whisper.dll", b"W"),
+                ("Release/ggml-cpu.dll", b"G"),
+                ("Release/SDL2.dll", b"S"),
+            ],
+            None,
+        )
+    }
+
+    /// Sources serving `zip` (listed with `zip_sha`) and models from `server`.
+    fn local_sources(server: &TestServer, zip: Vec<u8>, zip_sha: &str) -> CaptionSources {
+        server.route("/whisper.zip", Route::ok(zip));
+        CaptionSources {
+            whisper_zip: server.url("/whisper.zip"),
+            whisper_zip_sha256: zip_sha.into(),
+            model_base: server.url("/models"),
         }
+    }
+
+    /// Install the bundle from `src` next to a legacy DLL and check the layout.
+    /// Shared by the local and the network test.
+    async fn assert_bundle_installs(src: &CaptionSources) {
         let dir = tempfile::tempdir().unwrap();
-        assert!(install_whisper_binary(dir.path()).await.is_err());
+        std::fs::write(dir.path().join("ggml.dll"), b"legacy").unwrap();
+        install_whisper_bundle(src, dir.path()).await.unwrap();
+        let whisper = whisper_dir_in(dir.path());
+        assert!(whisper.join("whisper-cli.exe").exists());
+        assert!(whisper.join("whisper.dll").exists());
+        assert!(!whisper.join("SDL2.dll").exists());
+        assert!(!whisper.join(".whisper-download.zip").exists());
+        assert!(!dir.path().join("ggml.dll").exists());
+    }
+
+    /// Download `model` from `src` and check it landed intact. Shared by the
+    /// local and the network test.
+    async fn assert_model_downloads(src: &CaptionSources, model: &WhisperModel) {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join(model_file_name(model));
+        download_model(src, model, &target).await.unwrap();
+        assert!(model_file_ok(&target, model));
+        assert_eq!(binary::sha256_file(&target).unwrap(), model.sha256);
+    }
+
+    #[tokio::test]
+    async fn bundle_and_model_install_from_verified_downloads() {
+        let server = TestServer::start().await;
+        let zip = bundle_zip();
+        let sha = sha256_hex(&zip);
+        let src = local_sources(&server, zip, &sha);
+        assert_bundle_installs(&src).await;
+
+        let weights = b"GGML weights".to_vec();
+        let model = WhisperModel {
+            id: "test",
+            sha256: Box::leak(sha256_hex(&weights).into_boxed_str()),
+            size: weights.len() as u64,
+        };
+        server.route("/models/ggml-test.bin", Route::ok(weights));
+        assert_model_downloads(&src, &model).await;
+    }
+
+    #[tokio::test]
+    async fn bundle_install_rejects_bad_hash_and_missing_cli() {
+        let server = TestServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let src = local_sources(&server, bundle_zip(), &sha256_hex(b"other"));
+        let err = install_whisper_bundle(&src, dir.path()).await.unwrap_err();
+        assert!(err.to_string().contains("Checksum mismatch"), "{err}");
+        let whisper = whisper_dir_in(dir.path());
+        assert_eq!(std::fs::read_dir(&whisper).unwrap().count(), 0);
+
+        let no_cli = build_zip(&[("Release/whisper.dll", b"W")], None);
+        let sha = sha256_hex(&no_cli);
+        let src = local_sources(&server, no_cli, &sha);
+        let err = install_whisper_bundle(&src, dir.path()).await.unwrap_err();
+        assert!(
+            err.to_string().contains("whisper-cli.exe not found"),
+            "{err}"
+        );
+        assert!(!whisper.join(".whisper-download.zip").exists());
+    }
+
+    #[tokio::test]
+    async fn engine_install_is_windows_only() {
+        let server = TestServer::start().await;
+        let zip = bundle_zip();
+        let sha = sha256_hex(&zip);
+        let src = local_sources(&server, zip, &sha);
+        let dir = tempfile::tempdir().unwrap();
+        let result = install_whisper_binary(&src, dir.path()).await;
+        assert_eq!(result.is_ok(), cfg!(target_os = "windows"), "{result:?}");
+        assert_eq!(
+            whisper_dir_in(dir.path()).join("whisper-cli.exe").exists(),
+            cfg!(target_os = "windows")
+        );
+    }
+
+    /// Record every `caption-progress` stage emitted by `app`.
+    fn record_stages(app: &tauri::App<tauri::test::MockRuntime>) -> Arc<Mutex<Vec<String>>> {
+        let stages = Arc::new(Mutex::new(Vec::new()));
+        let sink = stages.clone();
+        app.listen_any("caption-progress", move |e| {
+            let v: serde_json::Value = serde_json::from_str(e.payload()).unwrap();
+            sink.lock()
+                .unwrap()
+                .push(v["stage"].as_str().unwrap().to_string());
+        });
+        stages
+    }
+
+    #[tokio::test]
+    async fn ensure_installed_downloads_only_what_is_missing() {
+        let app = mock_app_in_tempdir();
+        let stages = record_stages(&app);
+        let server = TestServer::start().await;
+        // The pinned model hash can never match test bytes: the download must
+        // be refused and nothing left at the model path.
+        server.route(
+            "/models/ggml-tiny.en.bin",
+            Route::ok(b"not the model".to_vec()),
+        );
+        let bin = paths::get_binaries_dir(app.handle()).unwrap();
+        fake_tool(&whisper_dir_in(&bin), "whisper-cli", &Script::default());
+        let src = local_sources(&server, Vec::new(), &sha256_hex(b""));
+
+        assert!(!is_ready(app.handle(), "tiny.en"));
+        let err = ensure_installed_from(app.handle(), &src, "tiny.en")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Checksum mismatch"), "{err}");
+        let model = model_path(app.handle(), "tiny.en").unwrap();
+        assert!(!model.exists());
+        assert_eq!(*stages.lock().unwrap(), ["download"]);
+        assert!(ensure_installed_from(app.handle(), &src, "../x")
+            .await
+            .is_err());
+
+        // A file of the pinned size counts as installed; nothing is fetched.
+        let f = std::fs::File::create(&model).unwrap();
+        f.set_len(find_model("tiny.en").unwrap().size).unwrap();
+        drop(f);
+        let hits = server.hits().len();
+        ensure_installed(app.handle(), "tiny.en").await.unwrap();
+        assert_eq!(server.hits().len(), hits);
+        assert!(is_ready(app.handle(), "tiny.en"));
+        assert_eq!(
+            whisper_cli_path(app.handle()).unwrap(),
+            whisper_cli_in(&bin)
+        );
+    }
+
+    /// A mock app with scripted ffmpeg and whisper-cli, an installed `tiny`
+    /// model of the pinned size, and a source clip.
+    fn captions_app(
+        ffmpeg: &Script,
+        whisper: &Script,
+    ) -> (tauri::App<tauri::test::MockRuntime>, PathBuf) {
+        let app = mock_app_in_tempdir();
+        let bin = paths::get_binaries_dir(app.handle()).unwrap();
+        fake_tool(&bin, "ffmpeg", ffmpeg);
+        fake_tool(&whisper_dir_in(&bin), "whisper-cli", whisper);
+        let model = model_path(app.handle(), "tiny").unwrap();
+        let f = std::fs::File::create(&model).unwrap();
+        f.set_len(find_model("tiny").unwrap().size).unwrap();
+        let source = bin.parent().unwrap().join("My Clip.mp4");
+        std::fs::write(&source, b"media").unwrap();
+        (app, source)
+    }
+
+    #[tokio::test]
+    async fn generate_captions_runs_the_whole_pipeline() {
+        let work = tempfile::tempdir().unwrap();
+        let json = work.path().join("out.json");
+        std::fs::write(
+            &json,
+            r#"{"result":{"language":"fr"},"transcription":[
+              {"text":" Bonjour","offsets":{"from":0,"to":400},"tokens":[{"p":0.5}]}]}"#,
+        )
+        .unwrap();
+        let (app, source) = captions_app(&Script::default(), &Script::default());
+        // whisper-cli writes `<-of stem>.json`; the fake copies the fixture there.
+        let out_json = paths::get_temp_dir(app.handle())
+            .unwrap()
+            .join("captions_MyClip.json");
+        let bin = paths::get_binaries_dir(app.handle()).unwrap();
+        fake_tool(
+            &whisper_dir_in(&bin),
+            "whisper-cli",
+            &Script {
+                copy: Some((json, out_json.clone())),
+                stderr: "whisper_print_progress_callback: progress = 50%\nnoise\n".into(),
+                ..Default::default()
+            },
+        );
+        let stages = record_stages(&app);
+
+        let result = generate_captions(app.handle(), &source.to_string_lossy(), "tiny")
+            .await
+            .unwrap();
+        assert_eq!(
+            (result.language.as_str(), result.model.as_str()),
+            ("fr", "tiny")
+        );
+        assert_eq!(result.words[0].text, "Bonjour");
+        assert_eq!(result.words[0].end_ms, 400);
+        assert!(!out_json.exists());
+        assert_eq!(
+            *stages.lock().unwrap(),
+            ["extract-audio", "transcribe", "transcribe", "done"]
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_captions_reports_tool_failures() {
+        let (app, source) = captions_app(
+            &Script {
+                stderr: "Invalid data found".into(),
+                exit_code: 1,
+                ..Default::default()
+            },
+            &Script::default(),
+        );
+        let src = source.to_string_lossy().into_owned();
+        let err = generate_captions(app.handle(), &src, "tiny")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Invalid data found"), "{err}");
+
+        let (app, source) = captions_app(
+            &Script::default(),
+            &Script {
+                stderr: "error: failed to load model".into(),
+                ..Default::default()
+            },
+        );
+        let src = source.to_string_lossy().into_owned();
+        let err = generate_captions(app.handle(), &src, "tiny")
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("whisper produced no output: error: failed to load model"),
+            "{msg}"
+        );
+
+        assert!(generate_captions(app.handle(), &src, "huge").await.is_err());
+        assert!(generate_captions(app.handle(), "notes.txt", "tiny")
+            .await
+            .is_err());
     }
 
     #[tokio::test]
     #[ignore = "network: downloads, verifies and extracts the real whisper.cpp bundle"]
     async fn network_install_whisper_bundle() {
-        if !cfg!(target_os = "windows") {
-            return;
-        }
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("ggml.dll"), b"legacy").unwrap();
-        install_whisper_binary(dir.path()).await.unwrap();
-        assert!(whisper_cli_in(dir.path()).exists());
-        assert!(whisper_dir_in(dir.path()).join("whisper.dll").exists());
-        assert!(!dir.path().join("ggml.dll").exists());
-        assert!(!whisper_dir_in(dir.path()).join("SDL2.dll").exists());
+        assert_bundle_installs(&CaptionSources::upstream()).await;
     }
 
     #[tokio::test]
     #[ignore = "network: downloads and verifies the real tiny.en model (~78 MB)"]
     async fn network_download_tiny_model() {
-        let dir = tempfile::tempdir().unwrap();
-        let m = find_model("tiny.en").unwrap();
-        let target = dir.path().join(model_file_name(m));
-        download_model(m, &target).await.unwrap();
-        assert!(model_file_ok(&target, m));
-        assert_eq!(binary::sha256_file(&target).unwrap(), m.sha256);
+        let model = find_model("tiny.en").unwrap();
+        assert_model_downloads(&CaptionSources::upstream(), model).await;
     }
 }
