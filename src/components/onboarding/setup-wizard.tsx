@@ -53,8 +53,8 @@ const STEPS: { key: SetupStep; label: string }[] = [
 
 const BROWSERS = [
   { value: "none", label: "None" },
-  { value: "chrome", label: "Chrome" },
   { value: "firefox", label: "Firefox" },
+  { value: "chrome", label: "Chrome" },
   { value: "edge", label: "Edge" },
   { value: "brave", label: "Brave" },
 ] as const;
@@ -574,7 +574,9 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
               <div className="flex items-center justify-between py-2">
                 <div>
                   <p className="text-sm font-medium">Browser Cookies</p>
-                  <p className="text-xs text-muted-foreground">For age-restricted videos</p>
+                  <p className="text-xs text-muted-foreground">
+                    Only for age-restricted videos. Firefox works best
+                  </p>
                 </div>
                 <Select value={cookiesFromBrowser} onValueChange={setCookiesFromBrowser}>
                   <SelectTrigger className="h-9 w-[120px]" aria-label="Browser cookies">

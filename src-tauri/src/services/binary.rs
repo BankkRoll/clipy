@@ -28,13 +28,14 @@
 use crate::error::{ClipyError, Result};
 use crate::models::settings::BinaryStatus;
 use crate::utils::paths;
+use crate::utils::process::std_command;
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::time::{Duration, SystemTime};
 use tauri::{AppHandle, Runtime};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 // -----------------------------------------------------------------------------
 // Locating binaries
@@ -67,7 +68,7 @@ pub(crate) fn platform_exe(path: PathBuf) -> PathBuf {
 /// Resolve `name` on `PATH` via `where`/`which`, returning the first hit that
 /// exists.
 fn which(name: &str) -> Option<PathBuf> {
-    let output = Command::new(if cfg!(windows) { "where" } else { "which" })
+    let output = std_command(if cfg!(windows) { "where" } else { "which" })
         .arg(name)
         .output()
         .ok()?;
@@ -96,7 +97,7 @@ fn find_binary(binaries_dir: &Path, stem: &str) -> Option<PathBuf> {
 
 /// Run `path <arg>` and return stdout when it exits successfully.
 fn run_version(path: &Path, arg: &str) -> Option<String> {
-    let output = Command::new(path).arg(arg).output().ok()?;
+    let output = std_command(path).arg(arg).output().ok()?;
     output
         .status
         .success()
@@ -726,33 +727,170 @@ pub(crate) async fn install_ytdlp_into(
     Ok(target)
 }
 
-/// Update yt-dlp to latest version.
+// -----------------------------------------------------------------------------
+// yt-dlp updates
+// -----------------------------------------------------------------------------
+
+/// What Settings and the startup updater know about the installed yt-dlp.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YtdlpUpdateStatus {
+    /// Installed version (`yt-dlp --version`), if yt-dlp is installed at all.
+    pub current: Option<String>,
+    /// Latest release tag on GitHub.
+    pub latest: String,
+    /// Whether `latest` is newer than `current`.
+    pub update_available: bool,
+    /// Whether this is Clipy's own copy, which Clipy may replace. A yt-dlp
+    /// found on PATH belongs to the user's package manager.
+    pub managed: bool,
+}
+
+/// How often the startup updater re-checks yt-dlp.
+pub const YTDLP_UPDATE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Marker whose mtime records the last automatic update check.
+const YTDLP_UPDATE_MARKER: &str = ".yt-dlp-update-check";
+
+/// Whether yt-dlp version `latest` is newer than `current`.
 ///
-/// NOTE: delegates to `yt-dlp -U`, whose updater verifies the release's
-/// `SHA2-256SUMS` itself.
-pub async fn update_ytdlp<R: Runtime>(app: &AppHandle<R>) -> Result<String> {
-    info!("Updating yt-dlp to latest version");
-    let ytdlp_path = get_ytdlp_path(app)?;
-    let output = tokio::process::Command::new(&ytdlp_path)
-        .arg("-U")
-        .output()
-        .await
-        .map_err(|e| {
-            ClipyError::BinaryExecutionFailed(format!("Failed to update yt-dlp: {}", e))
-        })?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    debug!("yt-dlp update stdout: {}", stdout);
-    if output.status.success() {
-        info!("yt-dlp updated successfully");
-        Ok(stdout.to_string())
-    } else {
-        warn!("yt-dlp update failed: {}", stderr);
-        Err(ClipyError::BinaryExecutionFailed(format!(
-            "Update failed: {}",
-            stderr
-        )))
+/// Versions are dates with an optional hotfix part (`2026.09.30`,
+/// `2026.09.30.1`), compared component by component. Anything unparsable
+/// counts as outdated so a broken install still gets replaced.
+fn is_newer_ytdlp(latest: &str, current: &str) -> bool {
+    let parse = |v: &str| -> Option<Vec<u64>> {
+        v.trim()
+            .trim_start_matches('v')
+            .split('.')
+            .map(|p| p.parse().ok())
+            .collect()
+    };
+    match (parse(latest), parse(current)) {
+        (Some(l), Some(c)) => l > c,
+        (Some(_), None) => true,
+        _ => false,
     }
+}
+
+/// Latest yt-dlp release tag, from the `releases/latest` redirect.
+async fn latest_ytdlp_tag(src: &Sources) -> Result<String> {
+    let location = resolve_redirect(&format!("{}/latest", src.ytdlp_releases)).await?;
+    parse_release_tag(&location)
+        .ok_or_else(|| ClipyError::Other(format!("Unexpected yt-dlp redirect: {location}")))
+}
+
+/// Compare the yt-dlp Clipy would run against the latest release.
+pub(crate) async fn ytdlp_update_status_in(
+    src: &Sources,
+    binaries_dir: &Path,
+) -> Result<YtdlpUpdateStatus> {
+    let managed = platform_exe(binaries_dir.join(exe_name("yt-dlp"))).exists();
+    let dir = binaries_dir.to_path_buf();
+    let current = tokio::task::spawn_blocking(move || {
+        find_binary(&dir, "yt-dlp")
+            .and_then(|p| run_version(&p, "--version"))
+            .and_then(|out| parse_ytdlp_version(&out))
+    })
+    .await
+    .map_err(|e| ClipyError::Other(format!("Version check failed: {e}")))?;
+    let latest = latest_ytdlp_tag(src).await?;
+    let update_available = current
+        .as_deref()
+        .map_or(true, |c| is_newer_ytdlp(&latest, c));
+    Ok(YtdlpUpdateStatus {
+        current,
+        latest,
+        update_available,
+        managed,
+    })
+}
+
+/// Check whether a newer yt-dlp is available.
+pub async fn check_ytdlp_update<R: Runtime>(app: &AppHandle<R>) -> Result<YtdlpUpdateStatus> {
+    ytdlp_update_status_in(&Sources::upstream(), &paths::get_binaries_dir(app)?).await
+}
+
+/// Update Clipy's own yt-dlp through the same checksum-verified installer
+/// used for first installs. Returns the installed version.
+pub(crate) async fn update_ytdlp_in(
+    src: &Sources,
+    binaries_dir: &Path,
+    os: &str,
+    arch: &str,
+) -> Result<String> {
+    let status = ytdlp_update_status_in(src, binaries_dir).await?;
+    if !status.managed {
+        return Err(match status.current {
+            Some(_) => ClipyError::Other(
+                "yt-dlp was installed outside Clipy (found on PATH); update it with the tool you installed it with".into(),
+            ),
+            None => ClipyError::BinaryNotFound("yt-dlp is not installed".into()),
+        });
+    }
+    if !status.update_available {
+        info!("yt-dlp {} is already the latest", status.latest);
+        return Ok(status.latest);
+    }
+    install_ytdlp_into(src, binaries_dir, os, arch).await?;
+    info!("yt-dlp updated to {}", status.latest);
+    Ok(status.latest)
+}
+
+/// Update yt-dlp to the latest release. Returns the installed version.
+pub async fn update_ytdlp<R: Runtime>(app: &AppHandle<R>) -> Result<String> {
+    update_ytdlp_in(
+        &Sources::upstream(),
+        &paths::get_binaries_dir(app)?,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    )
+    .await
+}
+
+/// Whether the last automatic check (marker mtime) is older than `interval`.
+fn update_check_due(marker: &Path, now: SystemTime, interval: Duration) -> bool {
+    std::fs::metadata(marker)
+        .and_then(|m| m.modified())
+        // A marker newer than `now` means a check just happened.
+        .map(|last| now.duration_since(last).is_ok_and(|age| age >= interval))
+        .unwrap_or(true)
+}
+
+/// Startup updater: at most once per [`YTDLP_UPDATE_INTERVAL`], replace
+/// Clipy's own yt-dlp when a newer release exists. Never touches a yt-dlp
+/// on PATH. Returns the new version when it updated.
+pub(crate) async fn auto_update_ytdlp_in(
+    src: &Sources,
+    binaries_dir: &Path,
+    (os, arch): (&str, &str),
+    now: SystemTime,
+) -> Result<Option<String>> {
+    if !platform_exe(binaries_dir.join(exe_name("yt-dlp"))).exists() {
+        return Ok(None);
+    }
+    let marker = binaries_dir.join(YTDLP_UPDATE_MARKER);
+    if !update_check_due(&marker, now, YTDLP_UPDATE_INTERVAL) {
+        return Ok(None);
+    }
+    // Recorded before checking so an offline launch doesn't retry every time.
+    std::fs::write(&marker, b"")?;
+    let status = ytdlp_update_status_in(src, binaries_dir).await?;
+    if !status.update_available {
+        return Ok(None);
+    }
+    install_ytdlp_into(src, binaries_dir, os, arch).await?;
+    Ok(Some(status.latest))
+}
+
+/// [`auto_update_ytdlp_in`] for the app's binaries directory.
+pub async fn auto_update_ytdlp<R: Runtime>(app: &AppHandle<R>) -> Result<Option<String>> {
+    auto_update_ytdlp_in(
+        &Sources::upstream(),
+        &paths::get_binaries_dir(app)?,
+        (std::env::consts::OS, std::env::consts::ARCH),
+        SystemTime::now(),
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -1177,48 +1315,160 @@ mod tests {
         assert_eq!(get_ffprobe_path(app.handle()).unwrap(), ffprobe);
     }
 
+    #[test]
+    fn ytdlp_versions_compare_by_date_parts() {
+        assert!(is_newer_ytdlp("2026.09.30", "2026.06.09"));
+        assert!(is_newer_ytdlp("2026.09.30.1", "2026.09.30"));
+        assert!(is_newer_ytdlp("2027.01.01", "2026.12.31"));
+        assert!(!is_newer_ytdlp("2026.06.09", "2026.06.09"));
+        assert!(!is_newer_ytdlp("2026.06.09", "2026.09.30"));
+        assert!(is_newer_ytdlp("2026.06.09", "garbage"));
+        assert!(!is_newer_ytdlp("garbage", "2026.06.09"));
+    }
+
+    /// A fake yt-dlp in `dir` that reports `version`.
+    fn fake_ytdlp(dir: &Path, version: &str) {
+        fake_tool(
+            dir,
+            "yt-dlp",
+            &Script {
+                stdout: format!("{version}\n"),
+                ..Default::default()
+            },
+        );
+    }
+
     #[tokio::test]
-    async fn update_ytdlp_reports_output_and_failures() {
-        let app = mock_app_in_tempdir();
-        let bin = paths::get_binaries_dir(app.handle()).unwrap();
-        fake_tool(
-            &bin,
-            "yt-dlp",
-            &Script {
-                stdout: "Updated yt-dlp to 2099.01.01\n".into(),
-                ..Default::default()
-            },
-        );
-        let out = update_ytdlp(app.handle()).await.unwrap();
-        assert!(out.contains("Updated yt-dlp to 2099.01.01"), "{out}");
+    async fn update_status_compares_installed_and_latest() {
+        let server = TestServer::start().await;
+        serve_ytdlp_release(&server, "2099.01.01", b"new", &sha256_hex(b"new"));
+        let src = local_sources(&server);
+        let dir = tempfile::tempdir().unwrap();
 
-        fake_tool(
-            &bin,
-            "yt-dlp",
-            &Script {
-                stderr: "ERROR: unable to write\n".into(),
-                exit_code: 1,
-                ..Default::default()
-            },
+        fake_ytdlp(dir.path(), "2026.06.09");
+        let status = ytdlp_update_status_in(&src, dir.path()).await.unwrap();
+        assert_eq!(
+            status,
+            YtdlpUpdateStatus {
+                current: Some("2026.06.09".into()),
+                latest: "2099.01.01".into(),
+                update_available: true,
+                managed: true,
+            }
         );
-        let err = update_ytdlp(app.handle()).await.unwrap_err();
-        assert!(matches!(err, ClipyError::BinaryExecutionFailed(_)));
-        assert!(err.to_string().contains("ERROR: unable to write"), "{err}");
 
-        // A file that is found but cannot be executed.
-        let junk = bin.join(exe_name("yt-dlp"));
-        std::fs::write(&junk, b"not a program").unwrap();
-        // NOTE: the fake tool left the exec bit set, and macOS hands an
-        // executable it can't load to /bin/sh, which would run the junk as a
-        // script. Without the bit, spawning fails the same way on every Unix.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&junk, std::fs::Permissions::from_mode(0o644)).unwrap();
-        }
-        assert_eq!(platform_exe(junk.clone()), junk);
-        let err = update_ytdlp(app.handle()).await.unwrap_err();
-        assert!(err.to_string().contains("Failed to update yt-dlp"), "{err}");
+        fake_ytdlp(dir.path(), "2099.01.01");
+        let status = ytdlp_update_status_in(&src, dir.path()).await.unwrap();
+        assert!(!status.update_available);
+    }
+
+    #[tokio::test]
+    async fn update_replaces_only_clipys_own_copy_and_verifies_it() {
+        let server = TestServer::start().await;
+        let body = b"#!/bin/sh\necho 2099.01.01\n";
+        serve_ytdlp_release(&server, "2099.01.01", body, &sha256_hex(body));
+        let src = local_sources(&server);
+
+        let empty = tempfile::tempdir().unwrap();
+        let err = update_ytdlp_in(&src, empty.path(), "linux", "x86_64")
+            .await
+            .unwrap_err();
+        // Either "installed outside Clipy" (a yt-dlp on PATH) or not managed
+        // at all; never an install into a directory Clipy doesn't own.
+        let msg = err.to_string();
+        assert!(
+            msg.contains("outside Clipy") || msg.contains("not installed"),
+            "{msg}"
+        );
+        assert!(dir_names(empty.path()).is_empty());
+
+        let dir = tempfile::tempdir().unwrap();
+        fake_ytdlp(dir.path(), "2099.01.01");
+        assert_eq!(
+            update_ytdlp_in(&src, dir.path(), "linux", "x86_64")
+                .await
+                .unwrap(),
+            "2099.01.01"
+        );
+        assert!(!server.hits().iter().any(|h| h.ends_with("/yt-dlp_linux")));
+
+        fake_ytdlp(dir.path(), "2026.06.09");
+        assert_eq!(
+            update_ytdlp_in(&src, dir.path(), "linux", "x86_64")
+                .await
+                .unwrap(),
+            "2099.01.01"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join(exe_name("yt-dlp"))).unwrap(),
+            body
+        );
+    }
+
+    #[test]
+    fn update_checks_are_due_once_per_interval() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker");
+        let day = Duration::from_secs(86_400);
+        assert!(update_check_due(&marker, SystemTime::now(), day));
+        std::fs::write(&marker, b"").unwrap();
+        let now = SystemTime::now();
+        assert!(!update_check_due(&marker, now, day));
+        assert!(update_check_due(&marker, now + day, day));
+    }
+
+    #[tokio::test]
+    async fn auto_update_runs_at_most_daily_and_skips_unmanaged_installs() {
+        let server = TestServer::start().await;
+        let body = b"#!/bin/sh\necho 2099.01.01\n";
+        serve_ytdlp_release(&server, "2099.01.01", body, &sha256_hex(body));
+        let src = local_sources(&server);
+        let now = SystemTime::now();
+        let linux = ("linux", "x86_64");
+
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(
+            auto_update_ytdlp_in(&src, empty.path(), linux, now)
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(server.hits().is_empty());
+
+        let dir = tempfile::tempdir().unwrap();
+        fake_ytdlp(dir.path(), "2026.06.09");
+        assert_eq!(
+            auto_update_ytdlp_in(&src, dir.path(), linux, now)
+                .await
+                .unwrap(),
+            Some("2099.01.01".into())
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join(exe_name("yt-dlp"))).unwrap(),
+            body
+        );
+
+        let hits = server.hits().len();
+        fake_ytdlp(dir.path(), "2026.06.09");
+        assert_eq!(
+            auto_update_ytdlp_in(&src, dir.path(), linux, now)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            server.hits().len(),
+            hits,
+            "checked again within the interval"
+        );
+
+        let tomorrow = now + YTDLP_UPDATE_INTERVAL + Duration::from_secs(60);
+        assert_eq!(
+            auto_update_ytdlp_in(&src, dir.path(), linux, tomorrow)
+                .await
+                .unwrap(),
+            Some("2099.01.01".into())
+        );
     }
 
     #[tokio::test]

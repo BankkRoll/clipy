@@ -532,8 +532,17 @@ describe("maintenance actions", () => {
 });
 
 describe("required components", () => {
-  it("installs missing tools and updates yt-dlp", async () => {
+  const ytdlpUpdate = (updateAvailable: boolean, over: Record<string, unknown> = {}) => ({
+    current: updateAvailable ? "2026.06.09" : "2026.09.30",
+    latest: "2026.09.30",
+    updateAvailable,
+    managed: true,
+    ...over,
+  });
+
+  it("installs missing tools, then updates yt-dlp only when a newer release exists", async () => {
     let status = binaryStatusFixture({ ffmpegInstalled: false, ytdlpInstalled: false });
+    let updated = false;
     const { user, backend } = setup({
       check_binaries: () => status,
       install_ffmpeg: () => {
@@ -544,19 +553,38 @@ describe("required components", () => {
         status = { ...status, ytdlpInstalled: true };
         return null;
       },
+      check_ytdlp_update: () => ytdlpUpdate(!updated),
+      update_ytdlp: () => {
+        updated = true;
+        return "2026.09.30";
+      },
     });
     await openTab(user, "Advanced");
     const ffmpeg = within(await screen.findByRole("group", { name: "FFmpeg" }));
     await user.click(await ffmpeg.findByRole("button", { name: /Install/ }));
     expect(await screen.findByText("FFmpeg installed successfully")).toBeInTheDocument();
+    expect(backend.callsTo("check_ytdlp_update")).toHaveLength(0);
 
     const ytdlp = within(screen.getByRole("group", { name: "yt-dlp" }));
     await user.click(ytdlp.getByRole("button", { name: /Install/ }));
     expect(await screen.findByText("yt-dlp installed successfully")).toBeInTheDocument();
 
-    await user.click(await ytdlp.findByRole("button", { name: /Update/ }));
+    await user.click(await ytdlp.findByRole("button", { name: "Update to 2026.09.30" }));
     expect(await screen.findByText("yt-dlp updated successfully")).toBeInTheDocument();
     expect(backend.callsTo("update_ytdlp")).toHaveLength(1);
+    expect(await ytdlp.findByText(/· up to date$/)).toBeInTheDocument();
+    expect(ytdlp.queryByRole("button", { name: /Update to/ })).toBeNull();
+  });
+
+  it("checks yt-dlp once, only on the Advanced tab", async () => {
+    const { user, backend } = setup({ check_ytdlp_update: () => ytdlpUpdate(false) });
+    expect(backend.callsTo("check_ytdlp_update")).toHaveLength(0);
+    await openTab(user, "Advanced");
+    const ytdlp = within(screen.getByRole("group", { name: "yt-dlp" }));
+    expect(await ytdlp.findByText(/· up to date$/)).toBeInTheDocument();
+    await openTab(user, "General");
+    await openTab(user, "Advanced");
+    expect(backend.callsTo("check_ytdlp_update")).toHaveLength(1);
   });
 
   it.each([
@@ -577,17 +605,42 @@ describe("required components", () => {
 
   it("reports a failed yt-dlp update and refreshes status on demand", async () => {
     const { user, backend } = setup({
+      check_ytdlp_update: () => ytdlpUpdate(true),
       update_ytdlp: () => {
         throw "rate limited";
       },
     });
     await openTab(user, "Advanced");
     const ytdlp = within(screen.getByRole("group", { name: "yt-dlp" }));
-    await user.click(await ytdlp.findByRole("button", { name: /Update/ }));
+    await user.click(await ytdlp.findByRole("button", { name: /Update to/ }));
     expect(await screen.findByText("Failed to update yt-dlp")).toBeInTheDocument();
     const before = backend.callsTo("check_binaries").length;
     await user.click(screen.getByRole("button", { name: "Refresh component status" }));
     await waitFor(() => expect(backend.callsTo("check_binaries").length).toBe(before + 1));
+  });
+
+  it("offers a retry when the update check can't reach GitHub", async () => {
+    let online = false;
+    const { user, backend } = setup({
+      check_ytdlp_update: () => {
+        if (!online) throw "offline";
+        return ytdlpUpdate(true);
+      },
+    });
+    await openTab(user, "Advanced");
+    const ytdlp = within(screen.getByRole("group", { name: "yt-dlp" }));
+    online = true;
+    await user.click(await ytdlp.findByRole("button", { name: "Check for updates" }));
+    expect(await ytdlp.findByRole("button", { name: "Update to 2026.09.30" })).toBeInTheDocument();
+    expect(backend.callsTo("check_ytdlp_update")).toHaveLength(2);
+  });
+
+  it("leaves a yt-dlp installed outside Clipy alone", async () => {
+    const { user } = setup({ check_ytdlp_update: () => ytdlpUpdate(true, { managed: false }) });
+    await openTab(user, "Advanced");
+    const ytdlp = within(screen.getByRole("group", { name: "yt-dlp" }));
+    expect(await ytdlp.findByText(/managed outside Clipy$/)).toBeInTheDocument();
+    expect(ytdlp.queryByRole("button")).toBeNull();
   });
 });
 

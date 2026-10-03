@@ -17,6 +17,11 @@ import {
 } from "@/components/settings";
 import { settingsFixture } from "@/test/fixtures";
 import type { AppSettings } from "@/hooks/useSettings";
+import type { YtdlpUpdateStatus } from "@/hooks/useTauri";
+import type {
+  BinaryCardProps,
+  BinaryUpdateState,
+} from "@/components/settings/components/binary-card";
 
 const OPTIONAL_DOWNLOAD_FIELDS = [
   "filenameTemplate",
@@ -222,6 +227,9 @@ describe("settings tabs with sparse settings", () => {
         installingFfmpeg={false}
         installingYtdlp={false}
         updatingYtdlp={false}
+        ytdlpUpdate={null}
+        checkingYtdlpUpdate={false}
+        onCheckYtdlpUpdate={vi.fn()}
       />
     );
     expect(item("Cache").getByText("0 MB used")).toBeInTheDocument();
@@ -251,6 +259,9 @@ describe("settings tabs with sparse settings", () => {
         installingFfmpeg={false}
         installingYtdlp={false}
         updatingYtdlp={false}
+        ytdlpUpdate={null}
+        checkingYtdlpUpdate={false}
+        onCheckYtdlpUpdate={vi.fn()}
       />
     );
     expect(screen.getAllByText("Checking status...")).toHaveLength(2);
@@ -258,26 +269,85 @@ describe("settings tabs with sparse settings", () => {
 });
 
 describe("BinaryCard", () => {
-  it("shows installing and update states", () => {
-    const { rerender } = render(
+  const status = (over: Partial<YtdlpUpdateStatus> = {}): YtdlpUpdateStatus => ({
+    current: "2026.06.09",
+    latest: "2026.09.30",
+    updateAvailable: true,
+    managed: true,
+    ...over,
+  });
+  const ytdlp = (update: BinaryUpdateState, extra: Partial<BinaryCardProps> = {}) => (
+    <BinaryCard
+      name="yt-dlp"
+      version="2026.06.09"
+      installed
+      loading={false}
+      installing={false}
+      onInstall={vi.fn()}
+      onUpdate={vi.fn()}
+      update={update}
+      {...extra}
+    />
+  );
+
+  it("offers Install while missing and disables it while installing", () => {
+    render(
       <BinaryCard name="yt-dlp" installed={false} loading={false} installing onInstall={vi.fn()} />
     );
+    expect(screen.getByText("Not installed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Install/ })).toBeDisabled();
+  });
+
+  it("offers an update only when a newer managed release exists", async () => {
+    const onUpdate = vi.fn();
+    const { rerender } = render(
+      ytdlp({ status: status(), checking: false, onCheck: vi.fn() }, { onUpdate })
+    );
+    expect(screen.getByText("Version 2026.06.09 · 2026.09.30 available")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Update to 2026.09.30" }));
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+
+    rerender(ytdlp({ status: status(), checking: false, onCheck: vi.fn() }, { installing: true }));
+    expect(screen.getByRole("button", { name: /Update to/ })).toBeDisabled();
+
+    rerender(
+      ytdlp({ status: status({ updateAvailable: false }), checking: false, onCheck: vi.fn() })
+    );
+    expect(screen.getByText("Version 2026.06.09 · up to date")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
+
+    rerender(ytdlp({ status: status({ managed: false }), checking: false, onCheck: vi.fn() }));
+    expect(screen.getByText("Version 2026.06.09 · managed outside Clipy")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
+
     rerender(
       <BinaryCard
         name="yt-dlp"
-        version="2026.01.01"
+        version="2026.06.09"
         installed
         loading={false}
-        installing
+        installing={false}
         onInstall={vi.fn()}
-        onUpdate={vi.fn()}
-        canUpdate
+        update={{ status: status(), checking: false, onCheck: vi.fn() }}
       />
     );
-    expect(screen.getByText("Version 2026.01.01")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Update/ })).toBeDisabled();
-    rerender(
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("shows the check in progress and offers a retry when it failed", async () => {
+    const onCheck = vi.fn();
+    const { rerender } = render(ytdlp({ status: null, checking: true, onCheck }));
+    expect(screen.getByText("Version 2026.06.09 · checking for updates…")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
+
+    rerender(ytdlp({ status: null, checking: false, onCheck }));
+    expect(screen.getByText("Version 2026.06.09")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    expect(onCheck).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows only the version for tools Clipy doesn't update", () => {
+    render(
       <BinaryCard
         name="FFmpeg"
         version="7"
@@ -287,6 +357,7 @@ describe("BinaryCard", () => {
         onInstall={vi.fn()}
       />
     );
+    expect(screen.getByText("Version 7")).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();
   });
 });

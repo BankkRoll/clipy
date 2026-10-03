@@ -130,6 +130,9 @@ fn setup<R: Runtime>(app: &AppHandle<R>) -> std::result::Result<(), Box<dyn std:
     services::queue::init_queue(app.clone(), settings.download.max_concurrent_downloads);
 
     spawn_binary_check(app.clone());
+    if settings.general.auto_update_binaries && !utils::smoke::is_enabled() {
+        spawn_ytdlp_auto_update(app.clone());
+    }
 
     if let Some(win) = app.get_webview_window("main") {
         if should_start_hidden(settings.general.minimize_to_tray, tray_ok) {
@@ -154,6 +157,20 @@ fn setup<R: Runtime>(app: &AppHandle<R>) -> std::result::Result<(), Box<dyn std:
 fn spawn_binary_check<R: Runtime>(app: AppHandle<R>) -> tauri::async_runtime::JoinHandle<()> {
     tauri::async_runtime::spawn_blocking(move || {
         log_binary_status(&services::binary::check_binaries(&app))
+    })
+}
+
+/// Keep Clipy's own yt-dlp current in the background (at most daily).
+///
+/// NOTE: sites change constantly and an old yt-dlp is the most common cause
+/// of failed downloads, so this honours `general.autoUpdateBinaries`.
+fn spawn_ytdlp_auto_update<R: Runtime>(app: AppHandle<R>) -> tauri::async_runtime::JoinHandle<()> {
+    tauri::async_runtime::spawn(async move {
+        match services::binary::auto_update_ytdlp(&app).await {
+            Ok(Some(version)) => info!("yt-dlp auto-updated to {}", version),
+            Ok(None) => {}
+            Err(e) => warn!("yt-dlp auto-update failed: {}", e),
+        }
     })
 }
 
@@ -205,6 +222,7 @@ fn app_builder<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
             commands::system::install_ffmpeg,
             commands::system::install_ytdlp,
             commands::system::update_ytdlp,
+            commands::system::check_ytdlp_update,
             commands::system::get_cache_stats,
             commands::system::clear_cache,
             commands::system::clear_temp,

@@ -14,14 +14,16 @@ import type { AppSettings } from "@/hooks/useSettings";
 // Consistent width for all select triggers
 const SELECT_WIDTH = "w-[180px]";
 
+// NOTE: Chromium browsers lock their cookie database while running and, on
+// Windows, encrypt cookies so other apps can't read them; Firefox works.
 const BROWSERS = [
   { value: "none", label: "None", description: "Don't use browser cookies" },
-  { value: "chrome", label: "Chrome", description: "Google Chrome" },
-  { value: "firefox", label: "Firefox", description: "Mozilla Firefox" },
-  { value: "edge", label: "Edge", description: "Microsoft Edge" },
-  { value: "opera", label: "Opera", description: "Opera Browser" },
-  { value: "brave", label: "Brave", description: "Brave Browser" },
-  { value: "safari", label: "Safari", description: "Apple Safari (macOS)" },
+  { value: "firefox", label: "Firefox", description: "Works best" },
+  { value: "chrome", label: "Chrome", description: "Close Chrome first; often blocked on Windows" },
+  { value: "edge", label: "Edge", description: "Close Edge first; often blocked on Windows" },
+  { value: "brave", label: "Brave", description: "Close Brave first; often blocked on Windows" },
+  { value: "opera", label: "Opera", description: "Close Opera first; often blocked on Windows" },
+  { value: "safari", label: "Safari", description: "macOS only" },
 ] as const;
 
 const FRAGMENT_OPTIONS = [
@@ -101,7 +103,7 @@ export function NetworkTab({ settings, onUpdateSetting }: NetworkTabProps) {
       <SettingGroup title="Authentication" description="Access restricted content">
         <SettingItem
           label="Use browser cookies"
-          description="Import cookies from your browser for restricted videos"
+          description="Only needed for age-restricted or members-only videos. If the cookies can't be read, Clipy downloads without them."
         >
           <Select
             value={settings.download.cookiesFromBrowser || "none"}

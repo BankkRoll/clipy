@@ -4,6 +4,7 @@ use crate::error::{ClipyError, Result};
 use crate::models::download::{DownloadOptions, DownloadProgress, DownloadStatus};
 use crate::models::video::{VideoFormat, VideoInfo};
 use crate::services::binary;
+use crate::utils::process::tokio_command;
 use crate::utils::{path_policy, validators};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -111,7 +112,7 @@ async fn fetch_video_info_with(ytdlp_path: &Path, args: &[String]) -> Result<Vid
 /// signalling the group (`kill(-pid, ..)`) also reaches the ffmpeg children
 /// yt-dlp spawns for merging/post-processing.
 fn ytdlp_command(ytdlp_path: &Path) -> Command {
-    let mut cmd = Command::new(ytdlp_path);
+    let mut cmd = tokio_command(ytdlp_path);
     #[cfg(unix)]
     cmd.process_group(0);
     cmd.kill_on_drop(true);
@@ -412,7 +413,50 @@ pub async fn download_video<R: Runtime>(
     } else {
         options.output_path.clone()
     };
-    run_download(&ytdlp_path, &args, &download_id, &output_dir, progress_tx).await
+    let result = run_download(
+        &ytdlp_path,
+        &args,
+        &download_id,
+        &output_dir,
+        progress_tx.clone(),
+    )
+    .await;
+    match result {
+        Err(e)
+            if is_cookie_access_error(&e.to_string())
+                && !options.cookies_from_browser.is_empty() =>
+        {
+            warn!(
+                "Could not read {} cookies; retrying {} without browser cookies",
+                options.cookies_from_browser, download_id
+            );
+            let without = without_browser_cookies(options);
+            let args = build_download_args(url, &without, &ctx)?;
+            run_download(&ytdlp_path, &args, &download_id, &output_dir, progress_tx).await
+        }
+        other => other,
+    }
+}
+
+/// Whether a yt-dlp failure means the browser's cookie store couldn't be read.
+///
+/// NOTE: Chromium browsers lock their cookie database while running and, on
+/// Windows, encrypt cookies with app-bound keys other programs can't use, so
+/// `--cookies-from-browser chrome|edge|brave` routinely fails there.
+fn is_cookie_access_error(message: &str) -> bool {
+    let m = message.to_lowercase();
+    m.contains("cookie database")
+        || m.contains("failed to decrypt with dpapi")
+        || (m.contains("could not find") && m.contains("cookies"))
+        || m.contains("failed to load cookies")
+}
+
+/// The same options with browser cookies turned off, for the fallback retry.
+fn without_browser_cookies(options: &DownloadOptions) -> DownloadOptions {
+    DownloadOptions {
+        cookies_from_browser: String::new(),
+        ..options.clone()
+    }
 }
 
 /// Running state extracted from yt-dlp's output while a download runs.
@@ -476,14 +520,25 @@ impl OutputTracker {
 
     /// Failure reason for a non-zero exit.
     fn failure_reason(&self, code: Option<i32>) -> String {
-        if self.stderr_tail.is_empty() {
+        // Warnings (e.g. "yt-dlp is older than 90 days") are noise next to the
+        // error that actually stopped the download; keep them only when
+        // nothing else explains the failure.
+        let errors: Vec<&str> = self
+            .stderr_tail
+            .iter()
+            .map(String::as_str)
+            .filter(|l| !l.starts_with("WARNING"))
+            .collect();
+        if !errors.is_empty() {
+            errors.join("; ")
+        } else if !self.stderr_tail.is_empty() {
+            self.stderr_tail.join("; ")
+        } else {
             format!(
                 "yt-dlp exited with status {}",
                 code.map(|c| c.to_string())
                     .unwrap_or_else(|| "unknown".into())
             )
-        } else {
-            self.stderr_tail.join("; ")
         }
     }
 }
@@ -1364,9 +1419,55 @@ mod tests {
             "yt-dlp exited with status unknown"
         );
 
+        let mut noisy = OutputTracker::default();
+        noisy.observe("WARNING: Your yt-dlp version is older than 90 days!", true);
+        noisy.observe("ERROR: Video unavailable", true);
+        assert_eq!(noisy.failure_reason(Some(1)), "ERROR: Video unavailable");
+        let mut warn_only = OutputTracker::default();
+        warn_only.observe("WARNING: only this", true);
+        assert_eq!(warn_only.failure_reason(Some(1)), "WARNING: only this");
+
         let mut fresh = OutputTracker::default();
         fresh.observe("/d/late.mp3", true);
         assert_eq!(fresh.captured_file_path.as_deref(), Some("/d/late.mp3"));
+    }
+
+    #[test]
+    fn cookie_access_failures_are_recognized() {
+        for msg in [
+            "yt-dlp error: ERROR: Could not copy Chrome cookie database. See https://github.com/yt-dlp/yt-dlp/issues/7271",
+            "ERROR: Failed to decrypt with DPAPI",
+            "ERROR: could not find edge cookies database in \"C:\\x\"",
+            "ERROR: failed to load cookies",
+        ] {
+            assert!(is_cookie_access_error(msg), "{msg}");
+        }
+        for msg in [
+            "ERROR: Video unavailable",
+            "ERROR: could not find video",
+            "Sign in to confirm your age (use cookies)",
+        ] {
+            assert!(!is_cookie_access_error(msg), "{msg}");
+        }
+    }
+
+    #[test]
+    fn cookie_fallback_only_drops_browser_cookies() {
+        let options = DownloadOptions {
+            cookies_from_browser: "chrome".into(),
+            quality: "720".into(),
+            ..Default::default()
+        };
+        let without = without_browser_cookies(&options);
+        assert!(without.cookies_from_browser.is_empty());
+        assert_eq!(without.quality, "720");
+        let ctx = DownloadContext {
+            ffmpeg_dir: None,
+            archive_path: None,
+            default_dir: std::env::temp_dir(),
+        };
+        let args = build_download_args("https://example.com/v", &without, &ctx).unwrap();
+        assert!(!args.iter().any(|a| a == "--cookies-from-browser"));
     }
 
     #[test]
@@ -1636,7 +1737,7 @@ mod tests {
         );
         let (result, progress) = audio_download(&ytdlp, URL, work.path()).await;
         let err = result.unwrap_err().to_string();
-        assert_eq!(err, "yt-dlp error: WARNING: slow; ERROR: Video unavailable");
+        assert_eq!(err, "yt-dlp error: ERROR: Video unavailable");
         assert!(progress
             .iter()
             .all(|p| p.status == DownloadStatus::Downloading));

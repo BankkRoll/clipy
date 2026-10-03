@@ -14,6 +14,7 @@ import { BinaryCard } from "../components/binary-card";
 import { HW_ACCEL_TYPES } from "@/lib/constants";
 import { formatBytes, cn } from "@/lib/utils";
 import type { AppSettings } from "@/hooks/useSettings";
+import type { YtdlpUpdateStatus } from "@/hooks/useTauri";
 
 // Consistent width for all select triggers
 const SELECT_WIDTH = "w-[180px]";
@@ -45,6 +46,10 @@ export interface AdvancedTabProps {
   installingFfmpeg: boolean;
   installingYtdlp: boolean;
   updatingYtdlp: boolean;
+  /** Latest-release comparison for yt-dlp; null until checked or when the check failed. */
+  ytdlpUpdate: YtdlpUpdateStatus | null;
+  checkingYtdlpUpdate: boolean;
+  onCheckYtdlpUpdate: () => void;
   onFactoryReset?: () => void;
 }
 
@@ -64,6 +69,9 @@ export function AdvancedTab({
   installingFfmpeg,
   installingYtdlp,
   updatingYtdlp,
+  ytdlpUpdate,
+  checkingYtdlpUpdate,
+  onCheckYtdlpUpdate,
   onFactoryReset,
 }: AdvancedTabProps) {
   const currentHwAccel = HW_ACCEL_TYPES.find(
@@ -174,7 +182,11 @@ export function AdvancedTab({
             installing={installingYtdlp || updatingYtdlp}
             onInstall={onInstallYtdlp}
             onUpdate={onUpdateYtdlp}
-            canUpdate={true}
+            update={{
+              status: ytdlpUpdate,
+              checking: checkingYtdlpUpdate,
+              onCheck: onCheckYtdlpUpdate,
+            }}
           />
         </div>
       </SettingGroup>

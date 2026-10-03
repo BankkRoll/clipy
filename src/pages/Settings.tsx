@@ -2,7 +2,7 @@
  * Settings page: every backend setting grouped into tabs, plus maintenance
  * actions (binaries, cache, reset) and the update check.
  */
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw, Loader2, AlertCircle, ChevronRight } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, ask } from "@tauri-apps/plugin-dialog";
@@ -61,7 +61,19 @@ export function Settings() {
     installYtdlp,
     updateYtdlp,
     refresh: refreshBinaries,
+    ytdlpUpdate,
+    checkingYtdlpUpdate,
+    checkYtdlpUpdate,
   } = useBinaryStatus();
+
+  // Check for a newer yt-dlp once, the first time the tools are on screen.
+  const ytdlpCheckedRef = useRef(false);
+  useEffect(() => {
+    if (activeTab !== "advanced" || !binaryStatus?.ytdlpInstalled || ytdlpCheckedRef.current)
+      return;
+    ytdlpCheckedRef.current = true;
+    void checkYtdlpUpdate();
+  }, [activeTab, binaryStatus?.ytdlpInstalled, checkYtdlpUpdate]);
 
   const runBinaryTask = useCallback(
     async (
@@ -340,6 +352,9 @@ export function Settings() {
                   installingFfmpeg={installingFfmpeg}
                   installingYtdlp={installingYtdlp}
                   updatingYtdlp={updatingYtdlp}
+                  ytdlpUpdate={ytdlpUpdate}
+                  checkingYtdlpUpdate={checkingYtdlpUpdate}
+                  onCheckYtdlpUpdate={() => void checkYtdlpUpdate()}
                   onFactoryReset={handleFactoryReset}
                 />
               </TabsContent>

@@ -16,11 +16,11 @@
 
 use crate::error::{ClipyError, Result};
 use crate::services::{binary, ffmpeg};
+use crate::utils::process::tokio_command;
 use crate::utils::{path_policy, paths};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Runtime};
-use tokio::process::Command;
 use tracing::{debug, info, warn};
 
 /// Progress update emitted on the `caption-progress` event during generation.
@@ -425,7 +425,7 @@ pub async fn generate_captions<R: Runtime>(
 
     emit_progress(app, "extract-audio", -1.0, "Extracting audio…");
     debug!("captions: extracting wav -> {:?}", wav_path);
-    let status = Command::new(&ffmpeg_path)
+    let status = tokio_command(&ffmpeg_path)
         .args(build_extract_audio_args(&source, &wav_path))
         .output()
         .await
@@ -441,7 +441,7 @@ pub async fn generate_captions<R: Runtime>(
     // (whisper prints "progress = NN%").
     emit_progress(app, "transcribe", 0.0, "Transcribing…");
     debug!("captions: running whisper-cli");
-    let mut child = Command::new(&whisper)
+    let mut child = tokio_command(&whisper)
         .arg("-m")
         .arg(&model_file)
         .arg("-f")

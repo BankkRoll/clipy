@@ -1,6 +1,15 @@
-import { Download, Loader2, CheckCircle, AlertCircle } from "lucide-react";
+import { Download, Loader2, CheckCircle, AlertCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import type { YtdlpUpdateStatus } from "@/hooks/useTauri";
+
+/** Update state for a tool that Clipy can update. */
+export interface BinaryUpdateState {
+  /** Comparison with the latest release; null until checked or if the check failed. */
+  status: YtdlpUpdateStatus | null;
+  checking: boolean;
+  onCheck: () => void;
+}
 
 /** Props for {@link BinaryCard}. */
 export interface BinaryCardProps {
@@ -11,7 +20,19 @@ export interface BinaryCardProps {
   installing: boolean;
   onInstall: () => void;
   onUpdate?: () => void;
-  canUpdate?: boolean;
+  /** Present for tools Clipy can update; omitted for tools it only installs. */
+  update?: BinaryUpdateState;
+}
+
+/** Second line under the tool name, e.g. "Version 1.2 · up to date". */
+function statusLine(version: string | null | undefined, update?: BinaryUpdateState): string {
+  const base = `Version ${version}`;
+  if (!update) return base;
+  if (update.checking) return `${base} · checking for updates…`;
+  const { status } = update;
+  if (!status) return base;
+  if (!status.managed) return `${base} · managed outside Clipy`;
+  return status.updateAvailable ? `${base} · ${status.latest} available` : `${base} · up to date`;
 }
 
 /** Install status of one external tool, with Install / Update actions. */
@@ -23,8 +44,13 @@ export function BinaryCard({
   installing,
   onInstall,
   onUpdate,
-  canUpdate = false,
+  update,
 }: BinaryCardProps) {
+  const status = update?.status;
+  const updateTo = status?.managed && status.updateAvailable && onUpdate ? status.latest : null;
+  // Offer a manual re-check when the automatic one couldn't reach GitHub.
+  const recheck = update && !update.checking && !status ? update.onCheck : null;
+
   return (
     <div
       role="group"
@@ -49,27 +75,33 @@ export function BinaryCard({
         <div>
           <p className="text-sm font-medium">{name}</p>
           <p className="text-xs text-muted-foreground">
-            {loading ? "Checking status..." : installed ? `Version ${version}` : "Not installed"}
+            {loading
+              ? "Checking status..."
+              : installed
+                ? statusLine(version, update)
+                : "Not installed"}
           </p>
         </div>
       </div>
       {!loading && (
         <div className="flex gap-2">
-          {installed ? (
-            canUpdate &&
-            onUpdate && (
-              <Button variant="outline" size="sm" onClick={onUpdate} disabled={installing}>
-                {installing && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-                Update
-              </Button>
-            )
-          ) : (
+          {!installed ? (
             <Button size="sm" onClick={onInstall} disabled={installing}>
               {installing && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
               <Download className="mr-1.5 h-3.5 w-3.5" />
               Install
             </Button>
-          )}
+          ) : updateTo ? (
+            <Button variant="outline" size="sm" onClick={onUpdate} disabled={installing}>
+              {installing && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+              Update to {updateTo}
+            </Button>
+          ) : recheck ? (
+            <Button variant="ghost" size="sm" onClick={recheck}>
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              Check for updates
+            </Button>
+          ) : null}
         </div>
       )}
     </div>

@@ -68,11 +68,19 @@ pub async fn install_ytdlp<R: Runtime>(app: AppHandle<R>) -> Result<String> {
     path.map(|p| p.to_string_lossy().into_owned())
 }
 
-/// Update yt-dlp
+/// Update Clipy's yt-dlp to the latest verified release; returns its version.
 #[tauri::command]
 pub async fn update_ytdlp<R: Runtime>(app: AppHandle<R>) -> Result<String> {
     info!("Updating yt-dlp via command");
     binary::update_ytdlp(&app).await
+}
+
+/// Compare the installed yt-dlp with the latest release.
+#[tauri::command]
+pub async fn check_ytdlp_update<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<binary::YtdlpUpdateStatus> {
+    binary::check_ytdlp_update(&app).await
 }
 
 /// Get cache statistics
@@ -122,7 +130,7 @@ struct ShellCommand {
 
 impl ShellCommand {
     fn spawn(&self, what: &str) -> Result<()> {
-        std::process::Command::new(self.program)
+        crate::utils::process::std_command(self.program)
             .args(&self.args)
             .spawn()
             .map(|_| ())
@@ -435,7 +443,7 @@ mod tests {
 
     #[tokio::test]
     async fn app_commands_use_the_app_directories() {
-        use crate::test_support::{fake_tool, mock_app_in_tempdir, Script};
+        use crate::test_support::mock_app_in_tempdir;
         let app = mock_app_in_tempdir();
         let handle = || app.handle().clone();
 
@@ -457,14 +465,6 @@ mod tests {
         clear_cache(handle()).await.unwrap();
         clear_temp(handle()).await.unwrap();
         assert!(!cache.join("f.bin").exists() && !temp.join("f.bin").exists());
-
-        let bin = paths::get_binaries_dir(app.handle()).unwrap();
-        let updated = Script {
-            stdout: "yt-dlp is up to date\n".into(),
-            ..Default::default()
-        };
-        fake_tool(&bin, "yt-dlp", &updated);
-        assert!(update_ytdlp(handle()).await.unwrap().contains("up to date"));
 
         // Smoke mode is off in tests, so reporting ready does not exit.
         app_ready(handle());

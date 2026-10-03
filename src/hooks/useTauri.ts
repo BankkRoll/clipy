@@ -34,6 +34,18 @@ export interface BinaryStatus {
   ytdlpPath: string | null;
 }
 
+/** Installed yt-dlp versus the latest release (`check_ytdlp_update`). */
+export interface YtdlpUpdateStatus {
+  /** Installed version, or null when yt-dlp isn't installed. */
+  current: string | null;
+  /** Latest release tag. */
+  latest: string;
+  /** Whether `latest` is newer than `current`. */
+  updateAvailable: boolean;
+  /** Whether Clipy owns this copy and may update it (false for a PATH install). */
+  managed: boolean;
+}
+
 /** Result of the `get_cache_stats` command; sizes in bytes. */
 export interface CacheStats {
   totalSize: number;
@@ -111,10 +123,27 @@ export function useBinaryStatus() {
     () => runAndRefresh("install_ytdlp", "Failed to install yt-dlp"),
     [runAndRefresh]
   );
-  const updateYtdlp = useCallback(
-    () => runAndRefresh("update_ytdlp", "Failed to update yt-dlp"),
-    [runAndRefresh]
-  );
+  const [ytdlpUpdate, setYtdlpUpdate] = useState<YtdlpUpdateStatus | null>(null);
+  const [checkingYtdlpUpdate, setCheckingYtdlpUpdate] = useState(false);
+
+  // Opt-in (Settings only): it hits GitHub, which the setup wizard has no
+  // reason to do on every launch.
+  const checkYtdlpUpdate = useCallback(async () => {
+    setCheckingYtdlpUpdate(true);
+    try {
+      setYtdlpUpdate(await invoke<YtdlpUpdateStatus>("check_ytdlp_update"));
+    } catch {
+      // Offline or rate-limited: show "unknown" with a retry, not an error.
+      setYtdlpUpdate(null);
+    } finally {
+      setCheckingYtdlpUpdate(false);
+    }
+  }, []);
+
+  const updateYtdlp = useCallback(async () => {
+    await runAndRefresh("update_ytdlp", "Failed to update yt-dlp");
+    await checkYtdlpUpdate();
+  }, [runAndRefresh, checkYtdlpUpdate]);
 
   return {
     status,
@@ -124,6 +153,9 @@ export function useBinaryStatus() {
     installFfmpeg,
     installYtdlp,
     updateYtdlp,
+    ytdlpUpdate,
+    checkingYtdlpUpdate,
+    checkYtdlpUpdate,
   };
 }
 

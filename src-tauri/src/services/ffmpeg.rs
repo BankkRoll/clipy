@@ -23,13 +23,13 @@ use crate::models::project::{
 };
 use crate::services::binary;
 use crate::utils::path_policy;
+use crate::utils::process::tokio_command;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, OnceLock};
 use tauri::{AppHandle, Runtime};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 use tokio::sync::{mpsc, Notify};
 use tracing::{debug, info, warn};
 
@@ -137,7 +137,7 @@ pub async fn get_video_metadata<R: Runtime>(
 
 /// Run `ffprobe` at `ffprobe_path` on an already-validated input.
 async fn probe_with(ffprobe_path: &Path, input: &Path) -> Result<VideoMetadata> {
-    let output = Command::new(ffprobe_path)
+    let output = tokio_command(ffprobe_path)
         .args(build_probe_args(input))
         .output()
         .await
@@ -237,7 +237,7 @@ fn build_thumbnail_args(input: &Path, output: &Path, time: f64, width: Option<u3
 /// Run ffmpeg with `args`, mapping a non-zero exit to `ClipyError::FFmpeg`
 /// prefixed with `what`.
 async fn run_ffmpeg(ffmpeg_path: &Path, args: &[String], what: &str) -> Result<Vec<u8>> {
-    let output = Command::new(ffmpeg_path)
+    let output = tokio_command(ffmpeg_path)
         .args(args)
         .output()
         .await
@@ -612,7 +612,7 @@ async fn run_export(
     let args = build_export_args(project, settings, &planned, &inputs, &output, encoder);
     debug!("FFmpeg export args: {:?}", args);
 
-    let mut child = Command::new(ffmpeg_path)
+    let mut child = tokio_command(ffmpeg_path)
         .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1283,7 +1283,7 @@ async fn list_ffmpeg_encoders<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<Stri
         return Ok(cached.clone());
     }
     let ffmpeg_path = binary::get_ffmpeg_path(app)?;
-    let output = Command::new(&ffmpeg_path)
+    let output = tokio_command(&ffmpeg_path)
         .args(["-hide_banner", "-encoders"])
         .output()
         .await
