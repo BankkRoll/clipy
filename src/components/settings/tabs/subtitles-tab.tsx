@@ -22,16 +22,22 @@ interface SubtitlesTabProps {
 
 export function SubtitlesTab({ settings, onUpdateSetting }: SubtitlesTabProps) {
   const currentLanguage = SUBTITLE_LANGUAGES.find(
-    l => l.value === (settings.download.subtitleLanguage || "en")
+    (l) => l.value === (settings.download.subtitleLanguage || "en")
   );
   const currentFormat = SUBTITLE_FORMATS.find(
-    f => f.value === (settings.download.subtitleFormat || "srt")
+    (f) => f.value === (settings.download.subtitleFormat || "srt")
   );
 
   return (
     <div className="space-y-6">
-      <SettingGroup title="Subtitle Downloads" description="Configure automatic subtitle downloading">
-        <SettingItem label="Download subtitles" description="Automatically download subtitles with videos">
+      <SettingGroup
+        title="Subtitle Downloads"
+        description="Configure automatic subtitle downloading"
+      >
+        <SettingItem
+          label="Download subtitles"
+          description="Automatically download subtitles with videos"
+        >
           <Switch
             checked={settings.download.downloadSubtitles || false}
             onCheckedChange={(v) => onUpdateSetting("download.downloadSubtitles", v)}
@@ -48,9 +54,7 @@ export function SubtitlesTab({ settings, onUpdateSetting }: SubtitlesTabProps) {
                 onValueChange={(v) => onUpdateSetting("download.subtitleLanguage", v)}
               >
                 <SelectTrigger className={SELECT_WIDTH}>
-                  <SelectValue>
-                    {currentLanguage?.label}
-                  </SelectValue>
+                  <SelectValue>{currentLanguage?.label}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {SUBTITLE_LANGUAGES.map((lang) => (
@@ -71,7 +75,7 @@ export function SubtitlesTab({ settings, onUpdateSetting }: SubtitlesTabProps) {
                     {currentFormat && (
                       <span className="flex flex-col items-start">
                         <span className="truncate">{currentFormat.label}</span>
-                        <span className="text-xs text-muted-foreground truncate">
+                        <span className="truncate text-xs text-muted-foreground">
                           {currentFormat.description}
                         </span>
                       </span>

@@ -36,7 +36,12 @@ export function DownloadProgress({
   message,
 }: DownloadProgressProps) {
   // Processing state (merging, embedding, etc.)
-  if (status === "processing" || phase === "merging" || phase === "embedding_metadata" || phase === "processing") {
+  if (
+    status === "processing" ||
+    phase === "merging" ||
+    phase === "embedding_metadata" ||
+    phase === "processing"
+  ) {
     const config = phase ? PHASE_CONFIG[phase] : { icon: Loader2, label: "Processing video..." };
     const Icon = config.icon;
 
@@ -46,7 +51,7 @@ export function DownloadProgress({
           <Icon className="h-4 w-4 animate-spin" />
           <span>{message || config.label}</span>
         </div>
-        <Progress value={100} className="h-1.5 mt-2" />
+        <Progress value={100} className="mt-2 h-1.5" />
       </div>
     );
   }
@@ -76,19 +81,19 @@ export function DownloadProgress({
   return (
     <div className="mt-2">
       {/* Phase indicator */}
-      <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1.5">
+      <div className="mb-1.5 flex items-center gap-2 text-sm text-muted-foreground">
         <PhaseIcon className="h-3.5 w-3.5" />
         <span>{phaseLabel}</span>
       </div>
 
       {/* Progress stats */}
-      <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
+      <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
         <span>
           {totalBytes > 0
             ? `${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}`
             : downloadedBytes > 0
-            ? `${formatBytes(downloadedBytes)} downloaded`
-            : "Starting..."}
+              ? `${formatBytes(downloadedBytes)} downloaded`
+              : "Starting..."}
         </span>
         <span className="flex items-center gap-2">
           {speed > 0 && <span>{formatBytes(speed)}/s</span>}
@@ -100,7 +105,7 @@ export function DownloadProgress({
       <Progress value={Math.min(progress, 100)} className="h-1.5" />
 
       {/* Percentage */}
-      <div className="text-xs text-muted-foreground mt-1">
+      <div className="mt-1 text-xs text-muted-foreground">
         {Math.round(Math.min(progress, 100))}% complete
       </div>
     </div>

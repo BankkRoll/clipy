@@ -15,11 +15,7 @@ interface EmptyLibraryProps {
   onImport: () => void;
 }
 
-export function EmptyLibrary({
-  searchQuery,
-  onDownload,
-  onImport,
-}: EmptyLibraryProps) {
+export function EmptyLibrary({ searchQuery, onDownload, onImport }: EmptyLibraryProps) {
   if (searchQuery) {
     return (
       <Empty>
@@ -43,9 +39,7 @@ export function EmptyLibrary({
           <Film />
         </EmptyMedia>
         <EmptyTitle>Your library is empty</EmptyTitle>
-        <EmptyDescription>
-          Download videos or import existing ones to get started.
-        </EmptyDescription>
+        <EmptyDescription>Download videos or import existing ones to get started.</EmptyDescription>
       </EmptyHeader>
       <EmptyContent>
         <div className="flex gap-2">

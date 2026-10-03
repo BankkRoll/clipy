@@ -7,12 +7,7 @@ interface CategoryPillProps {
   onClick: () => void;
 }
 
-export function CategoryPill({
-  label,
-  description,
-  selected,
-  onClick,
-}: CategoryPillProps) {
+export function CategoryPill({ label, description, selected, onClick }: CategoryPillProps) {
   return (
     <button
       onClick={onClick}
@@ -23,15 +18,10 @@ export function CategoryPill({
           : "border-border hover:border-muted-foreground/50 hover:bg-muted/50"
       )}
     >
-      <span className={cn(
-        "text-xs font-medium",
-        selected ? "text-primary" : "text-foreground"
-      )}>
+      <span className={cn("text-xs font-medium", selected ? "text-primary" : "text-foreground")}>
         {label}
       </span>
-      <span className="text-[10px] text-muted-foreground leading-tight">
-        {description}
-      </span>
+      <span className="text-[10px] leading-tight text-muted-foreground">{description}</span>
     </button>
   );
 }

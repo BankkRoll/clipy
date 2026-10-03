@@ -29,17 +29,27 @@ export function useDownloadOptions(settings: AppSettings | null) {
   const [audioBitrate, setAudioBitrate] = useState(settings?.download?.audioBitrate ?? "192");
   const [embedThumbnail, setEmbedThumbnail] = useState(settings?.download?.embedThumbnail ?? true);
   const [embedMetadata, setEmbedMetadata] = useState(settings?.download?.embedMetadata ?? true);
-  const [downloadSubtitles, setDownloadSubtitles] = useState(settings?.download?.downloadSubtitles ?? false);
-  const [subtitleLanguage, setSubtitleLanguage] = useState(settings?.download?.subtitleLanguage ?? "en");
+  const [downloadSubtitles, setDownloadSubtitles] = useState(
+    settings?.download?.downloadSubtitles ?? false
+  );
+  const [subtitleLanguage, setSubtitleLanguage] = useState(
+    settings?.download?.subtitleLanguage ?? "en"
+  );
   const [embedSubtitles, setEmbedSubtitles] = useState(settings?.download?.embedSubtitles ?? false);
   const [autoSubtitles, setAutoSubtitles] = useState(settings?.download?.autoSubtitles ?? false);
   const [sponsorBlock, setSponsorBlock] = useState(settings?.download?.sponsorBlock ?? false);
   const [sponsorCategories, setSponsorCategories] = useState<string[]>(
     settings?.download?.sponsorBlockCategories ?? ["sponsor"]
   );
-  const [downloadChapters, setDownloadChapters] = useState(settings?.download?.downloadChapters ?? false);
-  const [splitByChapters, setSplitByChapters] = useState(settings?.download?.splitByChapters ?? false);
-  const [writeDescription, setWriteDescription] = useState(settings?.download?.writeDescription ?? false);
+  const [downloadChapters, setDownloadChapters] = useState(
+    settings?.download?.downloadChapters ?? false
+  );
+  const [splitByChapters, setSplitByChapters] = useState(
+    settings?.download?.splitByChapters ?? false
+  );
+  const [writeDescription, setWriteDescription] = useState(
+    settings?.download?.writeDescription ?? false
+  );
   const [writeThumbnail, setWriteThumbnail] = useState(settings?.download?.writeThumbnail ?? false);
 
   // Settings may load async (null at first render). Re-seed state once when
@@ -72,9 +82,7 @@ export function useDownloadOptions(settings: AppSettings | null) {
 
   const toggleSponsorCategory = useCallback((category: string) => {
     setSponsorCategories((prev) =>
-      prev.includes(category)
-        ? prev.filter((c) => c !== category)
-        : [...prev, category]
+      prev.includes(category) ? prev.filter((c) => c !== category) : [...prev, category]
     );
   }, []);
 

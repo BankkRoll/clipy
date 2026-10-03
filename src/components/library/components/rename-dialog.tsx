@@ -18,12 +18,7 @@ interface RenameDialogProps {
   onConfirm: (newTitle: string) => void;
 }
 
-export function RenameDialog({
-  open,
-  initialTitle,
-  onOpenChange,
-  onConfirm,
-}: RenameDialogProps) {
+export function RenameDialog({ open, initialTitle, onOpenChange, onConfirm }: RenameDialogProps) {
   const [value, setValue] = useState(initialTitle);
 
   useEffect(() => {

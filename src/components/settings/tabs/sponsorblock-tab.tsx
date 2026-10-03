@@ -35,7 +35,9 @@ export function SponsorBlockTab({ settings, onUpdateSetting }: SponsorBlockTabPr
         >
           <div className="grid grid-cols-2 gap-2">
             {SPONSORBLOCK_CATEGORIES.map((cat) => {
-              const isSelected = (settings.download.sponsorBlockCategories || ["sponsor"]).includes(cat.value);
+              const isSelected = (settings.download.sponsorBlockCategories || ["sponsor"]).includes(
+                cat.value
+              );
               return (
                 <CategoryPill
                   key={cat.value}
@@ -53,9 +55,9 @@ export function SponsorBlockTab({ settings, onUpdateSetting }: SponsorBlockTabPr
               );
             })}
           </div>
-          <p className="text-xs text-muted-foreground pt-2">
-            Data provided by the SponsorBlock community. Selected segments will be
-            automatically removed from downloaded videos.
+          <p className="pt-2 text-xs text-muted-foreground">
+            Data provided by the SponsorBlock community. Selected segments will be automatically
+            removed from downloaded videos.
           </p>
         </SettingGroup>
       )}

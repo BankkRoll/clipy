@@ -19,7 +19,9 @@ export function ChapterOptions({
       <h4 className="text-sm font-medium">Chapters</h4>
       <div className="grid grid-cols-2 gap-4">
         <div className="flex items-center justify-between">
-          <Label htmlFor="download-chapters" className="text-sm">Embed Chapters</Label>
+          <Label htmlFor="download-chapters" className="text-sm">
+            Embed Chapters
+          </Label>
           <Switch
             id="download-chapters"
             checked={downloadChapters}
@@ -27,7 +29,9 @@ export function ChapterOptions({
           />
         </div>
         <div className="flex items-center justify-between">
-          <Label htmlFor="split-chapters" className="text-sm">Split by Chapters</Label>
+          <Label htmlFor="split-chapters" className="text-sm">
+            Split by Chapters
+          </Label>
           <Switch
             id="split-chapters"
             checked={splitByChapters}

@@ -11,9 +11,7 @@ export function EmptyDownloads({ onStartDownloading }: EmptyDownloadsProps) {
       <div className="text-center">
         <DownloadIcon className="mx-auto h-16 w-16 text-muted-foreground/30" />
         <h2 className="mt-4 text-lg font-medium">No downloads</h2>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Downloads you start will appear here
-        </p>
+        <p className="mt-2 text-sm text-muted-foreground">Downloads you start will appear here</p>
         <Button variant="outline" className="mt-4" onClick={onStartDownloading}>
           Start Downloading
         </Button>

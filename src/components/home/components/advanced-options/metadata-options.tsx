@@ -25,13 +25,15 @@ export function MetadataOptions({
 }: MetadataOptionsProps) {
   return (
     <div className="space-y-3">
-      <h4 className="text-sm font-medium flex items-center gap-2">
+      <h4 className="flex items-center gap-2 text-sm font-medium">
         <FileText className="h-4 w-4" />
         Metadata
       </h4>
       <div className="grid grid-cols-2 gap-4">
         <div className="flex items-center justify-between">
-          <Label htmlFor="embed-thumbnail" className="text-sm">Embed Thumbnail</Label>
+          <Label htmlFor="embed-thumbnail" className="text-sm">
+            Embed Thumbnail
+          </Label>
           <Switch
             id="embed-thumbnail"
             checked={embedThumbnail}
@@ -39,7 +41,9 @@ export function MetadataOptions({
           />
         </div>
         <div className="flex items-center justify-between">
-          <Label htmlFor="embed-metadata" className="text-sm">Embed Metadata</Label>
+          <Label htmlFor="embed-metadata" className="text-sm">
+            Embed Metadata
+          </Label>
           <Switch
             id="embed-metadata"
             checked={embedMetadata}
@@ -47,7 +51,9 @@ export function MetadataOptions({
           />
         </div>
         <div className="flex items-center justify-between">
-          <Label htmlFor="write-description" className="text-sm">Save Description</Label>
+          <Label htmlFor="write-description" className="text-sm">
+            Save Description
+          </Label>
           <Switch
             id="write-description"
             checked={writeDescription}
@@ -55,7 +61,9 @@ export function MetadataOptions({
           />
         </div>
         <div className="flex items-center justify-between">
-          <Label htmlFor="write-thumbnail" className="text-sm">Save Thumbnail</Label>
+          <Label htmlFor="write-thumbnail" className="text-sm">
+            Save Thumbnail
+          </Label>
           <Switch
             id="write-thumbnail"
             checked={writeThumbnail}

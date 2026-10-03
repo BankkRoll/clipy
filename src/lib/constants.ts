@@ -34,13 +34,38 @@ export const VIDEO_FORMATS = [
  * Supported audio formats
  */
 export const AUDIO_FORMATS = [
-  { value: "mp3", label: "MP3", description: "Universal audio format", bitrates: [128, 192, 256, 320] },
-  { value: "m4a", label: "M4A/AAC", description: "Apple audio format", bitrates: [128, 192, 256, 320] },
-  { value: "opus", label: "Opus", description: "High quality, small size", bitrates: [64, 96, 128, 160, 192] },
+  {
+    value: "mp3",
+    label: "MP3",
+    description: "Universal audio format",
+    bitrates: [128, 192, 256, 320],
+  },
+  {
+    value: "m4a",
+    label: "M4A/AAC",
+    description: "Apple audio format",
+    bitrates: [128, 192, 256, 320],
+  },
+  {
+    value: "opus",
+    label: "Opus",
+    description: "High quality, small size",
+    bitrates: [64, 96, 128, 160, 192],
+  },
   { value: "wav", label: "WAV", description: "Lossless audio (large)", bitrates: [] },
   { value: "flac", label: "FLAC", description: "Lossless compressed", bitrates: [] },
-  { value: "aac", label: "AAC", description: "Advanced audio codec", bitrates: [128, 192, 256, 320] },
-  { value: "vorbis", label: "Vorbis", description: "Open source codec", bitrates: [128, 192, 256, 320] },
+  {
+    value: "aac",
+    label: "AAC",
+    description: "Advanced audio codec",
+    bitrates: [128, 192, 256, 320],
+  },
+  {
+    value: "vorbis",
+    label: "Vorbis",
+    description: "Open source codec",
+    bitrates: [128, 192, 256, 320],
+  },
 ] as const;
 
 /**

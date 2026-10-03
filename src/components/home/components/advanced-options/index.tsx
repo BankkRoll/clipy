@@ -1,11 +1,7 @@
 import { Settings2, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { MetadataOptions } from "./metadata-options";
 import { SubtitleOptions } from "./subtitle-options";
 import { SponsorBlockOptions } from "./sponsorblock-options";

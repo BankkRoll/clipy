@@ -15,10 +15,30 @@ export const STATUS_CONFIG: Record<
 > = {
   pending: { label: "Queued", icon: Clock, color: "text-muted-foreground", bgColor: "bg-muted" },
   fetching: { label: "Fetching", icon: Loader2, color: "text-blue-500", bgColor: "bg-blue-500/10" },
-  downloading: { label: "Downloading", icon: DownloadIcon, color: "text-blue-500", bgColor: "bg-blue-500/10" },
-  processing: { label: "Processing", icon: Loader2, color: "text-yellow-500", bgColor: "bg-yellow-500/10" },
-  completed: { label: "Completed", icon: CheckCircle, color: "text-green-500", bgColor: "bg-green-500/10" },
-  failed: { label: "Failed", icon: AlertCircle, color: "text-destructive", bgColor: "bg-destructive/10" },
+  downloading: {
+    label: "Downloading",
+    icon: DownloadIcon,
+    color: "text-blue-500",
+    bgColor: "bg-blue-500/10",
+  },
+  processing: {
+    label: "Processing",
+    icon: Loader2,
+    color: "text-yellow-500",
+    bgColor: "bg-yellow-500/10",
+  },
+  completed: {
+    label: "Completed",
+    icon: CheckCircle,
+    color: "text-green-500",
+    bgColor: "bg-green-500/10",
+  },
+  failed: {
+    label: "Failed",
+    icon: AlertCircle,
+    color: "text-destructive",
+    bgColor: "bg-destructive/10",
+  },
   cancelled: { label: "Cancelled", icon: X, color: "text-muted-foreground", bgColor: "bg-muted" },
   paused: { label: "Paused", icon: Pause, color: "text-yellow-500", bgColor: "bg-yellow-500/10" },
 } as const;
