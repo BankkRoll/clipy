@@ -72,16 +72,16 @@ describe("logger", () => {
 
   it("banner reports the version and debug state", () => {
     logger.banner("1.2.3");
-    const lines = log.mock.calls.map((c) => String(c[0]) + String(c[1] ?? ""));
-    expect(lines.some((l) => l.includes("1.2.3"))).toBe(true);
-    expect(lines.some((l) => l.includes("OFF"))).toBe(true);
-    expect(lines.some((l) => l.includes("verbose logging active"))).toBe(false);
+    const lines = log.mock.calls.map((c: unknown[]) => String(c[0]) + String(c[1] ?? ""));
+    expect(lines.some((l: string) => l.includes("1.2.3"))).toBe(true);
+    expect(lines.some((l: string) => l.includes("OFF"))).toBe(true);
+    expect(lines.some((l: string) => l.includes("verbose logging active"))).toBe(false);
 
     log.mockClear();
     logger.setDebugMode(true);
     logger.banner("1.2.3");
-    const debugLines = log.mock.calls.map((c) => String(c[0]) + String(c[1] ?? ""));
-    expect(debugLines.some((l) => l.includes("ON"))).toBe(true);
-    expect(debugLines.some((l) => l.includes("verbose logging active"))).toBe(true);
+    const debugLines = log.mock.calls.map((c: unknown[]) => String(c[0]) + String(c[1] ?? ""));
+    expect(debugLines.some((l: string) => l.includes("ON"))).toBe(true);
+    expect(debugLines.some((l: string) => l.includes("verbose logging active"))).toBe(true);
   });
 });

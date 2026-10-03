@@ -534,7 +534,7 @@ pub(crate) mod test_support {
 
         #[cfg(not(windows))]
         let (path, body) = {
-            let mut body = String::from("#!/bin/sh\n");
+            let mut body = String::from("#!/bin/sh\n[ -n \"$CLIPY_FAKE_TOOL_PROBE\" ] && exit 0\n");
             if script.sleep_secs > 0 {
                 body += &format!("sleep {}\n", script.sleep_secs);
             }
@@ -552,8 +552,32 @@ pub(crate) mod test_support {
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            wait_until_executable(&path);
         }
         path
+    }
+
+    /// Block until `path` can be exec'd without ETXTBSY.
+    ///
+    /// NOTE: while we held the script open for writing, another test thread
+    /// may have forked a child that inherited that fd; until the child execs,
+    /// Linux refuses to exec the script ("Text file busy"). Our fd is already
+    /// closed, so once one probe run succeeds no process can still hold it.
+    #[cfg(unix)]
+    fn wait_until_executable(path: &std::path::Path) {
+        for _ in 0..200 {
+            match std::process::Command::new(path)
+                .env("CLIPY_FAKE_TOOL_PROBE", "1")
+                .status()
+            {
+                Ok(_) => return,
+                Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(e) => panic!("fake tool {} cannot run: {e}", path.display()),
+            }
+        }
+        panic!("fake tool {} stayed busy", path.display());
     }
 }
 

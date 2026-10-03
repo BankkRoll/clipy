@@ -188,6 +188,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "muda only builds menus on the main thread, which the test harness doesn't use"
+    )]
     fn menu_events_show_window_and_navigate() {
         let app = mock_app();
         let _window = tauri::WebviewWindowBuilder::new(&app, "main", tauri::WebviewUrl::default())
@@ -240,6 +244,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "muda only builds menus on the main thread, which the test harness doesn't use"
+    )]
     fn tray_is_configured_under_the_id_progress_updates_look_up() {
         let app = mock_app();
         let menu = build_tray_menu(app.handle()).unwrap();

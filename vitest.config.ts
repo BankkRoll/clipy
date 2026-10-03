@@ -18,6 +18,9 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    // Full-page interaction tests drive many user events; vitest 4 runs them
+    // slower under coverage instrumentation than the 5 s default allows.
+    testTimeout: 15_000,
     coverage: {
       provider: "istanbul",
       reportsDirectory: "./coverage/frontend",
@@ -31,7 +34,6 @@ export default defineConfig({
         // Type-only modules have no runtime code to cover.
         "src/types/**",
       ],
-      all: true,
       // Every frontend file is fully covered; any untested addition fails CI.
       thresholds: {
         statements: 100,

@@ -84,7 +84,7 @@
     "@typescript-eslint/eslint-plugin": "^8.71.0",
     "@typescript-eslint/parser": "^8.71.0",
     "@vitejs/plugin-react": "^4.7.0",
-    "@vitest/coverage-istanbul": "3.2.6",
+    "@vitest/coverage-istanbul": "4.1.11",
     "@wdio/cli": "^9.32.0",
     "@wdio/globals": "^9.31.3",
     "@wdio/local-runner": "^9.32.0",
@@ -108,7 +108,7 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "8.61.1",
     "vite": "^6.4.3",
-    "vitest": "3.2.6",
+    "vitest": "4.1.11",
     "webdriverio": "^9.32.0"
   },
   "lint-staged": {
@@ -122,7 +122,9 @@
   },
   "pnpm": {
     "overrides": {
-      "vite": "^6.4.3"
+      "vite": "^6.4.3",
+      "serialize-javascript": "^7.1.2",
+      "basic-ftp": "^6.2.1"
     }
   }
 }
