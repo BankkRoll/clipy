@@ -105,10 +105,15 @@ jobs:
           PRERELEASE: ${{ needs.authorize.outputs.prerelease }}
         run: |
           node scripts/release-notes.mjs "$VERSION" > notes.md
-          FLAGS=(--draft --verify-tag --title "Clipy $VERSION" --notes-file notes.md)
-          if [ "$PRERELEASE" = "true" ]; then FLAGS+=(--prerelease); fi
-          gh release create "$TAG" "${FLAGS[@]}"
-          ID="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n1)"
+          # The create response carries the id; listing releases right after
+          # creating a draft can miss it.
+          ID="$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases" \
+            -f tag_name="$TAG" \
+            -f name="Clipy $VERSION" \
+            -F body=@notes.md \
+            -F draft=true \
+            -F prerelease="$PRERELEASE" \
+            --jq .id)"
           test -n "$ID"
           echo "release_id=$ID" >> "$GITHUB_OUTPUT"
 
@@ -240,13 +245,19 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      # Drafts are addressed by id: tag lookups don't see them.
       - name: Download release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.authorize.outputs.tag }}
+          RELEASE_ID: ${{ needs.draft.outputs.release_id }}
         run: |
           mkdir assets
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir assets
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets" \
+            --jq '.[] | "\(.id) \(.name)"' |
+          while read -r asset_id name; do
+            gh api -H "Accept: application/octet-stream" \
+              "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" > "assets/${name}"
+          done
 
       # Every platform must have shipped its installers and updater bundle, or
       # the release stays a draft.
@@ -273,7 +284,10 @@ jobs:
       - name: Upload checksums and publish
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.authorize.outputs.tag }}
+          RELEASE_ID: ${{ needs.draft.outputs.release_id }}
         run: |
-          gh release upload "$TAG" assets/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
-          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          gh api --method POST -H "Content-Type: text/plain" \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=SHA256SUMS.txt" \
+            --input assets/SHA256SUMS.txt > /dev/null
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -F draft=false -f make_latest=true --jq '"Published \(.html_url)"'
