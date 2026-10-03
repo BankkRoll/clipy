@@ -157,7 +157,10 @@ describe("Editor page: initialization", () => {
       sourcePath: "C:\\videos\\library.mp4",
       endTime: 30,
     });
-    expect(screen.getByTestId("location")).toHaveTextContent(`/editor/${currentProject().id}`);
+    // react-router 7 applies navigations in a transition, so the URL settles a tick later.
+    await waitFor(() =>
+      expect(screen.getByTestId("location")).toHaveTextContent(`/editor/${currentProject().id}`)
+    );
     expect(toast.success).toHaveBeenCalledWith('Added "Library Clip" to timeline');
   });
 
@@ -167,7 +170,7 @@ describe("Editor page: initialization", () => {
       expect(toast.error).toHaveBeenCalledWith("That video is no longer in your library")
     );
     expect(allClips()).toHaveLength(0);
-    expect(screen.getByTestId("location")).not.toHaveTextContent("import");
+    await waitFor(() => expect(screen.getByTestId("location")).not.toHaveTextContent("import"));
   });
 });
 

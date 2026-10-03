@@ -35,6 +35,32 @@ export interface MockBackend {
 let current: MockBackend | null = null;
 
 /**
+ * plugin-dialog >= 2.7 implements `ask()` as a Yes/No `plugin:dialog|message`
+ * and compares the returned label. Tests describe the user's choice with a
+ * boolean `plugin:dialog|ask` handler, so translate it into the label the
+ * plugin expects. Returns undefined when the call is not a question.
+ */
+function routeAskThroughMessage(
+  cmd: string,
+  args: Record<string, unknown>,
+  table: Map<string, IpcHandler>
+): Promise<string> | undefined {
+  const ask = table.get("plugin:dialog|ask");
+  if (cmd !== "plugin:dialog|message" || !ask) return undefined;
+  const { buttons } = args;
+  let yes: string;
+  let no: string;
+  if (buttons === "YesNo") {
+    [yes, no] = ["Yes", "No"];
+  } else if (buttons && typeof buttons === "object" && "OkCancelCustom" in buttons) {
+    [yes, no] = (buttons as { OkCancelCustom: [string, string] }).OkCancelCustom;
+  } else {
+    return undefined;
+  }
+  return Promise.resolve(ask(args)).then((answer) => (answer ? yes : no));
+}
+
+/**
  * Install a fake backend for the current test.
  *
  * Unhandled commands resolve to `null`, matching a unit-returning Rust command,
@@ -56,11 +82,16 @@ export function mockBackend(handlers: Record<string, IpcHandler> = {}): MockBack
   mockIPC(
     (cmd, payload) => {
       const args = (payload ?? {}) as Record<string, unknown>;
+      const askAnswer = routeAskThroughMessage(cmd, args, table);
+      if (askAnswer !== undefined) {
+        calls.push({ cmd: "plugin:dialog|ask", args });
+        return askAnswer;
+      }
       calls.push({ cmd, args });
       const handler = table.get(cmd);
       return handler ? handler(args) : null;
     },
-    { shouldMockEvents: true },
+    { shouldMockEvents: true }
   );
 
   current = {

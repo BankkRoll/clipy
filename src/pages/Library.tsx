@@ -95,7 +95,7 @@ export function Library() {
 
   const handleOpenInEditor = useCallback(
     (videoId: string) => {
-      navigate(`/editor?import=${videoId}`);
+      void navigate(`/editor?import=${videoId}`);
     },
     [navigate]
   );
@@ -207,7 +207,7 @@ export function Library() {
   }, []);
 
   const handleDownload = useCallback(() => {
-    navigate("/");
+    void navigate("/");
   }, [navigate]);
 
   return (

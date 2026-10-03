@@ -84,7 +84,7 @@ export function Editor() {
     const video = libraryVideos.find((v) => v.id === importVideoId);
     if (video) addLibraryVideo(video);
     else toast.error("That video is no longer in your library");
-    navigate(`/editor/${project.id}`, { replace: true });
+    void navigate(`/editor/${project.id}`, { replace: true });
   }, [importVideoId, project, libraryVideos, libraryLoading, navigate, addLibraryVideo]);
 
   const handleAddText = () => {

@@ -124,11 +124,16 @@ export function CommandMenu({ collapsed = false }: CommandMenuProps) {
 
   const actions = useMemo<QuickAction[]>(
     () => [
-      { name: "New Download", icon: Plus, action: () => navigate("/"), shortcut: { key: "n" } },
+      {
+        name: "New Download",
+        icon: Plus,
+        action: () => void navigate("/"),
+        shortcut: { key: "n" },
+      },
       {
         name: "New Project",
         icon: Film,
-        action: () => navigate("/editor"),
+        action: () => void navigate("/editor"),
         shortcut: { key: "n", shift: true },
       },
       { name: "Refresh Library", icon: RefreshCw, action: () => void refreshLibrary() },
@@ -150,7 +155,7 @@ export function CommandMenu({ collapsed = false }: CommandMenuProps) {
       if (page) {
         e.preventDefault();
         setOpen(false);
-        navigate(page.path);
+        void navigate(page.path);
       } else if (action) {
         e.preventDefault();
         setOpen(false);
@@ -232,7 +237,7 @@ export function CommandMenu({ collapsed = false }: CommandMenuProps) {
                     <CommandItem
                       key={video.id}
                       value={`video-${video.id}-${video.title}`}
-                      onSelect={() => runCommand(() => navigate(`/editor?import=${video.id}`))}
+                      onSelect={() => runCommand(() => void navigate(`/editor?import=${video.id}`))}
                     >
                       <Play />
                       <span className="flex-1 truncate">{video.title}</span>
@@ -249,7 +254,7 @@ export function CommandMenu({ collapsed = false }: CommandMenuProps) {
                 <CommandItem
                   key={page.path}
                   value={`page-${page.name}`}
-                  onSelect={() => runCommand(() => navigate(page.path))}
+                  onSelect={() => runCommand(() => void navigate(page.path))}
                 >
                   <page.icon />
                   <span className="flex-1">{page.name}</span>

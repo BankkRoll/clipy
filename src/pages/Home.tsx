@@ -102,7 +102,7 @@ export function Home() {
         setVideoInfo(null);
         setShowAdvanced(false);
         resetOptions();
-        navigate("/downloads");
+        void navigate("/downloads");
       } catch (err) {
         logger.error("Home", "Failed to start download:", err);
         toast.error("Failed to start download", {

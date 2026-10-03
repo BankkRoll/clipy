@@ -13,7 +13,7 @@ export function Layout({ children }: LayoutProps) {
   const navigate = useNavigate();
 
   // Respond to navigation requests emitted by the system tray menu.
-  useNavigationEvent((path) => navigate(path));
+  useNavigationEvent((path) => void navigate(path));
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background">
