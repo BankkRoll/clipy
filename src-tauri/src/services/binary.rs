@@ -1208,6 +1208,14 @@ mod tests {
         // A file that is found but cannot be executed.
         let junk = bin.join(exe_name("yt-dlp"));
         std::fs::write(&junk, b"not a program").unwrap();
+        // NOTE: the fake tool left the exec bit set, and macOS hands an
+        // executable it can't load to /bin/sh, which would run the junk as a
+        // script. Without the bit, spawning fails the same way on every Unix.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&junk, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
         assert_eq!(platform_exe(junk.clone()), junk);
         let err = update_ytdlp(app.handle()).await.unwrap_err();
         assert!(err.to_string().contains("Failed to update yt-dlp"), "{err}");
