@@ -94,3 +94,6 @@ secrets.json
 
 # Local-only signing keys (updater minisign key). Never commit.
 .secrets/
+
+# E2E failure screenshots
+e2e/artifacts/

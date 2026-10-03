@@ -24,13 +24,14 @@
     "lint:fix": "eslint . --ext ts,tsx --fix",
     "format": "prettier --write \"src/**/*.{ts,tsx,css,json}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css,json}\"",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p e2e/tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "coverage:rust": "node scripts/coverage-rust.mjs",
     "coverage": "pnpm test:coverage && pnpm build && pnpm coverage:rust && node scripts/coverage-summary.mjs",
-    "prepare": "husky"
+    "prepare": "husky",
+    "e2e": "wdio run e2e/wdio.conf.ts"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.23",
@@ -76,6 +77,7 @@
     "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "16.3.2",
     "@testing-library/user-event": "14.6.1",
+    "@types/mocha": "10.0.10",
     "@types/node": "^22.20.5",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
@@ -83,6 +85,11 @@
     "@typescript-eslint/parser": "^8.71.0",
     "@vitejs/plugin-react": "^4.7.0",
     "@vitest/coverage-istanbul": "3.2.6",
+    "@wdio/cli": "^9.32.0",
+    "@wdio/globals": "^9.31.3",
+    "@wdio/local-runner": "^9.32.0",
+    "@wdio/mocha-framework": "^9.32.0",
+    "@wdio/spec-reporter": "^9.32.0",
     "autoprefixer": "^10.6.1",
     "eslint": "^9.39.5",
     "eslint-config-prettier": "^9.1.2",
@@ -101,7 +108,8 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "8.61.1",
     "vite": "^6.4.3",
-    "vitest": "3.2.6"
+    "vitest": "3.2.6",
+    "webdriverio": "^9.32.0"
   },
   "lint-staged": {
     "*.{ts,tsx}": [

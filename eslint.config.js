@@ -75,6 +75,7 @@ export default tseslint.config(
       "src/test/**/*.{ts,tsx}",
       "*.config.{ts,js,mts}",
       "vitest.config.ts",
+      "e2e/**/*.ts",
     ],
     languageOptions: {
       ecmaVersion: 2022,
