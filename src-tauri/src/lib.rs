@@ -171,33 +171,31 @@ fn log_binary_status(status: &error::Result<models::settings::BinaryStatus>) {
     }
 }
 
-/// Initialize and run the Tauri application
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    let debug_mode = utils::logger::read_debug_mode_from_config();
-    utils::logger::init_logging(debug_mode);
-    utils::logger::print_banner(env!("CARGO_PKG_VERSION"), debug_mode);
-    info!("Starting Clipy v{}", env!("CARGO_PKG_VERSION"));
+/// Hide the main window instead of closing it when close-to-tray is on and a
+/// tray exists. Returns whether the close should be prevented.
+fn hide_on_close<R: Runtime>(window: &tauri::Window<R>) -> bool {
+    let close_to_tray = services::config::get_settings()
+        .map(|s| s.general.close_to_tray)
+        .unwrap_or(false);
+    let hide =
+        close_action(close_to_tray, TRAY_READY.load(Ordering::SeqCst)) == CloseAction::HideToTray;
+    if hide {
+        let _ = window.hide();
+    }
+    hide
+}
 
-    let app = tauri::Builder::default()
+/// Add the app minus its plugins to uilder: media protocol, setup hook,
+/// close-to-tray handling and every IPC command. Generic so tests can drive it
+/// on the mock runtime.
+fn app_builder<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    builder
         .register_asynchronous_uri_scheme_protocol(media_protocol::SCHEME, media_protocol::handle)
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
-        // Updates are minisign-verified against the pubkey in tauri.conf.json;
-        // the process plugin relaunches into the new version.
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
         .setup(|app| setup(app.handle()))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let close_to_tray = services::config::get_settings()
-                    .map(|s| s.general.close_to_tray)
-                    .unwrap_or(false);
-                if close_action(close_to_tray, TRAY_READY.load(Ordering::SeqCst))
-                    == CloseAction::HideToTray
-                {
+                if hide_on_close(window) {
                     api.prevent_close();
-                    let _ = window.hide();
                 }
             }
         })
@@ -269,6 +267,26 @@ pub fn run() {
             commands::settings::export_settings,
             commands::settings::import_settings,
         ])
+}
+
+/// Initialize and run the Tauri application
+// NOTE: logging setup, plugin registration and the real event loop need the
+// Wry runtime and a display, so this function is the untested remainder;
+// everything it wires up lives in `app_builder` and `setup`.
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let debug_mode = utils::logger::read_debug_mode_from_config();
+    utils::logger::init_logging(debug_mode);
+    utils::logger::print_banner(env!("CARGO_PKG_VERSION"), debug_mode);
+    info!("Starting Clipy v{}", env!("CARGO_PKG_VERSION"));
+
+    let app = app_builder(tauri::Builder::default())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_shell::init())
+        // Updates are minisign-verified against the pubkey in tauri.conf.json;
+        // the process plugin relaunches into the new version.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
@@ -304,10 +322,16 @@ pub(crate) mod test_support {
     /// absolute path replaces the base, which redirects every app path into
     /// the temp dir without touching the real user profile.
     pub fn mock_app_in_tempdir() -> tauri::App<MockRuntime> {
+        mock_builder().build(mock_context_in_tempdir()).unwrap()
+    }
+
+    /// A mock context whose app paths all live in a fresh temp directory
+    /// (see [`mock_app_in_tempdir`]).
+    pub fn mock_context_in_tempdir() -> tauri::Context<MockRuntime> {
         let dir = tempfile::tempdir().unwrap().keep();
         let mut context = mock_context(noop_assets());
         context.config_mut().identifier = dir.to_string_lossy().into_owned();
-        mock_builder().build(context).unwrap()
+        context
     }
 
     /// A canned HTTP response served by [`TestServer`].
@@ -614,6 +638,247 @@ mod tests {
         let probe = spawn_binary_check(app.handle().clone());
         tauri::async_runtime::block_on(probe).unwrap();
         assert!(start.elapsed() >= Duration::from_secs(4));
+    }
+
+    /// Invoke `cmd` with JSON `args` through the real IPC handler.
+    fn invoke(
+        webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
+        cmd: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, serde_json::Value> {
+        tauri::test::get_ipc_response(
+            webview,
+            tauri::webview::InvokeRequest {
+                cmd: cmd.into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: if cfg!(windows) {
+                    "http://tauri.localhost"
+                } else {
+                    "tauri://localhost"
+                }
+                .parse()
+                .unwrap(),
+                body: tauri::ipc::InvokeBody::Json(args),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_string(),
+            },
+        )
+        .map(|body| body.deserialize().unwrap())
+    }
+
+    #[test]
+    fn every_command_is_reachable_over_ipc_with_its_argument_names() {
+        use serde_json::json;
+        let _guard = crate::test_support::lock_globals();
+        let _export = services::ffmpeg::EXPORT_TEST_LOCK.blocking_lock();
+        let app = app_builder(tauri::test::mock_builder())
+            .build(crate::test_support::mock_context_in_tempdir())
+            .unwrap();
+        // Setup installed the real queue; swap in a scripted downloader.
+        let h = services::queue::testing::harness(1);
+        services::queue::install_queue(h.queue.clone());
+        let bin = utils::paths::get_binaries_dir(app.handle()).unwrap();
+        let ytdlp = crate::test_support::Script {
+            stdout: "up to date\n".into(),
+            ..Default::default()
+        };
+        crate::test_support::fake_tool(&bin, "yt-dlp", &ytdlp);
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        let video_info = serde_json::to_value(models::video::VideoInfo::default()).unwrap();
+        let options = serde_json::to_value(models::download::DownloadOptions::default()).unwrap();
+        let project = invoke(
+            &webview,
+            "create_project",
+            json!({"name": "P", "width": 640, "height": 360, "fps": 30}),
+        )
+        .unwrap();
+        let export_settings = serde_json::to_value(models::project::ExportSettings {
+            output_path: "relative.mp4".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let settings = invoke(&webview, "get_settings", json!({})).unwrap();
+        let entry = serde_json::to_value(models::library::LibraryVideo::new(
+            "id".into(),
+            "t".into(),
+            String::new(),
+            0,
+            "c".into(),
+            "relative.mp4".into(),
+            0,
+            "mp4".into(),
+            "720p".into(),
+            String::new(),
+        ))
+        .unwrap();
+
+        let cases: Vec<(&str, serde_json::Value, bool)> = vec![
+            ("get_system_info", json!({}), true),
+            ("check_binaries", json!({}), true),
+            ("update_ytdlp", json!({}), true),
+            ("get_cache_stats", json!({}), true),
+            ("clear_cache", json!({}), true),
+            ("clear_temp", json!({}), true),
+            ("open_folder", json!({"path": "relative"}), false),
+            ("open_file", json!({"path": "relative.mp4"}), false),
+            ("show_in_folder", json!({"path": "http://x"}), false),
+            ("get_default_download_path", json!({}), true),
+            ("media_url", json!({"path": "/a.mp4"}), true),
+            ("is_admin", json!({}), true),
+            ("app_ready", json!({}), true),
+            ("fetch_video_info", json!({"url": "ftp://x"}), false),
+            (
+                "get_available_qualities",
+                json!({"videoInfo": video_info}),
+                true,
+            ),
+            (
+                "start_download",
+                json!({"url": "https://youtu.be/x", "videoInfo": video_info, "options": options}),
+                true,
+            ),
+            ("pause_download", json!({"id": "missing"}), false),
+            ("resume_download", json!({"id": "missing"}), false),
+            ("cancel_download", json!({"id": "missing"}), false),
+            ("retry_download", json!({"id": "missing"}), false),
+            ("get_downloads", json!({}), true),
+            ("get_active_downloads", json!({}), true),
+            ("clear_completed_downloads", json!({}), true),
+            ("set_max_concurrent_downloads", json!({"max": 2}), true),
+            ("validate_url", json!({"url": "https://x.y"}), true),
+            (
+                "extract_video_id",
+                json!({"url": "https://youtu.be/abc"}),
+                true,
+            ),
+            ("get_library_videos", json!({}), true),
+            ("add_library_video", json!({"video": entry}), false),
+            (
+                "delete_library_video",
+                json!({"id": "x", "deleteFile": false}),
+                true,
+            ),
+            ("search_library", json!({"query": "a"}), true),
+            ("import_video", json!({"filePath": "relative.mp4"}), false),
+            (
+                "check_video_exists",
+                json!({"filePath": "relative.mp4"}),
+                true,
+            ),
+            (
+                "get_video_file_size",
+                json!({"filePath": "relative.mp4"}),
+                false,
+            ),
+            (
+                "rename_library_video",
+                json!({"id": "x", "newTitle": "y"}),
+                false,
+            ),
+            ("get_library_stats", json!({}), true),
+            (
+                "bulk_delete_library_videos",
+                json!({"ids": [], "deleteFiles": false}),
+                true,
+            ),
+            ("export_library_json", json!({}), true),
+            ("export_library_to_file", json!({"path": "lib.txt"}), false),
+            ("get_video_metadata", json!({"path": "x.mp4"}), false),
+            (
+                "generate_thumbnail",
+                json!({"videoPath": "x.mp4", "outputPath": "y.jpg", "timeOffset": 0.0}),
+                false,
+            ),
+            (
+                "generate_timeline_thumbnails",
+                json!({"videoPath": "x.mp4", "outputDir": "d", "count": 1, "width": 10}),
+                false,
+            ),
+            (
+                "extract_waveform",
+                json!({"videoPath": "x.mp4", "samples": 10}),
+                false,
+            ),
+            (
+                "export_project",
+                json!({"project": project, "settings": export_settings}),
+                false,
+            ),
+            ("cancel_export", json!({}), true),
+            ("get_export_status", json!({}), true),
+            (
+                "save_project",
+                json!({"project": project, "path": "p.txt"}),
+                false,
+            ),
+            ("load_project", json!({"path": "p.clipy"}), false),
+            (
+                "transcode_for_editing",
+                json!({"inputPath": "x.mp4", "outputPath": "y.mp4"}),
+                false,
+            ),
+            ("get_export_formats", json!({}), true),
+            ("get_export_resolutions", json!({}), true),
+            (
+                "generate_captions",
+                json!({"sourcePath": "x.mp4", "model": "nope"}),
+                false,
+            ),
+            ("update_settings", json!({"settings": settings}), true),
+            ("reset_settings", json!({}), true),
+            (
+                "update_setting",
+                json!({"key": "general.language", "value": "fr"}),
+                true,
+            ),
+            ("get_setting", json!({"key": "general.language"}), true),
+            ("export_settings", json!({}), true),
+            ("import_settings", json!({"json": "not json"}), false),
+        ];
+        for (cmd, args, ok) in cases {
+            let result = invoke(&webview, cmd, args);
+            assert_eq!(result.is_ok(), ok, "{cmd}: {result:?}");
+        }
+        assert_eq!(
+            invoke(&webview, "get_setting", json!({"key": "general.language"})).unwrap(),
+            "fr"
+        );
+        assert!(invoke(&webview, "no_such_command", json!({})).is_err());
+    }
+
+    #[test]
+    fn close_hides_to_tray_only_when_configured_and_available() {
+        let _guard = crate::test_support::lock_globals();
+        let app = crate::test_support::mock_app_in_tempdir();
+        services::config::init_config(app.handle()).unwrap();
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let w = window.as_ref().window();
+        let mut settings = services::config::get_settings().unwrap();
+        settings.general.close_to_tray = true;
+        services::config::update_settings(settings).unwrap();
+
+        TRAY_READY.store(false, Ordering::SeqCst);
+        assert!(!hide_on_close(&w));
+        TRAY_READY.store(true, Ordering::SeqCst);
+        assert!(hide_on_close(&w));
+        TRAY_READY.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn shutdown_runs_once() {
+        let _guard = crate::test_support::lock_globals();
+        let _export = services::ffmpeg::EXPORT_TEST_LOCK.blocking_lock();
+        let h = services::queue::testing::harness(1);
+        services::queue::install_queue(h.queue.clone());
+        assert!(shutdown_background_work());
+        assert!(!shutdown_background_work());
+        services::ffmpeg::reset_export_cancel();
     }
 
     #[test]

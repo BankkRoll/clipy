@@ -25,7 +25,7 @@ pub struct SystemInfo {
 
 /// Get system information
 #[tauri::command]
-pub async fn get_system_info(app: AppHandle) -> Result<SystemInfo> {
+pub async fn get_system_info<R: Runtime>(app: AppHandle<R>) -> Result<SystemInfo> {
     let app_data = paths::get_app_data_dir(&app)?;
     let cache = paths::get_cache_dir(&app)?;
     let binaries = paths::get_binaries_dir(&app)?;
@@ -54,7 +54,7 @@ pub async fn check_binaries<R: Runtime>(app: AppHandle<R>) -> Result<BinaryStatu
 
 /// Install FFmpeg
 #[tauri::command]
-pub async fn install_ffmpeg(app: AppHandle) -> Result<String> {
+pub async fn install_ffmpeg<R: Runtime>(app: AppHandle<R>) -> Result<String> {
     info!("Installing FFmpeg via command");
     let path = binary::install_ffmpeg(&app).await?;
     Ok(path.to_string_lossy().to_string())
@@ -62,7 +62,7 @@ pub async fn install_ffmpeg(app: AppHandle) -> Result<String> {
 
 /// Install yt-dlp
 #[tauri::command]
-pub async fn install_ytdlp(app: AppHandle) -> Result<String> {
+pub async fn install_ytdlp<R: Runtime>(app: AppHandle<R>) -> Result<String> {
     info!("Installing yt-dlp via command");
     let path = binary::install_ytdlp(&app).await?;
     Ok(path.to_string_lossy().to_string())
@@ -70,26 +70,26 @@ pub async fn install_ytdlp(app: AppHandle) -> Result<String> {
 
 /// Update yt-dlp
 #[tauri::command]
-pub async fn update_ytdlp(app: AppHandle) -> Result<String> {
+pub async fn update_ytdlp<R: Runtime>(app: AppHandle<R>) -> Result<String> {
     info!("Updating yt-dlp via command");
     binary::update_ytdlp(&app).await
 }
 
 /// Get cache statistics
 #[tauri::command]
-pub async fn get_cache_stats(app: AppHandle) -> Result<cache::CacheStats> {
+pub async fn get_cache_stats<R: Runtime>(app: AppHandle<R>) -> Result<cache::CacheStats> {
     cache::get_cache_stats(&app).await
 }
 
 /// Clear cache
 #[tauri::command]
-pub async fn clear_cache(app: AppHandle) -> Result<()> {
+pub async fn clear_cache<R: Runtime>(app: AppHandle<R>) -> Result<()> {
     cache::clear_cache(&app).await
 }
 
 /// Clear temporary files
 #[tauri::command]
-pub async fn clear_temp(app: AppHandle) -> Result<()> {
+pub async fn clear_temp<R: Runtime>(app: AppHandle<R>) -> Result<()> {
     cache::clear_temp(&app).await
 }
 
@@ -207,9 +207,14 @@ pub async fn show_in_folder(path: String) -> Result<()> {
 /// Get default download path
 #[tauri::command]
 pub fn get_default_download_path() -> String {
-    if let Some(dir) = dirs::download_dir() {
+    default_download_path(dirs::download_dir(), dirs::home_dir())
+}
+
+/// `<Downloads>/Clipy`, else `<home>/Downloads/Clipy`, else a relative path.
+fn default_download_path(download_dir: Option<PathBuf>, home_dir: Option<PathBuf>) -> String {
+    if let Some(dir) = download_dir {
         dir.join("Clipy").to_string_lossy().to_string()
-    } else if let Some(dir) = dirs::home_dir() {
+    } else if let Some(dir) = home_dir {
         dir.join("Downloads")
             .join("Clipy")
             .to_string_lossy()
@@ -231,7 +236,7 @@ pub fn media_url(path: String) -> String {
 /// this ends the process with exit code 0, proving the installed app booted
 /// end to end; otherwise it does nothing.
 #[tauri::command]
-pub fn app_ready(app: AppHandle) {
+pub fn app_ready<R: Runtime>(app: AppHandle<R>) {
     if crate::utils::smoke::is_enabled() {
         info!("Smoke test: frontend ready, exiting");
         app.exit(0);
@@ -357,6 +362,87 @@ mod tests {
         assert!(show_in_folder(s(&dir.path().join("missing")))
             .await
             .is_err());
+    }
+
+    #[test]
+    fn default_download_path_fallbacks() {
+        let p = |d: Option<&str>, h: Option<&str>| {
+            PathBuf::from(default_download_path(
+                d.map(PathBuf::from),
+                h.map(PathBuf::from),
+            ))
+        };
+        assert_eq!(
+            p(Some("/dl"), Some("/home")),
+            Path::new("/dl").join("Clipy")
+        );
+        assert_eq!(
+            p(None, Some("/home")),
+            Path::new("/home").join("Downloads").join("Clipy")
+        );
+        assert_eq!(p(None, None), Path::new("Downloads/Clipy"));
+    }
+
+    #[test]
+    fn shell_commands_spawn_or_report_failure() {
+        let missing = ShellCommand {
+            program: "clipy-definitely-missing-program",
+            args: Vec::new(),
+        };
+        let err = missing.spawn("open folder").unwrap_err();
+        assert!(
+            err.to_string().starts_with("Failed to open folder:"),
+            "{err}"
+        );
+        let harmless = if cfg!(windows) {
+            ShellCommand {
+                program: "cmd",
+                args: vec!["/c".into(), "exit".into()],
+            }
+        } else {
+            ShellCommand {
+                program: "true",
+                args: Vec::new(),
+            }
+        };
+        harmless.spawn("run").unwrap();
+    }
+
+    #[tokio::test]
+    async fn app_commands_use_the_app_directories() {
+        use crate::test_support::{fake_tool, mock_app_in_tempdir, Script};
+        let app = mock_app_in_tempdir();
+        let handle = || app.handle().clone();
+
+        let info = get_system_info(handle()).await.unwrap();
+        let data = paths::get_app_data_dir(app.handle()).unwrap();
+        assert_eq!(PathBuf::from(&info.app_data_path), data);
+        assert_eq!(PathBuf::from(&info.temp_path), data.join("temp"));
+        assert_eq!(info.app_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(info.os, std::env::consts::OS);
+
+        let cache = paths::get_cache_dir(app.handle()).unwrap();
+        let temp = paths::get_temp_dir(app.handle()).unwrap();
+        for dir in [&cache, &temp] {
+            fs::create_dir_all(dir).unwrap();
+            fs::write(dir.join("f.bin"), b"12345").unwrap();
+        }
+        let stats = get_cache_stats(handle()).await.unwrap();
+        assert_eq!((stats.thumbnail_size, stats.temp_file_size), (5, 5));
+        clear_cache(handle()).await.unwrap();
+        clear_temp(handle()).await.unwrap();
+        assert!(!cache.join("f.bin").exists() && !temp.join("f.bin").exists());
+
+        let bin = paths::get_binaries_dir(app.handle()).unwrap();
+        let updated = Script {
+            stdout: "yt-dlp is up to date\n".into(),
+            ..Default::default()
+        };
+        fake_tool(&bin, "yt-dlp", &updated);
+        assert!(update_ytdlp(handle()).await.unwrap().contains("up to date"));
+
+        // Smoke mode is off in tests, so reporting ready does not exit.
+        app_ready(handle());
     }
 
     #[tokio::test]

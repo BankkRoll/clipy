@@ -9,12 +9,12 @@ use crate::models::download::{DownloadOptions, DownloadStatus, DownloadTask};
 use crate::models::video::VideoInfo;
 use crate::services::{queue, ytdlp};
 use crate::utils::logger::redact_url;
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 use tracing::{debug, info};
 
 /// Fetch video information from URL
 #[tauri::command]
-pub async fn fetch_video_info(app: AppHandle, url: String) -> Result<VideoInfo> {
+pub async fn fetch_video_info<R: Runtime>(app: AppHandle<R>, url: String) -> Result<VideoInfo> {
     info!("Fetching video info for: {}", redact_url(&url));
     ytdlp::fetch_video_info(&app, &url).await
 }
@@ -267,6 +267,30 @@ mod tests {
         assert_eq!(t.status, DownloadStatus::Pending);
         assert_eq!((t.duration, t.channel.as_str()), (9, "C"));
         assert!(chrono::DateTime::parse_from_rfc3339(&t.created_at).is_ok());
+    }
+
+    #[tokio::test]
+    async fn video_info_comes_from_the_app_ytdlp() {
+        use crate::test_support::{fake_tool, mock_app_in_tempdir, Script};
+        let app = mock_app_in_tempdir();
+        let bin = crate::utils::paths::get_binaries_dir(app.handle()).unwrap();
+        let json = r#"{"id":"v1","title":"T","formats":[
+            {"format_id":"a","height":720,"vcodec":"avc1","acodec":"none"},
+            {"format_id":"b","height":1080,"vcodec":"vp9","acodec":"none"},
+            {"format_id":"c","acodec":"opus","vcodec":"none"}]}"#;
+        let ytdlp = Script {
+            stdout: json.into(),
+            ..Default::default()
+        };
+        fake_tool(&bin, "yt-dlp", &ytdlp);
+        let info = fetch_video_info(app.handle().clone(), "https://youtu.be/v1".into())
+            .await
+            .unwrap();
+        assert_eq!(info.id, "v1");
+        assert_eq!(get_available_qualities(info), ["1080p", "720p"]);
+        assert!(fetch_video_info(app.handle().clone(), "--exec=calc".into())
+            .await
+            .is_err());
     }
 
     #[tokio::test]

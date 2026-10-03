@@ -31,11 +31,19 @@ pub fn is_enabled() -> bool {
 
 /// Start the watchdog that fails the run if the frontend never reports ready.
 pub fn start_watchdog(timeout: Duration) {
+    start_watchdog_with(timeout, || std::process::exit(TIMEOUT_EXIT_CODE));
+}
+
+/// Run `on_timeout` on a background thread once `timeout` has elapsed.
+fn start_watchdog_with(
+    timeout: Duration,
+    on_timeout: impl FnOnce() + Send + 'static,
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         std::thread::sleep(timeout);
         error!("Smoke test: frontend did not report ready within {timeout:?}");
-        std::process::exit(TIMEOUT_EXIT_CODE);
-    });
+        on_timeout();
+    })
 }
 
 #[cfg(test)]
@@ -54,5 +62,18 @@ mod tests {
     #[test]
     fn smoke_mode_is_off_by_default_in_tests() {
         assert!(!is_enabled());
+    }
+
+    #[test]
+    fn watchdog_fires_only_after_the_timeout() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let start = std::time::Instant::now();
+        let handle = start_watchdog_with(Duration::from_millis(50), move || {
+            tx.send(start.elapsed()).unwrap()
+        });
+        handle.join().unwrap();
+        assert!(rx.recv().unwrap() >= Duration::from_millis(50));
+        // A watchdog that can never expire leaves the process running.
+        start_watchdog(Duration::MAX);
     }
 }

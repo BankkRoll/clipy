@@ -94,7 +94,8 @@ pub fn grant(path: &Path) {
     }
 }
 
-fn is_granted(canon: &Path) -> bool {
+/// Whether the canonical path `canon` was granted this session.
+pub(crate) fn is_granted(canon: &Path) -> bool {
     GRANTS
         .lock()
         .map(|g| g.contains(&compare_key(canon)))
@@ -396,17 +397,25 @@ pub fn handle<R: tauri::Runtime>(
     responder: UriSchemeResponder,
 ) {
     let app = ctx.app_handle().clone();
-    std::thread::spawn(move || {
-        let roots = allowed_roots(&app);
-        let response = respond(&request, &roots, |canon| {
-            let hit = is_library_file(canon);
-            if hit {
-                grant(canon);
-            }
-            hit
-        });
-        responder.respond(response);
-    });
+    std::thread::spawn(move || responder.respond(respond_for_app(&app, &request)));
+}
+
+/// Serve `request` with `app`'s roots, session grants and library entries. A
+/// library hit is granted so later range requests skip the database lookup.
+fn respond_for_app<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    request: &Request<Vec<u8>>,
+) -> Response<Vec<u8>> {
+    respond(request, &allowed_roots(app), grant_if_library_file)
+}
+
+/// Whether `canon` is a library file; if so it is granted for the session.
+fn grant_if_library_file(canon: &Path) -> bool {
+    let hit = is_library_file(canon);
+    if hit {
+        grant(canon);
+    }
+    hit
 }
 
 #[cfg(test)]
@@ -431,6 +440,57 @@ mod tests {
 
     fn deny(_: &Path) -> bool {
         false
+    }
+
+    #[test]
+    fn app_requests_are_served_from_the_app_roots() {
+        let _guard = crate::test_support::lock_globals();
+        let app = crate::test_support::mock_app_in_tempdir();
+        let data = crate::utils::paths::get_app_data_dir(app.handle()).unwrap();
+        fs::create_dir_all(&data).unwrap();
+        let clip = data.join("clip.mp4");
+        fs::write(&clip, b"0123456789").unwrap();
+        let notes = data.join("notes.txt");
+        fs::write(&notes, b"secret").unwrap();
+
+        let ok = respond_for_app(app.handle(), &req(&uri_for(&clip), Some("bytes=2-4")));
+        assert_eq!(ok.status(), 206);
+        assert_eq!(ok.body(), b"234");
+        let roots = allowed_roots(app.handle());
+        assert!(roots.iter().any(|r| r == &data), "{roots:?}");
+        let status = |p: &Path| respond_for_app(app.handle(), &req(&uri_for(p), None)).status();
+        assert_eq!(status(&notes), 403);
+        assert_eq!(status(&data.join("missing.mp4")), 404);
+    }
+
+    #[test]
+    fn library_files_are_granted_on_first_request() {
+        let _guard = crate::test_support::lock_globals();
+        let db =
+            std::sync::Arc::new(crate::services::database::Database::open_in_memory().unwrap());
+        crate::services::database::install(db.clone());
+        let dir = tempfile::tempdir().unwrap();
+        let clip = dir.path().join(format!("{}.mp4", uuid::Uuid::new_v4()));
+        fs::write(&clip, b"x").unwrap();
+        let canon = path_policy::canonicalize(&clip).unwrap();
+
+        assert!(!grant_if_library_file(&canon));
+        assert!(!is_granted(&canon));
+        let video = crate::models::library::LibraryVideo::new(
+            "v".into(),
+            "t".into(),
+            String::new(),
+            0,
+            "c".into(),
+            clip.to_string_lossy().into_owned(),
+            1,
+            "mp4".into(),
+            "720p".into(),
+            String::new(),
+        );
+        db.add_library_video(&video).unwrap();
+        assert!(grant_if_library_file(&canon));
+        assert!(is_granted(&canon));
     }
 
     #[test]

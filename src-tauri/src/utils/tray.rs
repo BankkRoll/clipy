@@ -21,26 +21,32 @@ pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, tauri::
         .ok_or_else(|| tauri::Error::AssetNotFound("default window icon".into()))?;
     let menu = build_tray_menu(app)?;
 
+    // NOTE: building creates a real OS tray icon even under the mock runtime,
+    // so this chain is not unit-tested; the handlers it wires up are.
     // id "main" so update_tray_download_progress can find it
     TrayIconBuilder::with_id("main")
         .icon(icon)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .tooltip(DEFAULT_TOOLTIP)
-        .on_menu_event(|app, event| {
-            handle_menu_event(app, event.id.as_ref());
-        })
+        .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                show_main_window(tray.app_handle());
-            }
+            handle_tray_icon_event(tray.app_handle(), &event);
         })
         .build(app)
+}
+
+/// A left click (on release) on the tray icon brings the main window back.
+/// Returns whether a window was shown.
+fn handle_tray_icon_event<R: Runtime>(app: &AppHandle<R>, event: &TrayIconEvent) -> bool {
+    matches!(
+        event,
+        TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        }
+    ) && show_main_window(app).is_some()
 }
 
 /// Build the tray context menu
@@ -193,6 +199,33 @@ mod tests {
             ["\"/downloads\"", "\"/library\"", "\"/settings\""]
         );
         assert!(build_tray_menu(app.handle()).is_ok());
+    }
+
+    fn click(button: MouseButton, button_state: MouseButtonState) -> TrayIconEvent {
+        TrayIconEvent::Click {
+            id: tauri::tray::TrayIconId::new("main"),
+            position: tauri::PhysicalPosition::new(0.0, 0.0),
+            rect: tauri::Rect::default(),
+            button,
+            button_state,
+        }
+    }
+
+    #[test]
+    fn only_a_left_click_release_shows_the_window() {
+        let app = mock_app();
+        let left_up = click(MouseButton::Left, MouseButtonState::Up);
+        assert!(!handle_tray_icon_event(app.handle(), &left_up));
+        let _window = tauri::WebviewWindowBuilder::new(&app, "main", tauri::WebviewUrl::default())
+            .build()
+            .unwrap();
+        for (button, state) in [
+            (MouseButton::Right, MouseButtonState::Up),
+            (MouseButton::Left, MouseButtonState::Down),
+        ] {
+            assert!(!handle_tray_icon_event(app.handle(), &click(button, state)));
+        }
+        assert!(handle_tray_icon_event(app.handle(), &left_up));
     }
 
     #[test]

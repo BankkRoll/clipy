@@ -7,7 +7,7 @@ use crate::services::ffmpeg::{self, VideoMetadata};
 use crate::utils::path_policy;
 use std::path::Path;
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 
@@ -55,7 +55,10 @@ fn active_export() -> Option<String> {
 
 /// Get video metadata
 #[tauri::command]
-pub async fn get_video_metadata(app: AppHandle, path: String) -> Result<VideoMetadata> {
+pub async fn get_video_metadata<R: Runtime>(
+    app: AppHandle<R>,
+    path: String,
+) -> Result<VideoMetadata> {
     debug!("Getting video metadata for: {}", path);
     let result = ffmpeg::get_video_metadata(&app, &path).await;
     if let Ok(ref metadata) = result {
@@ -72,8 +75,8 @@ pub async fn get_video_metadata(app: AppHandle, path: String) -> Result<VideoMet
 
 /// Generate a thumbnail at specific time
 #[tauri::command]
-pub async fn generate_thumbnail(
-    app: AppHandle,
+pub async fn generate_thumbnail<R: Runtime>(
+    app: AppHandle<R>,
     video_path: String,
     output_path: String,
     time_offset: f64,
@@ -92,8 +95,8 @@ pub async fn generate_thumbnail(
 
 /// Generate timeline thumbnails
 #[tauri::command]
-pub async fn generate_timeline_thumbnails(
-    app: AppHandle,
+pub async fn generate_timeline_thumbnails<R: Runtime>(
+    app: AppHandle<R>,
     video_path: String,
     output_dir: String,
     count: u32,
@@ -116,8 +119,8 @@ pub async fn generate_timeline_thumbnails(
 
 /// Extract audio waveform data
 #[tauri::command]
-pub async fn extract_waveform(
-    app: AppHandle,
+pub async fn extract_waveform<R: Runtime>(
+    app: AppHandle<R>,
     video_path: String,
     samples: u32,
 ) -> Result<Vec<f32>> {
@@ -134,8 +137,8 @@ pub async fn extract_waveform(
 
 /// Export a project
 #[tauri::command]
-pub async fn export_project(
-    app: AppHandle,
+pub async fn export_project<R: Runtime>(
+    app: AppHandle<R>,
     project: Project,
     settings: ExportSettings,
 ) -> Result<String> {
@@ -327,8 +330,8 @@ pub fn create_project(name: String, width: u32, height: u32, fps: u32) -> Projec
 
 /// Transcode video to edit-friendly format
 #[tauri::command]
-pub async fn transcode_for_editing(
-    app: AppHandle,
+pub async fn transcode_for_editing<R: Runtime>(
+    app: AppHandle<R>,
     input_path: String,
     output_path: String,
 ) -> Result<()> {
@@ -461,8 +464,8 @@ pub struct ExportResolution {
 /// Generate auto-captions for a source media file via on-device whisper.cpp.
 /// Downloads the whisper binary + model on first use. Returns word-level timing.
 #[tauri::command]
-pub async fn generate_captions(
-    app: AppHandle,
+pub async fn generate_captions<R: Runtime>(
+    app: AppHandle<R>,
     source_path: String,
     model: String,
 ) -> Result<crate::services::captions::CaptionResult> {
@@ -578,6 +581,170 @@ mod tests {
             properties: Default::default(),
         });
         grant_project_media(&project);
+    }
+
+    // ---- commands driven through scripted ffmpeg/ffprobe ----
+
+    use crate::test_support::{fake_tool, mock_app_in_tempdir, Script};
+    use tauri::test::MockRuntime;
+    use tauri::Listener;
+
+    const PROBE_JSON: &str = r#"{"format":{"duration":"2.0"},"streams":[
+        {"codec_type":"video","codec_name":"h264","width":640,"height":360,
+        "r_frame_rate":"30/1"}]}"#;
+
+    fn granted(p: &Path) -> bool {
+        media_protocol::is_granted(&path_policy::canonicalize(p).unwrap())
+    }
+
+    /// A mock app with scripted tools and a fresh source clip under its data
+    /// dir (outside the default media roots, so grants are observable).
+    fn editor_app(ffmpeg: &Script) -> (tauri::App<MockRuntime>, std::path::PathBuf) {
+        let app = mock_app_in_tempdir();
+        let bin = crate::utils::paths::get_binaries_dir(app.handle()).unwrap();
+        fake_tool(&bin, "ffmpeg", ffmpeg);
+        let probe = Script {
+            stdout: PROBE_JSON.into(),
+            ..Default::default()
+        };
+        fake_tool(&bin, "ffprobe", &probe);
+        let media = bin
+            .parent()
+            .unwrap()
+            .join(format!("{}.mp4", uuid::Uuid::new_v4()));
+        fs::write(&media, b"media").unwrap();
+        (app, media)
+    }
+
+    #[tokio::test]
+    async fn media_commands_run_tools_and_grant_their_files() {
+        let (app, media) = editor_app(&Script {
+            stdout: "ABCDEFGH".into(),
+            ..Default::default()
+        });
+        let h = || app.handle().clone();
+        let dir = media.parent().unwrap().to_path_buf();
+        assert!(!granted(&media));
+
+        let meta = get_video_metadata(h(), s(&media)).await.unwrap();
+        assert_eq!((meta.width, meta.height), (640, 360));
+        assert!(granted(&media));
+
+        // The fake does not write images, so create the output it would have.
+        let thumb = dir.join("thumb.jpg");
+        fs::write(&thumb, b"jpg").unwrap();
+        generate_thumbnail(h(), s(&media), s(&thumb), 0.5)
+            .await
+            .unwrap();
+        assert!(granted(&thumb));
+
+        let strip = generate_timeline_thumbnails(h(), s(&media), s(&dir), 2, 120)
+            .await
+            .unwrap();
+        assert_eq!(strip.len(), 2);
+
+        assert_eq!(extract_waveform(h(), s(&media), 2).await.unwrap().len(), 2);
+
+        let edit = dir.join("edit.mp4");
+        fs::write(&edit, b"mp4").unwrap();
+        transcode_for_editing(h(), s(&media), s(&edit))
+            .await
+            .unwrap();
+        assert!(granted(&edit));
+
+        let err = generate_captions(h(), s(&media), "no-such-model".into())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Unknown caption model"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn failed_media_commands_grant_nothing() {
+        let (app, media) = editor_app(&Script {
+            exit_code: 1,
+            ..Default::default()
+        });
+        let h = || app.handle().clone();
+        let thumb = media.with_extension("png");
+        fs::write(&thumb, b"png").unwrap();
+        assert!(generate_thumbnail(h(), s(&media), s(&thumb), 0.0)
+            .await
+            .is_err());
+        assert!(!granted(&thumb));
+        let out = media.with_extension("mkv");
+        fs::write(&out, b"mkv").unwrap();
+        assert!(transcode_for_editing(h(), s(&media), s(&out))
+            .await
+            .is_err());
+        assert!(!granted(&out));
+        assert!(get_video_metadata(h(), "concat:/a|/b".into())
+            .await
+            .is_err());
+    }
+
+    fn export_inputs(media: &Path) -> (Project, ExportSettings) {
+        let mut project = create_project("Export".into(), 640, 360, 30);
+        project.duration = 1.0;
+        project.tracks[0].clips.push(crate::models::project::Clip {
+            id: "c".into(),
+            track_id: "t".into(),
+            clip_type: crate::models::project::ClipType::Video,
+            name: "clip".into(),
+            start_time: 0.0,
+            end_time: 1.0,
+            source_start: 0.0,
+            source_end: 1.0,
+            source_path: s(media),
+            thumbnails: Vec::new(),
+            properties: Default::default(),
+        });
+        let settings = ExportSettings {
+            use_hardware_acceleration: false,
+            output_path: s(&media.with_file_name("export.mp4")),
+            ..Default::default()
+        };
+        (project, settings)
+    }
+
+    #[tokio::test]
+    async fn export_command_emits_progress_and_frees_the_slot() {
+        let _guard = ffmpeg::EXPORT_TEST_LOCK.lock().await;
+        let (app, media) = editor_app(&Script {
+            stdout: "frame=15\nprogress=end\n".into(),
+            ..Default::default()
+        });
+        let statuses = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let sink = statuses.clone();
+        app.listen_any("export-progress", move |e| {
+            let v: serde_json::Value = serde_json::from_str(e.payload()).unwrap();
+            sink.lock()
+                .unwrap()
+                .push(v["status"].as_str().unwrap().into());
+        });
+        let (project, settings) = export_inputs(&media);
+
+        let out = export_project(app.handle().clone(), project.clone(), settings.clone())
+            .await
+            .unwrap();
+        assert!(out.ends_with("export.mp4"), "{out}");
+        assert!(get_export_status().await.is_none());
+        crate::services::queue::testing::eventually("export events", || async {
+            statuses.lock().unwrap().last().map(String::as_str) == Some("completed")
+        })
+        .await;
+        assert_eq!(statuses.lock().unwrap()[0], "preparing");
+
+        let (app, media) = editor_app(&Script {
+            stderr: "Conversion failed!".into(),
+            exit_code: 1,
+            ..Default::default()
+        });
+        let (project, settings) = export_inputs(&media);
+        let err = export_project(app.handle().clone(), project, settings)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Conversion failed!"), "{err}");
+        assert!(get_export_status().await.is_none());
     }
 
     #[test]

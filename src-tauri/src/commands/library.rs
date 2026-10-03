@@ -422,6 +422,122 @@ mod tests {
         ));
     }
 
+    /// Serialize on the global lock and install a fresh in-memory library.
+    fn fresh_library() -> tokio::sync::MutexGuard<'static, ()> {
+        let guard = crate::test_support::lock_globals();
+        database::install(std::sync::Arc::new(
+            database::Database::open_in_memory().unwrap(),
+        ));
+        guard
+    }
+
+    fn media(dir: &Path, name: &str, bytes: &[u8]) -> String {
+        let p = dir.join(name);
+        fs::write(&p, bytes).unwrap();
+        s(&p)
+    }
+
+    fn titles(videos: &[LibraryVideo]) -> Vec<String> {
+        let mut t: Vec<String> = videos.iter().map(|v| v.title.clone()).collect();
+        t.sort();
+        t
+    }
+
+    #[test]
+    fn library_commands_round_trip_through_the_database() {
+        let _guard = fresh_library();
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = entry(&media(dir.path(), "a.mp4", b"aaaa"));
+        a.title = "Rust talk".into();
+        a.duration = 60;
+        a.file_size = 4;
+        add_library_video(a.clone()).unwrap();
+        let mut b = entry(&media(dir.path(), "b.webm", b"bb"));
+        b.id = "b-id".into();
+        b.video_id = "other".into();
+        b.title = "Cooking".into();
+        b.channel = String::new();
+        b.duration = 30;
+        b.file_size = 2;
+        add_library_video(b.clone()).unwrap();
+
+        assert_eq!(
+            titles(&get_library_videos().unwrap()),
+            ["Cooking", "Rust talk"]
+        );
+        assert_eq!(titles(&search_library("  ".into()).unwrap()).len(), 2);
+        assert_eq!(
+            titles(&search_library("rust".into()).unwrap()),
+            ["Rust talk"]
+        );
+
+        rename_library_video(a.id.clone(), "Renamed".into()).unwrap();
+        assert!(rename_library_video("missing".into(), "x".into()).is_err());
+        let stats = get_library_stats().unwrap();
+        assert_eq!(
+            (stats.total_videos, stats.total_size, stats.total_duration),
+            (2, 6, 90)
+        );
+        // Videos without a channel do not count as a channel.
+        assert_eq!(stats.unique_channels, 1);
+
+        let json = export_library_json().unwrap();
+        let parsed: Vec<LibraryVideo> = serde_json::from_str(&json).unwrap();
+        assert_eq!(titles(&parsed), ["Cooking", "Renamed"]);
+        let out = dir.path().join("library.json");
+        export_library_to_file(s(&out)).unwrap();
+        assert_eq!(fs::read_to_string(&out).unwrap(), json);
+
+        delete_library_video(a.id.clone(), true).unwrap();
+        assert!(!dir.path().join("a.mp4").exists());
+        delete_library_video("never-existed".into(), true).unwrap();
+        assert_eq!(titles(&get_library_videos().unwrap()), ["Cooking"]);
+        delete_library_video(b.id.clone(), false).unwrap();
+        assert!(dir.path().join("b.webm").exists());
+        assert!(get_library_videos().unwrap().is_empty());
+    }
+
+    #[test]
+    fn bulk_delete_counts_only_successes() {
+        let _guard = fresh_library();
+        let dir = tempfile::tempdir().unwrap();
+        let ok = entry(&media(dir.path(), "ok.mp4", b"1"));
+        add_library_video(ok.clone()).unwrap();
+        // A row whose file was swapped for a non-media file must not be
+        // deleted from disk, so that entry fails and is kept.
+        let mut odd = entry(&media(dir.path(), "odd.mp4", b"1"));
+        odd.id = "odd".into();
+        odd.video_id = "odd".into();
+        add_library_video(odd.clone()).unwrap();
+        fs::remove_file(dir.path().join("odd.mp4")).unwrap();
+        fs::create_dir(dir.path().join("odd.mp4")).unwrap();
+
+        let deleted =
+            bulk_delete_library_videos(vec![ok.id.clone(), odd.id.clone(), "gone".into()], true)
+                .unwrap();
+        assert_eq!(deleted, 2);
+        assert_eq!(titles(&get_library_videos().unwrap()).len(), 1);
+        assert!(dir.path().join("odd.mp4").is_dir());
+    }
+
+    #[tokio::test]
+    async fn import_video_adds_and_grants_the_file() {
+        let _guard = crate::test_support::lock_globals_async().await;
+        database::install(std::sync::Arc::new(
+            database::Database::open_in_memory().unwrap(),
+        ));
+        let dir = tempfile::tempdir().unwrap();
+        let path = media(dir.path(), "Holiday.mov", b"12345678");
+        let video = import_video(path, None, Some("Me".into())).await.unwrap();
+        assert_eq!((video.title.as_str(), video.file_size), ("Holiday", 8));
+        assert!(crate::media_protocol::is_granted(Path::new(
+            &video.file_path
+        )));
+        let stored = get_library_videos().unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].channel, "Me");
+    }
+
     #[test]
     fn write_library_export_writes_json() {
         let dir = tempfile::tempdir().unwrap();
