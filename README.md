@@ -1,19 +1,25 @@
 # Clipy
 
-An open-source, bloat-free desktop application for downloading and editing YouTube videos in their original quality.
+An open-source, bloat-free desktop app for downloading videos from YouTube and
+1000+ other sites in their original quality, then editing them in a built-in
+timeline editor.
 
-<img width="1872" height="1073" alt="image" src="https://github.com/user-attachments/assets/3fcacf8c-102a-4c24-aa5e-6d4cdaff5d35" />
+**[⬇ Download the latest release](https://github.com/BankkRoll/clipy/releases/latest)**
+for Windows, macOS or Linux.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+[![Latest release](https://img.shields.io/github/v/release/BankkRoll/clipy)](https://github.com/BankkRoll/clipy/releases/latest)
+[![CI](https://github.com/BankkRoll/clipy/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/BankkRoll/clipy/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
-![Tauri](https://img.shields.io/badge/Tauri-2.0-blue)
-![React](https://img.shields.io/badge/React-18-blue)
+![Tauri](https://img.shields.io/badge/Tauri-2-blue)
+
+<img width="1872" height="1073" alt="Clipy" src="https://github.com/user-attachments/assets/3fcacf8c-102a-4c24-aa5e-6d4cdaff5d35" />
 
 ## Features
 
 ### Video Downloader
 
-- Download videos from YouTube and other supported platforms
+- Download from YouTube and the 1000+ other sites yt-dlp supports
 - Choose from multiple quality options (up to 4K)
 - Select video or audio-only formats
 - Playlist item selection
@@ -39,15 +45,13 @@ An open-source, bloat-free desktop application for downloading and editing YouTu
 ### Native Experience
 
 - Built with Tauri 2.0 for native performance
-- Small installers (about 4 MB on Windows, versus 202 MB for the Electron 1.0 build)
+- Small installers: about 4 MB on Windows (versus 202 MB for the Electron 1.0
+  build) and 5 MB for the Linux `.deb`/`.rpm`. The AppImage is larger because
+  it bundles its own video playback libraries.
 - System tray integration
 - Native file dialogs
 - Signed automatic updates
 - First-run setup wizard
-
-## Screenshots
-
-_Coming soon_
 
 ## Installation
 
@@ -67,8 +71,14 @@ Releases are not code-signed, so the OS warns on first launch:
 
 - **Windows**: SmartScreen shows "Windows protected your PC". Choose
   **More info → Run anyway**.
-- **macOS**: after copying Clipy to Applications, run
-  `xattr -dr com.apple.quarantine /Applications/Clipy.app` once.
+- **macOS**: opening it shows _"Clipy is damaged and can't be opened"_ (or
+  _"cannot be opened because the developer cannot be verified"_). The app
+  isn't damaged; macOS blocks unsigned downloads. After copying Clipy to
+  Applications, run this once in Terminal:
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/Clipy.app
+  ```
 
 ### Verifying a download
 
@@ -292,18 +302,13 @@ Logs are kept for 7 days in:
 - The UI can only reach the backend through a fixed set of commands; every
   file path it sends is validated, and the webview has no direct file-system,
   shell or network access beyond opening links in your browser.
-- Report vulnerabilities privately through
-  [GitHub security advisories](https://github.com/BankkRoll/clipy/security/advisories/new).
+- Report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 
 ## Contributing
 
-Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+Contributions are welcome! The [Contributing Guide](CONTRIBUTING.md) covers
+setup, the test and coverage requirements, and the checks to run before
+opening a pull request.
 
 ## License
 

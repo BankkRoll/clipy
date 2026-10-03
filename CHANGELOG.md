@@ -4,6 +4,8 @@ All notable changes to Clipy are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
 ## [2.0.0] - 2026-10-02
 
 Clipy 2 is a ground-up rewrite on [Tauri 2](https://tauri.app) and Rust,

@@ -4,7 +4,13 @@ First off, thank you for considering contributing to Clipy! It's people like you
 
 ## Code of Conduct
 
-This project and everyone participating in it is governed by our Code of Conduct. By participating, you are expected to uphold this code.
+Be respectful and constructive. Harassment or personal attacks in issues,
+pull requests or discussions aren't tolerated.
+
+## Security Issues
+
+Please don't open public issues for vulnerabilities. Report them privately as
+described in [SECURITY.md](SECURITY.md).
 
 ## How Can I Contribute?
 
@@ -33,19 +39,22 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 ### Pull Requests
 
 1. Fork the repo and create your branch from `main`
-2. If you've added code that should be tested, add tests
-3. If you've changed APIs, update the documentation
-4. Ensure the test suite passes
-5. Make sure your code lints
-6. Issue that pull request!
+2. Add tests for any code you add or change (see [Testing](#testing); the
+   frontend coverage gate is 100%)
+3. If you've changed user-facing behavior, update the README and add a line to
+   the `Unreleased` section of `CHANGELOG.md`
+4. Run the checks listed under [Before you open a PR](#before-you-open-a-pr)
+5. Open the pull request. CI must pass on Windows, macOS and Linux
 
 ## Development Setup
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 20.19+ (22 LTS recommended)
 - Rust (latest stable)
-- pnpm (recommended)
+- pnpm 10 (`corepack enable` picks the version pinned in `package.json`)
+- Platform packages for Tauri, listed in the
+  [README](README.md#prerequisites)
 
 ### Getting Started
 
@@ -67,7 +76,7 @@ pnpm tauri dev
 clipy/
 ├── src/                          # React frontend
 │   ├── components/               # UI components
-│   │   ├── dialogs/              # Error and status dialogs
+│   │   ├── dialogs/              # App update dialog
 │   │   ├── downloads/            # Download management
 │   │   ├── editor/               # Video editor
 │   │   ├── home/                 # Home page
@@ -77,18 +86,21 @@ clipy/
 │   │   ├── settings/             # Settings
 │   │   └── ui/                   # Base UI components
 │   ├── hooks/                    # React hooks
-│   ├── lib/                      # Utilities
+│   ├── lib/                      # Utilities; pure editor logic in lib/editor
 │   ├── pages/                    # Page components
 │   ├── stores/                   # Zustand stores
 │   ├── styles/                   # Global CSS
+│   ├── test/                     # Test harness (IPC mocks, fixtures)
 │   └── types/                    # TypeScript types
 ├── src-tauri/                    # Rust backend
 │   ├── src/
 │   │   ├── commands/             # Tauri command handlers
 │   │   ├── models/               # Data models
 │   │   ├── services/             # Business logic
-│   │   └── utils/                # Utility functions
+│   │   └── utils/                # Path policy, paths, logging, tray
 │   └── Cargo.toml                # Rust dependencies
+├── e2e/                          # Local end-to-end tests (WebdriverIO)
+├── scripts/                      # Coverage, release and smoke-test scripts
 └── package.json                  # Node.js dependencies
 ```
 
@@ -145,12 +157,34 @@ Examples:
 
 ### Testing
 
-```bash
-# Run frontend tests
-pnpm test
+- **Frontend** (`pnpm test`): Vitest + Testing Library. Render components
+  against the fake backend in `src/test/tauri.ts` (`mockBackend`,
+  `emitBackendEvent`) instead of mocking `@tauri-apps/*` modules. Coverage
+  must stay at 100% statements, branches, functions and lines.
+- **Backend** (`cd src-tauri && cargo test`): put pure logic in plain
+  functions and test them directly; `src/lib.rs` has a mock Tauri app and
+  fake-tool helpers for commands and process code. Line coverage must stay
+  at or above 95%.
+- **Real network and tools** (opt-in):
+  `cd src-tauri && cargo test -- --include-ignored`.
+- **End to end** (local only, never in CI): build with
+  `pnpm tauri build --debug --no-bundle`, install `tauri-driver`
+  (`cargo install tauri-driver --locked`) and a matching Edge WebDriver on
+  Windows, then run `pnpm e2e`. It expects a fresh profile.
 
-# Run Rust tests
-cd src-tauri && cargo test
+### Before you open a PR
+
+These are the same checks CI runs:
+
+```bash
+pnpm typecheck
+pnpm lint
+pnpm format:check
+pnpm test:coverage
+cd src-tauri
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
 ```
 
 ## Questions?
