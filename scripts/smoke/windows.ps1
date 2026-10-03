@@ -71,7 +71,18 @@ $tempDir = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
 $log = Join-Path $tempDir "msi-install.log"
 $p = Start-Process msiexec.exe -ArgumentList "/i `"$($msi.FullName)`" /qn /norestart /l*v `"$log`"" -Wait -PassThru
 if ($p.ExitCode -ne 0) { Get-Content $log -Tail 50; throw "msiexec install failed: $($p.ExitCode)" }
-$msiDir = Join-Path $env:ProgramFiles "Clipy"
+# NOTE: Tauri's MSI reuses an InstallDir remembered in the registry, which the
+# NSIS installer above also writes, so it may land in %LOCALAPPDATA%\Clipy
+# rather than Program Files. Take whichever candidate actually has the app.
+$candidates = @(Join-Path $env:ProgramFiles "Clipy") +
+  (Get-ChildItem HKCU:\Software, HKLM:\Software -ErrorAction SilentlyContinue |
+    Where-Object { $_.PSChildName -match 'clipy' } |
+    Get-ChildItem -ErrorAction SilentlyContinue |
+    ForEach-Object { $_.GetValue("InstallDir") } | Where-Object { $_ }) +
+  @(Join-Path $env:LOCALAPPDATA "Clipy")
+$msiDir = $candidates | Where-Object { $_ -and (Test-Path (Join-Path $_ "*.exe")) } | Select-Object -First 1
+if (-not $msiDir) { Get-Content $log -Tail 50; throw "MSI reported success but no install dir has the app: $($candidates -join ', ')" }
+Write-Host "MSI installed to $msiDir"
 Invoke-SmokeLaunch (Find-AppExe $msiDir)
 $p = Start-Process msiexec.exe -ArgumentList "/x `"$($msi.FullName)`" /qn /norestart" -Wait -PassThru
 if ($p.ExitCode -ne 0) { throw "msiexec uninstall failed: $($p.ExitCode)" }

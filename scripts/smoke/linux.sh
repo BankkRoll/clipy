@@ -18,8 +18,9 @@ smoke_launch() {
 }
 
 # --- deb ---------------------------------------------------------------------
-DEB="$(ls "$BUNDLE_DIR"/deb/*.deb | head -n1)"
+DEB="$(realpath "$(ls "$BUNDLE_DIR"/deb/*.deb | head -n1)")"
 echo "deb: $DEB"
+# apt treats a bare relative path as a package name, so DEB is absolute.
 sudo apt-get install -y "$DEB"
 BIN="$(dpkg -L clipy | grep -E '^/usr/bin/' | head -n1)"
 test -x "$BIN" || { echo "binary missing after install"; exit 1; }
@@ -29,7 +30,7 @@ sudo apt-get remove -y clipy
 test ! -e "$BIN" || { echo "binary still present after removal"; exit 1; }
 
 # --- AppImage ----------------------------------------------------------------
-APPIMAGE="$(ls "$BUNDLE_DIR"/appimage/*.AppImage | head -n1)"
+APPIMAGE="$(realpath "$(ls "$BUNDLE_DIR"/appimage/*.AppImage | head -n1)")"
 echo "AppImage: $APPIMAGE"
 chmod +x "$APPIMAGE"
 # NOTE: GitHub runners lack FUSE; extract-and-run avoids needing it.
