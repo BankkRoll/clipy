@@ -42,11 +42,7 @@ use tracing::{debug, info, warn};
 
 /// Platform executable name for `stem` (`ffmpeg` -> `ffmpeg.exe` on Windows).
 fn exe_name(stem: &str) -> String {
-    if cfg!(windows) {
-        format!("{stem}.exe")
-    } else {
-        stem.to_string()
-    }
+    format!("{stem}{}", std::env::consts::EXE_SUFFIX)
 }
 
 /// The executable to spawn for `path`. Identity in the app.
@@ -1208,6 +1204,13 @@ mod tests {
         let err = update_ytdlp(app.handle()).await.unwrap_err();
         assert!(matches!(err, ClipyError::BinaryExecutionFailed(_)));
         assert!(err.to_string().contains("ERROR: unable to write"), "{err}");
+
+        // A file that is found but cannot be executed.
+        let junk = bin.join(exe_name("yt-dlp"));
+        std::fs::write(&junk, b"not a program").unwrap();
+        assert_eq!(platform_exe(junk.clone()), junk);
+        let err = update_ytdlp(app.handle()).await.unwrap_err();
+        assert!(err.to_string().contains("Failed to update yt-dlp"), "{err}");
     }
 
     #[tokio::test]
@@ -1279,19 +1282,61 @@ mod tests {
             );
     }
 
+    /// Install yt-dlp from `src` into a fresh dir and check that only the
+    /// binary is left there. Shared by the local and the network test.
+    async fn install_ytdlp_checked(
+        src: &Sources,
+        os: &str,
+        arch: &str,
+    ) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = install_ytdlp_into(src, dir.path(), os, arch).await.unwrap();
+        assert_eq!(path, dir.path().join(exe_name("yt-dlp")));
+        assert_eq!(dir_names(dir.path()), [exe_name("yt-dlp")]);
+        (dir, path)
+    }
+
+    /// Install ffmpeg from `src` into a fresh dir and check that exactly
+    /// ffmpeg and ffprobe were installed. Shared by the local and the network
+    /// test.
+    async fn install_ffmpeg_checked(
+        src: &Sources,
+        os: &str,
+        arch: &str,
+    ) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = install_ffmpeg_into(src, dir.path(), os, arch)
+            .await
+            .unwrap();
+        assert_eq!(path, dir.path().join(exe_name("ffmpeg")));
+        let mut expect = vec![exe_name("ffmpeg"), exe_name("ffprobe")];
+        expect.sort();
+        assert_eq!(dir_names(dir.path()), expect);
+        (dir, path)
+    }
+
+    /// Download `url` against a hash it cannot have: refused, nothing left.
+    async fn assert_wrong_hash_installs_nothing(url: &str) {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("download");
+        let err = download_verified(&http_client().unwrap(), url, &dest, HASH_A, 1 << 20)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Checksum mismatch"), "{err}");
+        assert!(dir_names(dir.path()).is_empty());
+    }
+
     #[tokio::test]
     async fn ytdlp_install_verifies_the_release_it_resolved() {
         let server = TestServer::start().await;
         let body = b"#!/bin/sh\necho fake yt-dlp\n";
         serve_ytdlp_release(&server, "2099.01.01", body, &sha256_hex(body));
-        let dir = tempfile::tempdir().unwrap();
-
-        let path = install_ytdlp_into(&local_sources(&server), dir.path(), "linux", "x86_64")
-            .await
-            .unwrap();
-        assert_eq!(path, dir.path().join(exe_name("yt-dlp")));
+        let (_dir, path) = install_ytdlp_checked(&local_sources(&server), "linux", "x86_64").await;
         assert_eq!(std::fs::read(&path).unwrap(), body);
-        assert!(leftovers(dir.path()).is_empty());
+        assert_wrong_hash_installs_nothing(
+            &server.url("/releases/download/2099.01.01/yt-dlp_linux"),
+        )
+        .await;
         assert!(server
             .hits()
             .contains(&"/releases/download/2099.01.01/yt-dlp_linux".to_string()));
@@ -1368,22 +1413,11 @@ mod tests {
             .route(&format!("/btbn/{win}"), Route::ok(zip))
             .route(&format!("/btbn/{linux}"), Route::ok(tar));
         let src = local_sources(&server);
-        let mut expect = vec![exe_name("ffmpeg"), exe_name("ffprobe")];
-        expect.sort();
 
-        let dir = tempfile::tempdir().unwrap();
-        let path = install_ffmpeg_into(&src, dir.path(), "windows", "x86_64")
-            .await
-            .unwrap();
+        let (_dir, path) = install_ffmpeg_checked(&src, "windows", "x86_64").await;
         assert_eq!(std::fs::read(&path).unwrap(), b"FFMPEG");
-        assert_eq!(dir_names(dir.path()), expect);
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = install_ffmpeg_into(&src, dir.path(), "linux", "x86_64")
-            .await
-            .unwrap();
+        let (dir, path) = install_ffmpeg_checked(&src, "linux", "x86_64").await;
         assert_eq!(std::fs::read(&path).unwrap(), b"FF");
-        assert_eq!(dir_names(dir.path()), expect);
 
         // Not listed in checksums.sha256: nothing is downloaded.
         let err = install_ffmpeg_into(&src, dir.path(), "linux", "aarch64")
@@ -1431,10 +1465,7 @@ mod tests {
                 )
                 .route(&versioned, Route::ok(zip));
         }
-        let dir = tempfile::tempdir().unwrap();
-        let path = install_ffmpeg_into(&local_sources(&server), dir.path(), "macos", "aarch64")
-            .await
-            .unwrap();
+        let (dir, path) = install_ffmpeg_checked(&local_sources(&server), "macos", "aarch64").await;
         assert_eq!(std::fs::read(&path).unwrap(), b"FFMPEG");
         assert_eq!(
             std::fs::read(dir.path().join(exe_name("ffprobe"))).unwrap(),
@@ -1476,46 +1507,36 @@ mod tests {
     }
 
     // ---- network: real upstream downloads ----
-
     #[tokio::test]
     #[ignore = "network: downloads and verifies the real yt-dlp release"]
     async fn network_install_ytdlp_verified() {
-        let dir = tempfile::tempdir().unwrap();
         let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
-        let path = install_ytdlp_into(&Sources::upstream(), dir.path(), os, arch)
-            .await
-            .unwrap();
-        let version = run_version(&path, "--version").and_then(|o| parse_ytdlp_version(&o));
-        assert!(version.is_some() && leftovers(dir.path()).is_empty());
+        let (_dir, path) = install_ytdlp_checked(&Sources::upstream(), os, arch).await;
+        assert!(run_version(&path, "--version")
+            .and_then(|o| parse_ytdlp_version(&o))
+            .is_some());
     }
 
     #[tokio::test]
     #[ignore = "network: downloads and verifies a real ffmpeg build (~100 MB)"]
     async fn network_install_ffmpeg_verified() {
-        let dir = tempfile::tempdir().unwrap();
         let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
-        let path = install_ffmpeg_into(&Sources::upstream(), dir.path(), os, arch)
-            .await
-            .unwrap();
-        let version = run_version(&path, "-version").and_then(|o| parse_ffmpeg_version(&o));
-        assert!(version.is_some() && dir.path().join(exe_name("ffprobe")).exists());
+        let (_dir, path) = install_ffmpeg_checked(&Sources::upstream(), os, arch).await;
+        assert!(run_version(&path, "-version")
+            .and_then(|o| parse_ffmpeg_version(&o))
+            .is_some());
     }
 
     #[tokio::test]
     #[ignore = "network: fetches the real yt-dlp SHA2-256SUMS"]
     async fn network_wrong_hash_is_rejected_and_nothing_installed() {
         let releases = Sources::upstream().ytdlp_releases;
-        let location = resolve_redirect(&format!("{releases}/latest"))
-            .await
-            .unwrap();
-        let url = format!(
-            "{releases}/download/{}/SHA2-256SUMS",
-            parse_release_tag(&location).unwrap()
+        let tag = parse_release_tag(
+            &resolve_redirect(&format!("{releases}/latest"))
+                .await
+                .unwrap(),
         );
-        let dir = tempfile::tempdir().unwrap();
-        let dest = dir.path().join("SUMS");
-        let err = download_verified(&http_client().unwrap(), &url, &dest, HASH_A, 1 << 20).await;
-        assert!(err.unwrap_err().to_string().contains("Checksum mismatch"));
-        assert!(dir_names(dir.path()).is_empty());
+        let url = format!("{releases}/download/{}/SHA2-256SUMS", tag.unwrap());
+        assert_wrong_hash_installs_nothing(&url).await;
     }
 }

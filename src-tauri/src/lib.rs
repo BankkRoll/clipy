@@ -121,13 +121,9 @@ fn setup<R: Runtime>(app: &AppHandle<R>) -> std::result::Result<(), Box<dyn std:
     services::config::init_config(app)?;
     services::process_registry::init_registry();
 
-    let tray_ok = match utils::tray::setup_tray(app) {
-        Ok(_) => true,
-        Err(e) => {
-            warn!("Failed to set up system tray: {}", e);
-            false
-        }
-    };
+    let tray_ok = utils::tray::setup_tray(app)
+        .inspect_err(|e| warn!("Failed to set up system tray: {}", e))
+        .is_ok();
     TRAY_READY.store(tray_ok, Ordering::SeqCst);
 
     let settings = services::config::get_settings()?;
@@ -185,20 +181,23 @@ fn hide_on_close<R: Runtime>(window: &tauri::Window<R>) -> bool {
     hide
 }
 
-/// Add the app minus its plugins to uilder: media protocol, setup hook,
+/// Window-event hook: a close request may become hide-to-tray.
+fn on_window_event<R: Runtime>(window: &tauri::Window<R>, event: &tauri::WindowEvent) {
+    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+        if hide_on_close(window) {
+            api.prevent_close();
+        }
+    }
+}
+
+/// Add the app minus its plugins to `builder`: media protocol, setup hook,
 /// close-to-tray handling and every IPC command. Generic so tests can drive it
 /// on the mock runtime.
 fn app_builder<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder
         .register_asynchronous_uri_scheme_protocol(media_protocol::SCHEME, media_protocol::handle)
         .setup(|app| setup(app.handle()))
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if hide_on_close(window) {
-                    api.prevent_close();
-                }
-            }
-        })
+        .on_window_event(on_window_event)
         .invoke_handler(tauri::generate_handler![
             // System commands
             commands::system::get_system_info,
@@ -290,11 +289,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|_app, event| {
-        if is_exit_event(&event) {
-            shutdown_background_work();
-        }
-    });
+    app.run(on_run_event);
+}
+
+/// Event-loop hook: every exit path stops background work first.
+fn on_run_event<R: Runtime>(_app: &AppHandle<R>, event: RunEvent) {
+    if is_exit_event(&event) {
+        shutdown_background_work();
+    }
 }
 
 #[cfg(test)]
@@ -409,10 +411,9 @@ pub(crate) mod test_support {
                         let mut req = Vec::new();
                         let mut buf = [0u8; 1024];
                         while !req.windows(4).any(|w| w == b"\r\n\r\n") {
-                            match sock.read(&mut buf).await {
-                                Ok(0) | Err(_) => return,
-                                Ok(n) => req.extend_from_slice(&buf[..n]),
-                            }
+                            let n = sock.read(&mut buf).await.unwrap_or(0);
+                            assert!(n > 0, "client closed before a full request");
+                            req.extend_from_slice(&buf[..n]);
                         }
                         let head = String::from_utf8_lossy(&req).into_owned();
                         let path = head.split_whitespace().nth(1).unwrap_or("/").to_string();
@@ -634,11 +635,29 @@ mod tests {
         // The mock app has no window icon, so no tray and no hide-to-tray.
         assert!(!TRAY_READY.load(Ordering::SeqCst));
 
+        // Start-minimized without a tray falls back to showing the window.
+        let mut settings = services::config::get_settings().unwrap();
+        settings.general.minimize_to_tray = true;
+        services::config::update_settings(settings).unwrap();
+        setup(app.handle()).unwrap();
+        log_binary_status(&Err(error::ClipyError::Other("probe failed".into())));
+        log_binary_status(&Ok(models::settings::BinaryStatus {
+            ffmpeg_installed: true,
+            ytdlp_installed: true,
+            ..Default::default()
+        }));
+
         // The probe itself really is slow: a second one takes the full sleep.
         let probe = spawn_binary_check(app.handle().clone());
         tauri::async_runtime::block_on(probe).unwrap();
         assert!(start.elapsed() >= Duration::from_secs(4));
     }
+
+    /// Origin the mock webview's IPC requests come from.
+    #[cfg(windows)]
+    const IPC_ORIGIN: &str = "http://tauri.localhost";
+    #[cfg(not(windows))]
+    const IPC_ORIGIN: &str = "tauri://localhost";
 
     /// Invoke `cmd` with JSON `args` through the real IPC handler.
     fn invoke(
@@ -652,13 +671,7 @@ mod tests {
                 cmd: cmd.into(),
                 callback: tauri::ipc::CallbackFn(0),
                 error: tauri::ipc::CallbackFn(1),
-                url: if cfg!(windows) {
-                    "http://tauri.localhost"
-                } else {
-                    "tauri://localhost"
-                }
-                .parse()
-                .unwrap(),
+                url: IPC_ORIGIN.parse().unwrap(),
                 body: tauri::ipc::InvokeBody::Json(args),
                 headers: Default::default(),
                 invoke_key: tauri::test::INVOKE_KEY.to_string(),
@@ -675,6 +688,8 @@ mod tests {
         let app = app_builder(tauri::test::mock_builder())
             .build(crate::test_support::mock_context_in_tempdir())
             .unwrap();
+        // The setup hook only runs once an event loop starts, so run it here.
+        setup(app.handle()).unwrap();
         // Setup installed the real queue; swap in a scripted downloader.
         let h = services::queue::testing::harness(1);
         services::queue::install_queue(h.queue.clone());
@@ -848,6 +863,53 @@ mod tests {
             "fr"
         );
         assert!(invoke(&webview, "no_such_command", json!({})).is_err());
+        // Missing arguments are rejected before a command body runs.
+        let with_args = [
+            "open_folder",
+            "open_file",
+            "show_in_folder",
+            "media_url",
+            "fetch_video_info",
+            "get_available_qualities",
+            "start_download",
+            "pause_download",
+            "resume_download",
+            "cancel_download",
+            "retry_download",
+            "set_max_concurrent_downloads",
+            "validate_url",
+            "extract_video_id",
+            "add_library_video",
+            "delete_library_video",
+            "search_library",
+            "import_video",
+            "check_video_exists",
+            "get_video_file_size",
+            "rename_library_video",
+            "bulk_delete_library_videos",
+            "export_library_to_file",
+            "get_video_metadata",
+            "generate_thumbnail",
+            "generate_timeline_thumbnails",
+            "extract_waveform",
+            "export_project",
+            "save_project",
+            "load_project",
+            "create_project",
+            "transcode_for_editing",
+            "generate_captions",
+            "update_settings",
+            "update_setting",
+            "get_setting",
+            "import_settings",
+        ];
+        for cmd in with_args {
+            let err = invoke(&webview, cmd, json!({})).unwrap_err();
+            assert!(
+                err.to_string().contains("missing required key"),
+                "{cmd}: {err}"
+            );
+        }
     }
 
     #[test]
@@ -864,6 +926,8 @@ mod tests {
         services::config::update_settings(settings).unwrap();
 
         TRAY_READY.store(false, Ordering::SeqCst);
+        // Events other than a close request are ignored.
+        on_window_event(&w, &tauri::WindowEvent::Focused(true));
         assert!(!hide_on_close(&w));
         TRAY_READY.store(true, Ordering::SeqCst);
         assert!(hide_on_close(&w));
@@ -871,13 +935,22 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_runs_once() {
+    fn exit_events_run_the_shutdown_path_once() {
         let _guard = crate::test_support::lock_globals();
         let _export = services::ffmpeg::EXPORT_TEST_LOCK.blocking_lock();
+        let app = crate::test_support::mock_app_in_tempdir();
         let h = services::queue::testing::harness(1);
         services::queue::install_queue(h.queue.clone());
-        assert!(shutdown_background_work());
-        assert!(!shutdown_background_work());
+        tauri::async_runtime::block_on(async {
+            h.add("running").await;
+            h.wait_running("running").await;
+        });
+
+        on_run_event(app.handle(), RunEvent::Ready);
+        assert!(h.dl.cancels().is_empty());
+        on_run_event(app.handle(), RunEvent::Exit);
+        assert_eq!(h.dl.cancels(), ["running"]);
+        assert!(!shutdown_background_work(), "shutdown must run only once");
         services::ffmpeg::reset_export_cancel();
     }
 

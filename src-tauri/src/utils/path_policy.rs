@@ -562,6 +562,18 @@ mod tests {
     }
 
     #[test]
+    fn output_under_a_file_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("notes.txt");
+        fs::write(&file, b"x").unwrap();
+        let err = ensure_output_path(&s(&file.join("out.mp4")), VIDEO_EXTENSIONS).unwrap_err();
+        assert!(
+            err.to_string().contains("output directory does not exist"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn symlink_named_like_media_to_non_media_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let secret = dir.path().join("id_rsa");

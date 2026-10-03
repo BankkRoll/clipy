@@ -56,16 +56,16 @@ pub async fn check_binaries<R: Runtime>(app: AppHandle<R>) -> Result<BinaryStatu
 #[tauri::command]
 pub async fn install_ffmpeg<R: Runtime>(app: AppHandle<R>) -> Result<String> {
     info!("Installing FFmpeg via command");
-    let path = binary::install_ffmpeg(&app).await?;
-    Ok(path.to_string_lossy().to_string())
+    let path = binary::install_ffmpeg(&app).await;
+    path.map(|p| p.to_string_lossy().into_owned())
 }
 
 /// Install yt-dlp
 #[tauri::command]
 pub async fn install_ytdlp<R: Runtime>(app: AppHandle<R>) -> Result<String> {
     info!("Installing yt-dlp via command");
-    let path = binary::install_ytdlp(&app).await?;
-    Ok(path.to_string_lossy().to_string())
+    let path = binary::install_ytdlp(&app).await;
+    path.map(|p| p.to_string_lossy().into_owned())
 }
 
 /// Update yt-dlp
@@ -103,15 +103,14 @@ enum Os {
 }
 
 impl Os {
-    fn current() -> Self {
-        if cfg!(target_os = "windows") {
-            Os::Windows
-        } else if cfg!(target_os = "macos") {
-            Os::Mac
-        } else {
-            Os::Linux
-        }
-    }
+    /// The OS this build targets.
+    const CURRENT: Os = if cfg!(target_os = "windows") {
+        Os::Windows
+    } else if cfg!(target_os = "macos") {
+        Os::Mac
+    } else {
+        Os::Linux
+    };
 }
 
 /// A program plus its argv, ready to spawn.
@@ -187,7 +186,7 @@ fn validate_reveal_target(path: &str) -> Result<PathBuf> {
 #[tauri::command]
 pub async fn open_folder(path: String) -> Result<()> {
     let dir = path_policy::ensure_local_dir(&path)?;
-    folder_command(Os::current(), &dir).spawn("open folder")
+    folder_command(Os::CURRENT, &dir).spawn("open folder")
 }
 
 /// Open file with default application
@@ -201,7 +200,7 @@ pub async fn open_file(path: String) -> Result<()> {
 #[tauri::command]
 pub async fn show_in_folder(path: String) -> Result<()> {
     let target = validate_reveal_target(&path)?;
-    reveal_command(Os::current(), &target).spawn("show in folder")
+    reveal_command(Os::CURRENT, &target).spawn("show in folder")
 }
 
 /// Get default download path
@@ -237,9 +236,14 @@ pub fn media_url(path: String) -> String {
 /// end to end; otherwise it does nothing.
 #[tauri::command]
 pub fn app_ready<R: Runtime>(app: AppHandle<R>) {
-    if crate::utils::smoke::is_enabled() {
+    finish_smoke_test(crate::utils::smoke::is_enabled(), || app.exit(0));
+}
+
+/// Call `exit` when the frontend reported ready during a smoke test.
+fn finish_smoke_test(smoke_enabled: bool, exit: impl FnOnce()) {
+    if smoke_enabled {
         info!("Smoke test: frontend ready, exiting");
-        app.exit(0);
+        exit();
     }
 }
 
@@ -306,14 +310,13 @@ mod tests {
 
     #[test]
     fn current_os_matches_target() {
-        let os = Os::current();
-        if cfg!(windows) {
-            assert_eq!(os, Os::Windows);
-        } else if cfg!(target_os = "macos") {
-            assert_eq!(os, Os::Mac);
-        } else {
-            assert_eq!(os, Os::Linux);
-        }
+        #[cfg(windows)]
+        let expected = Os::Windows;
+        #[cfg(target_os = "macos")]
+        let expected = Os::Mac;
+        #[cfg(not(any(windows, target_os = "macos")))]
+        let expected = Os::Linux;
+        assert_eq!(Os::CURRENT, expected);
     }
 
     #[test]
@@ -365,6 +368,15 @@ mod tests {
     }
 
     #[test]
+    fn ready_exits_only_in_smoke_mode() {
+        let exited = std::cell::Cell::new(false);
+        finish_smoke_test(false, || exited.set(true));
+        assert!(!exited.get());
+        finish_smoke_test(true, || exited.set(true));
+        assert!(exited.get());
+    }
+
+    #[test]
     fn default_download_path_fallbacks() {
         let p = |d: Option<&str>, h: Option<&str>| {
             PathBuf::from(default_download_path(
@@ -394,18 +406,31 @@ mod tests {
             err.to_string().starts_with("Failed to open folder:"),
             "{err}"
         );
-        let harmless = if cfg!(windows) {
-            ShellCommand {
-                program: "cmd",
-                args: vec!["/c".into(), "exit".into()],
-            }
-        } else {
-            ShellCommand {
-                program: "true",
-                args: Vec::new(),
-            }
+        #[cfg(windows)]
+        let harmless = ShellCommand {
+            program: "cmd",
+            args: vec!["/c".into(), "exit".into()],
+        };
+        #[cfg(not(windows))]
+        let harmless = ShellCommand {
+            program: "true",
+            args: Vec::new(),
         };
         harmless.spawn("run").unwrap();
+    }
+
+    #[tokio::test]
+    async fn install_commands_fail_cleanly_without_a_usable_binaries_dir() {
+        let app = crate::test_support::mock_app_in_tempdir();
+        let data = paths::get_app_data_dir(app.handle()).unwrap();
+        fs::create_dir_all(&data).unwrap();
+        // A file where the binaries dir should be: both installers must stop
+        // before any download starts.
+        let bin = paths::get_binaries_dir(app.handle()).unwrap();
+        fs::write(&bin, b"not a dir").unwrap();
+        assert!(install_ffmpeg(app.handle().clone()).await.is_err());
+        assert!(install_ytdlp(app.handle().clone()).await.is_err());
+        assert_eq!(fs::read(&bin).unwrap(), b"not a dir");
     }
 
     #[tokio::test]

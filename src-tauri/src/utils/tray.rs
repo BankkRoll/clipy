@@ -1,7 +1,8 @@
 //! System tray functionality
 
 use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    image::Image,
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, Runtime,
 };
@@ -20,20 +21,27 @@ pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, tauri::
         .cloned()
         .ok_or_else(|| tauri::Error::AssetNotFound("default window icon".into()))?;
     let menu = build_tray_menu(app)?;
+    // NOTE: `build` creates a real OS tray icon even under the mock runtime,
+    // so only the configuration in `tray_builder` is unit-tested.
+    tray_builder(icon, &menu).build(app)
+}
 
-    // NOTE: building creates a real OS tray icon even under the mock runtime,
-    // so this chain is not unit-tested; the handlers it wires up are.
+/// The configured (not yet built) tray icon.
+fn tray_builder<R: Runtime>(icon: Image<'_>, menu: &Menu<R>) -> TrayIconBuilder<R> {
     // id "main" so update_tray_download_progress can find it
     TrayIconBuilder::with_id("main")
         .icon(icon)
-        .menu(&menu)
+        .menu(menu)
         .show_menu_on_left_click(false)
         .tooltip(DEFAULT_TOOLTIP)
-        .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
+        .on_menu_event(on_menu_event)
         .on_tray_icon_event(|tray, event| {
             handle_tray_icon_event(tray.app_handle(), &event);
         })
-        .build(app)
+}
+
+fn on_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
+    handle_menu_event(app, event.id.as_ref());
 }
 
 /// A left click (on release) on the tray icon brings the main window back.
@@ -192,7 +200,10 @@ mod tests {
         });
 
         for id in ["show", "downloads", "library", "settings", "bogus"] {
-            handle_menu_event(app.handle(), id);
+            let event = MenuEvent {
+                id: tauri::menu::MenuId::new(id),
+            };
+            on_menu_event(app.handle(), event);
         }
         assert_eq!(
             *routes.lock().unwrap(),
@@ -226,6 +237,14 @@ mod tests {
             assert!(!handle_tray_icon_event(app.handle(), &click(button, state)));
         }
         assert!(handle_tray_icon_event(app.handle(), &left_up));
+    }
+
+    #[test]
+    fn tray_is_configured_under_the_id_progress_updates_look_up() {
+        let app = mock_app();
+        let menu = build_tray_menu(app.handle()).unwrap();
+        let icon = Image::new_owned(vec![0; 4], 1, 1);
+        assert_eq!(tray_builder(icon, &menu).id().as_ref(), "main");
     }
 
     #[test]
