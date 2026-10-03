@@ -7,7 +7,7 @@ use crate::utils::{path_policy, paths};
 use serde::Serialize;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 use tracing::info;
 
 /// System information
@@ -44,8 +44,12 @@ pub async fn get_system_info(app: AppHandle) -> Result<SystemInfo> {
 
 /// Check binary status
 #[tauri::command]
-pub async fn check_binaries(app: AppHandle) -> Result<BinaryStatus> {
-    binary::check_binaries(&app)
+pub async fn check_binaries<R: Runtime>(app: AppHandle<R>) -> Result<BinaryStatus> {
+    // PERF: probing spawns each tool and waits on it (seconds on a cold
+    // disk); run it on the blocking pool so it never stalls an async worker.
+    tokio::task::spawn_blocking(move || binary::check_binaries(&app))
+        .await
+        .map_err(|e| ClipyError::Other(format!("Binary check task failed: {e}")))?
 }
 
 /// Install FFmpeg
@@ -353,6 +357,21 @@ mod tests {
         assert!(show_in_folder(s(&dir.path().join("missing")))
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn check_binaries_command_probes_off_the_async_worker() {
+        use crate::test_support::{fake_tool, mock_app_in_tempdir, Script};
+        let app = mock_app_in_tempdir();
+        let bin = paths::get_binaries_dir(app.handle()).unwrap();
+        let ffmpeg = Script {
+            stdout: "ffmpeg version 7.1-test\n".into(),
+            ..Default::default()
+        };
+        fake_tool(&bin, "ffmpeg", &ffmpeg);
+        let status = check_binaries(app.handle().clone()).await.unwrap();
+        assert!(status.ffmpeg_installed);
+        assert_eq!(status.ffmpeg_version.as_deref(), Some("7.1-test"));
     }
 
     #[test]

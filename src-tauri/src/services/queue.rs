@@ -112,18 +112,18 @@ pub trait Downloader: Send + Sync {
 
 /// Production [`Downloader`] backed by `ytdlp::download_video` and the
 /// process registry.
-pub struct YtdlpDownloader {
-    app: AppHandle,
+pub struct YtdlpDownloader<R: Runtime> {
+    app: AppHandle<R>,
 }
 
-impl YtdlpDownloader {
+impl<R: Runtime> YtdlpDownloader<R> {
     /// Download through the binaries resolved from `app`.
-    pub fn new(app: AppHandle) -> Self {
+    pub fn new(app: AppHandle<R>) -> Self {
         Self { app }
     }
 }
 
-impl Downloader for YtdlpDownloader {
+impl<R: Runtime> Downloader for YtdlpDownloader<R> {
     fn download(
         &self,
         id: String,
@@ -743,7 +743,7 @@ fn sorted_active(st: &State) -> Vec<DownloadTask> {
 static QUEUE: RwLock<Option<Arc<DownloadQueue>>> = RwLock::new(None);
 
 /// Create the production queue (Tauri events + yt-dlp) and install it.
-pub fn init_queue(app: AppHandle, max_concurrent: u32) {
+pub fn init_queue<R: Runtime>(app: AppHandle<R>, max_concurrent: u32) {
     let queue = DownloadQueue::new(
         Arc::new(TauriEventSink::new(app.clone())),
         Arc::new(YtdlpDownloader::new(app)),

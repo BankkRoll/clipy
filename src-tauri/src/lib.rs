@@ -31,7 +31,7 @@ pub mod utils;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{Manager, RunEvent};
+use tauri::{AppHandle, Manager, RunEvent, Runtime};
 use tracing::{info, warn};
 
 /// Upper bound on how long quitting waits for downloads to stop.
@@ -108,18 +108,20 @@ pub fn shutdown_background_work() -> bool {
     true
 }
 
-fn setup(app: &mut tauri::App) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let app_handle = app.handle().clone();
+/// Startup work run from the Tauri `setup` hook: directories, database,
+/// config, process registry, tray, download queue, a background binary check
+/// and the initial window visibility.
+fn setup<R: Runtime>(app: &AppHandle<R>) -> std::result::Result<(), Box<dyn std::error::Error>> {
     if utils::smoke::is_enabled() {
         info!("Smoke-test mode: waiting for the frontend to report ready");
         utils::smoke::start_watchdog(utils::smoke::READY_TIMEOUT);
     }
-    utils::paths::ensure_app_dirs(&app_handle)?;
-    services::database::init_database(&app_handle)?;
-    services::config::init_config(&app_handle)?;
+    utils::paths::ensure_app_dirs(app)?;
+    services::database::init_database(app)?;
+    services::config::init_config(app)?;
     services::process_registry::init_registry();
 
-    let tray_ok = match utils::tray::setup_tray(&app_handle) {
+    let tray_ok = match utils::tray::setup_tray(app) {
         Ok(_) => true,
         Err(e) => {
             warn!("Failed to set up system tray: {}", e);
@@ -129,18 +131,9 @@ fn setup(app: &mut tauri::App) -> std::result::Result<(), Box<dyn std::error::Er
     TRAY_READY.store(tray_ok, Ordering::SeqCst);
 
     let settings = services::config::get_settings()?;
-    services::queue::init_queue(
-        app_handle.clone(),
-        settings.download.max_concurrent_downloads,
-    );
+    services::queue::init_queue(app.clone(), settings.download.max_concurrent_downloads);
 
-    match services::binary::check_binaries(&app_handle) {
-        Ok(status) if !status.ffmpeg_installed || !status.ytdlp_installed => {
-            info!("Some binaries not found, will prompt for download on first use");
-        }
-        Ok(_) => {}
-        Err(e) => info!("Failed to check binaries: {}", e),
-    }
+    spawn_binary_check(app.clone());
 
     if let Some(win) = app.get_webview_window("main") {
         if should_start_hidden(settings.general.minimize_to_tray, tray_ok) {
@@ -155,6 +148,27 @@ fn setup(app: &mut tauri::App) -> std::result::Result<(), Box<dyn std::error::Er
 
     info!("Clipy initialized successfully");
     Ok(())
+}
+
+/// Log whether ffmpeg/yt-dlp are available, off the startup path.
+///
+/// PERF: probing runs each tool (and `where`/`which`), which can take several
+/// seconds; doing it inline in `setup` kept the window hidden that long. The
+/// result is only logged — the frontend asks via the `check_binaries` command.
+fn spawn_binary_check<R: Runtime>(app: AppHandle<R>) -> tauri::async_runtime::JoinHandle<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        log_binary_status(&services::binary::check_binaries(&app))
+    })
+}
+
+fn log_binary_status(status: &error::Result<models::settings::BinaryStatus>) {
+    match status {
+        Ok(status) if !status.ffmpeg_installed || !status.ytdlp_installed => {
+            info!("Some binaries not found, will prompt for download on first use");
+        }
+        Ok(_) => {}
+        Err(e) => info!("Failed to check binaries: {}", e),
+    }
 }
 
 /// Initialize and run the Tauri application
@@ -173,7 +187,7 @@ pub fn run() {
         // the process plugin relaunches into the new version.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .setup(setup)
+        .setup(|app| setup(app.handle()))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let close_to_tray = services::config::get_settings()
@@ -568,6 +582,38 @@ mod tests {
         assert_eq!(status, Some(models::download::DownloadStatus::Cancelled));
 
         stop_background_work(None, || {}, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn setup_returns_before_a_slow_binary_probe_finishes() {
+        use crate::test_support::{fake_tool, mock_app_in_tempdir, Script};
+        let _guard = crate::test_support::lock_globals();
+        let app = mock_app_in_tempdir();
+        let bin = utils::paths::get_binaries_dir(app.handle()).unwrap();
+        let slow = Script {
+            sleep_secs: 4,
+            stdout: "ffmpeg version 9.9 test\n".into(),
+            ..Default::default()
+        };
+        fake_tool(&bin, "ffmpeg", &slow);
+        let _window = tauri::WebviewWindowBuilder::new(&app, "main", tauri::WebviewUrl::default())
+            .build()
+            .unwrap();
+
+        let start = std::time::Instant::now();
+        setup(app.handle()).unwrap();
+        let setup_took = start.elapsed();
+        assert!(setup_took < Duration::from_secs(3), "{setup_took:?}");
+        assert!(services::database::global().is_ok());
+        assert!(services::queue::get_queue().is_ok());
+        assert!(utils::paths::get_temp_dir(app.handle()).unwrap().is_dir());
+        // The mock app has no window icon, so no tray and no hide-to-tray.
+        assert!(!TRAY_READY.load(Ordering::SeqCst));
+
+        // The probe itself really is slow: a second one takes the full sleep.
+        let probe = spawn_binary_check(app.handle().clone());
+        tauri::async_runtime::block_on(probe).unwrap();
+        assert!(start.elapsed() >= Duration::from_secs(4));
     }
 
     #[test]
