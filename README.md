@@ -55,11 +55,11 @@ Download the installer for your platform from the [latest release](https://githu
 Clipy installs FFmpeg and yt-dlp for you on first launch, and updates itself
 from then on.
 
-| Platform | File                                                                |
-| -------- | ------------------------------------------------------------------- |
-| Windows  | `Clipy_<version>_x64-setup.exe` (per-user) or `_x64_en-US.msi`      |
-| macOS    | `Clipy_<version>_universal.dmg` (Apple Silicon and Intel)           |
-| Linux    | `Clipy_<version>_amd64.AppImage`, `_amd64.deb`, or `.x86_64.rpm`    |
+| Platform | File                                                             |
+| -------- | ---------------------------------------------------------------- |
+| Windows  | `Clipy_<version>_x64-setup.exe` (per-user) or `_x64_en-US.msi`   |
+| macOS    | `Clipy_<version>_universal.dmg` (Apple Silicon and Intel)        |
+| Linux    | `Clipy_<version>_amd64.AppImage`, `_amd64.deb`, or `.x86_64.rpm` |
 
 ### Unsigned builds
 
