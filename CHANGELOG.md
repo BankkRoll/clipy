@@ -6,6 +6,24 @@ All notable changes to Clipy are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-10-03
+
+### Fixed
+
+- Windows: a terminal window no longer flashes up every time Clipy runs
+  yt-dlp, FFmpeg or checks for its tools.
+- Downloads no longer fail when "Use browser cookies" points at Chrome, Edge,
+  Brave or Opera and their cookies can't be read (they lock and, on Windows,
+  encrypt them). Clipy now retries without browser cookies, and the setting
+  explains which browsers work (Firefox).
+- Download errors show the actual error instead of leading with yt-dlp
+  warnings such as "older than 90 days".
+- "Auto-update binaries" now works: at most once a day Clipy updates its own
+  yt-dlp to the latest checksum-verified release. A yt-dlp installed outside
+  Clipy is left alone.
+- Settings no longer always offers a yt-dlp update; it shows whether yt-dlp is
+  up to date and offers "Update to <version>" only when one exists.
+
 ## [2.0.0] - 2026-10-02
 
 Clipy 2 is a ground-up rewrite on [Tauri 2](https://tauri.app) and Rust,
@@ -104,5 +122,6 @@ replacing the Electron app. The Windows download drops from 202 MB to about
 
 First stable release of the Electron app.
 
+[2.0.1]: https://github.com/BankkRoll/clipy/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/BankkRoll/clipy/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/BankkRoll/clipy/releases/tag/v1.0.0
