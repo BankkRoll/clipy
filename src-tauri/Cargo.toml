@@ -57,7 +57,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 futures-util = "0.3"
 tempfile = "3"
 zip = "2"
-opener = "0.7"
+opener = "0.9"
 # Archive extraction for ffmpeg builds (tar.xz on Linux; also used in tests on
 # every platform).
 tar = "0.4"
