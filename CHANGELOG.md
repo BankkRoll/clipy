@@ -75,6 +75,8 @@ replacing the Electron app. The Windows download drops from 202 MB to about
 
 ### Fixed
 
+- The window could take several seconds to appear while Clipy probed for
+  FFmpeg and yt-dlp; that check now runs in the background.
 - Closing the app could hang forever while downloads were listed, and quitting
   from the tray left yt-dlp/FFmpeg running in the background.
 - Paused or cancelled downloads were reported as failed, resume ignored the
