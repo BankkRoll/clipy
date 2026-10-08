@@ -217,18 +217,15 @@ pub fn get_default_download_path() -> String {
     default_download_path(dirs::download_dir(), dirs::home_dir())
 }
 
-/// `<Downloads>/Clipy`, else `<home>/Downloads/Clipy`, else a relative path.
+/// `<Downloads>/Clipy`, else `<home>/Downloads/Clipy`, else `<temp>/Clipy`
+/// (never relative: the working directory may be read-only).
 fn default_download_path(download_dir: Option<PathBuf>, home_dir: Option<PathBuf>) -> String {
-    if let Some(dir) = download_dir {
-        dir.join("Clipy").to_string_lossy().to_string()
-    } else if let Some(dir) = home_dir {
-        dir.join("Downloads")
-            .join("Clipy")
-            .to_string_lossy()
-            .to_string()
-    } else {
-        "Downloads/Clipy".to_string()
-    }
+    download_dir
+        .or_else(|| home_dir.map(|home| home.join("Downloads")))
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Clipy")
+        .to_string_lossy()
+        .to_string()
 }
 
 /// Build a `clipy-media://` URL for a local file so the webview can play it via
@@ -400,7 +397,7 @@ mod tests {
             p(None, Some("/home")),
             Path::new("/home").join("Downloads").join("Clipy")
         );
-        assert_eq!(p(None, None), Path::new("Downloads/Clipy"));
+        assert_eq!(p(None, None), std::env::temp_dir().join("Clipy"));
     }
 
     #[test]

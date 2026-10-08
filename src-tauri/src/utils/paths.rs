@@ -14,7 +14,7 @@ use crate::error::{ClipyError, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Runtime};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 const APP_NAME: &str = "Clipy";
 const CONFIG_FILE: &str = "config.json";
@@ -103,14 +103,38 @@ pub fn executable_name(stem: &str) -> String {
 /// persisted whichever path they resolved on first launch. The persisted
 /// `download.downloadPath` setting is the source of truth at download time.
 pub fn get_default_downloads_dir() -> PathBuf {
-    dirs::video_dir()
-        .or_else(dirs::download_dir)
-        .unwrap_or_else(|| PathBuf::from("."))
+    downloads_dir_from(dirs::video_dir(), dirs::download_dir(), dirs::home_dir())
+}
+
+/// `<Videos>/Clipy`, else `<Downloads>/Clipy`, else `<home>/Downloads/Clipy`,
+/// else `<temp>/Clipy`.
+///
+/// NOTE: on Linux the XDG Videos/Downloads dirs are `None` when there is no
+/// `user-dirs.dirs` (fresh accounts, CI, minimal distros). The result must
+/// never be relative: the working directory of an AppImage launched from a
+/// sandbox or launcher can be read-only.
+fn downloads_dir_from(
+    video_dir: Option<PathBuf>,
+    download_dir: Option<PathBuf>,
+    home_dir: Option<PathBuf>,
+) -> PathBuf {
+    video_dir
+        .or(download_dir)
+        .or_else(|| home_dir.map(|home| home.join("Downloads")))
+        .unwrap_or_else(std::env::temp_dir)
         .join(APP_NAME)
 }
 
-/// Ensure all application directories exist
+/// Ensure all application directories exist.
+///
+/// The default downloads directory is created best-effort: it lives outside
+/// app data, may sit on a read-only or unmounted volume, and the download
+/// queue creates its output directory on demand anyway.
 pub fn ensure_app_dirs<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
+    ensure_app_dirs_with(app, &get_default_downloads_dir())
+}
+
+fn ensure_app_dirs_with<R: Runtime>(app: &AppHandle<R>, downloads: &Path) -> Result<()> {
     let dirs = [
         get_app_data_dir(app)?,
         get_cache_dir(app)?,
@@ -119,9 +143,14 @@ pub fn ensure_app_dirs<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
         get_binaries_dir(app)?,
         get_thumbnails_dir(app)?,
         get_projects_dir(app)?,
-        get_default_downloads_dir(),
     ];
     ensure_dirs(&dirs)?;
+    if let Err(e) = ensure_dirs(&[downloads.to_path_buf()]) {
+        warn!(
+            "Could not create default downloads directory {:?}: {}",
+            downloads, e
+        );
+    }
     info!("Application directories initialized");
     Ok(())
 }
@@ -269,6 +298,44 @@ mod tests {
     fn default_downloads_dir_ends_with_app_name() {
         let dir = get_default_downloads_dir();
         assert_eq!(dir.file_name().unwrap(), "Clipy");
+        assert!(dir.is_absolute(), "{dir:?}");
+    }
+
+    #[test]
+    fn downloads_dir_fallbacks_are_absolute() {
+        let p = |v: Option<&str>, d: Option<&str>, h: Option<&str>| {
+            downloads_dir_from(
+                v.map(PathBuf::from),
+                d.map(PathBuf::from),
+                h.map(PathBuf::from),
+            )
+        };
+        assert_eq!(
+            p(Some("/v"), Some("/d"), Some("/h")),
+            Path::new("/v").join("Clipy")
+        );
+        assert_eq!(
+            p(None, Some("/d"), Some("/h")),
+            Path::new("/d").join("Clipy")
+        );
+        assert_eq!(
+            p(None, None, Some("/h")),
+            Path::new("/h").join("Downloads").join("Clipy")
+        );
+        assert_eq!(p(None, None, None), std::env::temp_dir().join("Clipy"));
+    }
+
+    #[test]
+    fn ensure_app_dirs_survives_an_uncreatable_downloads_dir() {
+        let app = crate::test_support::mock_app_in_tempdir();
+        // A regular file where a parent directory should be makes create_dir_all fail
+        // on every platform, standing in for a read-only working directory.
+        let blocker = tempfile::NamedTempFile::new().unwrap();
+        let downloads = blocker.path().join("Clipy");
+
+        ensure_app_dirs_with(app.handle(), &downloads).unwrap();
+        assert!(!downloads.exists());
+        assert!(get_projects_dir(app.handle()).unwrap().is_dir());
     }
 
     #[test]
