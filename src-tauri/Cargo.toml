@@ -1,6 +1,6 @@
 [package]
 name = "clipy"
-version = "2.0.1"
+version = "2.0.2"
 description = "Open-source YouTube video downloader and editor"
 authors = ["BankkRoll <https://github.com/BankkRoll>"]
 license = "MIT"

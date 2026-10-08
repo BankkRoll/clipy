@@ -6,6 +6,16 @@ All notable changes to Clipy are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-10-08
+
+### Fixed
+
+- Linux: Clipy no longer exits on startup when the system has no Videos or
+  Downloads folder configured (no `user-dirs.dirs`, common on minimal distros,
+  fresh accounts and sandboxed AppImage launches). The default download folder
+  now falls back to `~/Downloads/Clipy`, and a download folder that can't be
+  created no longer stops the app from starting.
+
 ## [2.0.1] - 2026-10-03
 
 ### Fixed
@@ -122,6 +132,7 @@ replacing the Electron app. The Windows download drops from 202 MB to about
 
 First stable release of the Electron app.
 
+[2.0.2]: https://github.com/BankkRoll/clipy/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/BankkRoll/clipy/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/BankkRoll/clipy/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/BankkRoll/clipy/releases/tag/v1.0.0
